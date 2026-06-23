@@ -6,9 +6,18 @@
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
-// Where a finding came from. Deterministic sources (linter/secret/policy) are
-// the ones the LLM is not allowed to silently drop downstream.
-export type FindingSource = "llm" | "linter" | "secret" | "policy";
+// Where a finding came from. Deterministic sources (linter/secret/sast/policy)
+// are the ones the LLM is not allowed to silently drop downstream.
+export type FindingSource = "llm" | "linter" | "secret" | "sast" | "policy";
+
+// A piece of cited evidence backing a finding — used by Stage 8 agents to ground
+// a claim (e.g. "the contract is defined at auth.ts:12") and shown to reviewers.
+export interface Evidence {
+  path: string;
+  line?: number;
+  snippet?: string;
+  note?: string;
+}
 
 export interface Finding {
   /** File path relative to repo root, matching the diff's new-file path. */
@@ -31,6 +40,16 @@ export interface Finding {
   ruleId?: string;
   /** Model/heuristic confidence in [0,1]; feeds Stage 9 thresholding. */
   confidence: number;
+  /** Which Stage 8 agent (or tool) produced it, for adjudication voting. */
+  agent?: string;
+  /** Cited evidence — often cross-file — that grounds the finding. */
+  evidence?: Evidence[];
+  /**
+   * When true, this finding is exempt from adjudication drop/dedupe-merge and
+   * always survives to posting. Set ONLY by the enabled org policy gate
+   * (source=policy). This is the structural basis of a non-bypassable gate.
+   */
+  immutable?: boolean;
 }
 
 export interface Usage {
