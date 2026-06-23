@@ -1,0 +1,12 @@
+diff --git a/app/files.py b/app/files.py
+new file mode 100644
+--- /dev/null
++++ b/app/files.py
+@@ -0,0 +1,7 @@
++import os
++
++def read_file(name):
++    base = "/srv/data/"
++    path = base + name
++    with open(path) as f:
++        return f.read()

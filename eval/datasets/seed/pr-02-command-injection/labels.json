@@ -1,0 +1,11 @@
+{
+  "id": "pr-02-command-injection",
+  "title": "Add host ping helper",
+  "language": "python",
+  "gold": [
+    { "path": "app/ping.py", "line": 5, "category": "security", "severity": "critical", "label": "command-injection" }
+  ],
+  "simulated_findings": [
+    { "path": "app/ping.py", "line": 5, "category": "security" }
+  ]
+}

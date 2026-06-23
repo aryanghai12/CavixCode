@@ -1,0 +1,11 @@
+{
+  "id": "pr-05-weak-crypto",
+  "title": "Add password hashing",
+  "language": "python",
+  "gold": [
+    { "path": "app/auth.py", "line": 5, "category": "security", "severity": "high", "label": "weak-hash" }
+  ],
+  "simulated_findings": [
+    { "path": "app/auth.py", "line": 5, "category": "security" }
+  ]
+}

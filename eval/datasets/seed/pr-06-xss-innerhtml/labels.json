@@ -1,0 +1,11 @@
+{
+  "id": "pr-06-xss-innerhtml",
+  "title": "Add render helper",
+  "language": "javascript",
+  "gold": [
+    { "path": "src/render.js", "line": 2, "category": "security", "severity": "high", "label": "dom-xss" }
+  ],
+  "simulated_findings": [
+    { "path": "src/render.js", "line": 2, "category": "security" }
+  ]
+}

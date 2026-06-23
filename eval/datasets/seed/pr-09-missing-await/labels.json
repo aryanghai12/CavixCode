@@ -1,0 +1,9 @@
+{
+  "id": "pr-09-missing-await",
+  "title": "Add save()",
+  "language": "javascript",
+  "gold": [
+    { "path": "src/save.js", "line": 3, "category": "correctness", "severity": "medium", "label": "missing-await" }
+  ],
+  "simulated_findings": []
+}

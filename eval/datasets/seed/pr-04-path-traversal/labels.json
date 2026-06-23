@@ -1,0 +1,9 @@
+{
+  "id": "pr-04-path-traversal",
+  "title": "Add file reader",
+  "language": "python",
+  "gold": [
+    { "path": "app/files.py", "line": 6, "category": "security", "severity": "high", "label": "path-traversal" }
+  ],
+  "simulated_findings": []
+}

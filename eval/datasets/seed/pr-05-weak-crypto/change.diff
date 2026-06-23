@@ -1,0 +1,10 @@
+diff --git a/app/auth.py b/app/auth.py
+new file mode 100644
+--- /dev/null
++++ b/app/auth.py
+@@ -0,0 +1,5 @@
++import hashlib
++
++def hash_password(pw):
++    # store this digest in the users table
++    return hashlib.md5(pw.encode()).hexdigest()

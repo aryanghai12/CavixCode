@@ -1,0 +1,12 @@
+{
+  "id": "pr-07-resource-leak",
+  "title": "Add ReadAll helper",
+  "language": "go",
+  "gold": [
+    { "path": "pkg/store/file.go", "line": 6, "category": "reliability", "severity": "medium", "label": "file-handle-leak" }
+  ],
+  "simulated_findings": [
+    { "path": "pkg/store/file.go", "line": 6, "category": "reliability" },
+    { "path": "pkg/store/file.go", "line": 11, "category": "performance" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "pr-03-hardcoded-secret",
+  "title": "Add service config",
+  "language": "javascript",
+  "gold": [
+    { "path": "src/config.js", "line": 3, "category": "security", "severity": "high", "label": "hardcoded-credential" }
+  ],
+  "simulated_findings": [
+    { "path": "src/config.js", "line": 4, "category": "security" }
+  ]
+}

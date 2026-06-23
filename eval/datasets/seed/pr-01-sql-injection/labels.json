@@ -1,0 +1,11 @@
+{
+  "id": "pr-01-sql-injection",
+  "title": "Add getUser endpoint",
+  "language": "javascript",
+  "gold": [
+    { "path": "src/users.js", "line": 5, "category": "security", "severity": "critical", "label": "sql-injection" }
+  ],
+  "simulated_findings": [
+    { "path": "src/users.js", "line": 5, "category": "security" }
+  ]
+}

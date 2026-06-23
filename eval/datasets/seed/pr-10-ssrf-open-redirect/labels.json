@@ -1,0 +1,13 @@
+{
+  "id": "pr-10-ssrf-open-redirect",
+  "title": "Add URL proxy",
+  "language": "javascript",
+  "gold": [
+    { "path": "src/proxy.js", "line": 5, "category": "security", "severity": "high", "label": "ssrf" },
+    { "path": "src/proxy.js", "line": 6, "category": "security", "severity": "medium", "label": "open-redirect" }
+  ],
+  "simulated_findings": [
+    { "path": "src/proxy.js", "line": 5, "category": "security" },
+    { "path": "src/proxy.js", "line": 1, "category": "performance" }
+  ]
+}

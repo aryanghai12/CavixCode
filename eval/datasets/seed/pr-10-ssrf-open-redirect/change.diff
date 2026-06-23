@@ -1,0 +1,12 @@
+diff --git a/src/proxy.js b/src/proxy.js
+new file mode 100644
+--- /dev/null
++++ b/src/proxy.js
+@@ -0,0 +1,7 @@
++const fetch = require("node-fetch");
++
++function proxy(req, res) {
++  const target = req.query.url;
++  fetch(target).then(r => r.text()).then(t => res.send(t));
++  res.redirect(req.query.next);
++}

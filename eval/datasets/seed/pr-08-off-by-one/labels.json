@@ -1,0 +1,11 @@
+{
+  "id": "pr-08-off-by-one",
+  "title": "Add lastN utility",
+  "language": "javascript",
+  "gold": [
+    { "path": "src/slice.js", "line": 3, "category": "correctness", "severity": "medium", "label": "off-by-one" }
+  ],
+  "simulated_findings": [
+    { "path": "src/slice.js", "line": 3, "category": "correctness" }
+  ]
+}

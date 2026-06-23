@@ -1,0 +1,10 @@
+diff --git a/src/save.js b/src/save.js
+new file mode 100644
+--- /dev/null
++++ b/src/save.js
+@@ -0,0 +1,5 @@
++async function save(db, record) {
++  const id = nextId();
++  db.write(id, record);
++  return id;
++}

@@ -1,0 +1,10 @@
+diff --git a/app/ping.py b/app/ping.py
+new file mode 100644
+--- /dev/null
++++ b/app/ping.py
+@@ -0,0 +1,5 @@
++import os
++
++def ping(host):
++    # check if a host is reachable
++    return os.system("ping -c 1 " + host)

@@ -1,0 +1,14 @@
+diff --git a/src/users.js b/src/users.js
+new file mode 100644
+--- /dev/null
++++ b/src/users.js
+@@ -0,0 +1,8 @@
++const db = require("./db");
++
++function getUser(req, res) {
++  const id = req.query.id;
++  const row = db.query("SELECT * FROM users WHERE id = " + id);
++  return res.json(row);
++}
++
++module.exports = { getUser };
