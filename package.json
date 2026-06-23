@@ -1,0 +1,25 @@
+{
+  "name": "cavix",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cavix — AI code review that proves its findings before it speaks.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.7"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/orchestrator",
+    "eval"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "node --test \"packages/**/test/*.test.ts\" \"services/orchestrator/test/*.test.ts\"",
+    "eval": "node eval/run.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
