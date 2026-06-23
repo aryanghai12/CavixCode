@@ -110,3 +110,34 @@ reasoning) is where the Stage 8 ensemble will plug in.
   normalizes to a strict canonical schema before anything downstream sees it.
 - (Stage 2 untrusted-code sandboxing arrives with the verifier; Phase 0 does not
   execute repo code.)
+
+## Phase 0 acceptance → where it lives
+
+| Acceptance criterion | Satisfied by |
+|----------------------|--------------|
+| Opening a PR posts a review comment in ~60s | `runReview` workflow (`services/orchestrator/src/workflow/reviewWorkflow.ts`); demonstrated by `npm run demo` (~2ms) and the stream→bridge→post e2e test |
+| Eval prints precision/recall/F1 on the seed set | `eval/run.ts` + `eval/src/metrics.ts`; 10 PRs under `eval/datasets/seed/` |
+| BYOK: swapping the org key changes which key is billed | `packages/gateway` (`resolveOrgConfig` + `keyFingerprint`); test "BYOK: swapping an org's key changes which key is billed" |
+| Tests pass; docs accurate | `go test ./...` + `npm test`; this file + `CHANGELOG.md` |
+
+## Eval as a quality gate
+
+`eval/` scores predicted findings against gold issues by location (same file,
+within a small line tolerance), reporting precision, recall, F1, and
+false-positive rate, micro-averaged across PRs. It runs in **fixture** mode
+(deterministic predictions bundled per PR — what CI gates on) or **live** mode
+(the real `Reviewer` through the BYOK gateway, when a key is present). The CI job
+fails if aggregate F1 drops below `EVAL_MIN_F1`, so review quality is a tracked
+number, not a vibe — the foundation the later proof/verification stages must
+improve.
+
+## What Phase 0 deliberately defers
+
+Stages 2–7 and 9–13 are stubbed by clean seams, not built: the sandbox
+(`Stage 2`), deterministic pre-analysis and the optional policy gate (`Stage 3`),
+the semantic/impact graphs (`4`/`5`), CI telemetry (`6`), RAG compression (`7`),
+adjudication (`9`), execution-grounded verification (`10`), the feedback loop
+(`12`), and teardown/zero-retention (`13`). The single-model reviewer is the
+seam where the Stage 8 ensemble plugs in; the cost ledger is the start of
+Stage 13. Crucially, the verifier (Stage 10) — Cavix's "prove it" moat — slots
+between the review and post steps of the existing workflow without reshaping it.
