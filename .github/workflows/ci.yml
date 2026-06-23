@@ -1,0 +1,47 @@
+name: ci
+
+# Lint, typecheck, and test both toolchains on every push / PR.
+# Hermetic: no services needed because external deps are faked in unit tests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  edge-go:
+    name: edge (go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/edge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/edge/go.sum
+      - name: vet (lint)
+        run: go vet ./...
+      - name: build (typecheck)
+        run: go build ./...
+      - name: test
+        run: go test -race ./...
+
+  node:
+    name: orchestrator + gateway + eval (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: lint
+        run: npm run lint
+      - name: typecheck
+        run: npm run typecheck
+      - name: test
+        run: npm test
+      - name: eval (regression gate on F1)
+        run: npm run eval

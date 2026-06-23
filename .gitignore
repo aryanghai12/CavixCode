@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+services/edge/bin/
+services/edge/edge
+services/edge/edge.exe
+
+# Test / coverage
+coverage/
+*.out
+.nyc_output/
+
+# Env / secrets  (NEVER commit keys — BYOK lives in runtime config only)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Data volumes (local docker)
+.data/

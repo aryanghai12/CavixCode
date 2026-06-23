@@ -1,0 +1,35 @@
+# Local development infrastructure for Cavix Phase 0.
+# Only Postgres + Redis — the two stateful dependencies of Stages 0 and 1.
+# Production swaps these for managed/HA equivalents via Helm/Terraform.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cavix-postgres
+    environment:
+      POSTGRES_USER: cavix
+      POSTGRES_PASSWORD: cavix_dev_only
+      POSTGRES_DB: cavix
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cavix"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cavix-redis
+    # appendonly = durability for the ingestion stream (Stage 0 must not drop jobs)
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./.data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
