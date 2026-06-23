@@ -74,6 +74,13 @@ export class CodeIndex {
     return this.symbols.get(id);
   }
 
+  /** All symbols defined with a given name (across files). */
+  findByName(name: string): SymbolNode[] {
+    const ids = this.byName.get(name);
+    if (!ids) return [];
+    return [...ids].map((id) => this.symbols.get(id)!).filter(Boolean);
+  }
+
   symbolsInFile(path: string): SymbolNode[] {
     const rec = this.files.get(path);
     if (!rec) return [];
@@ -85,6 +92,32 @@ export class CodeIndex {
     const ids = this.callsIn.get(id);
     if (!ids) return [];
     return [...ids].map((c) => this.symbols.get(c)!).filter(Boolean);
+  }
+
+  /** Direct callees of a symbol. */
+  calleesOf(id: string): SymbolNode[] {
+    const ids = this.callsOut.get(id);
+    if (!ids) return [];
+    return [...ids].map((c) => this.symbols.get(c)!).filter(Boolean);
+  }
+
+  /** Transitive callees up to `depth` hops (what a symbol reaches, cross-file). */
+  transitiveCallees(ids: string[], depth = 4): Set<string> {
+    const seen = new Set<string>();
+    let frontier = new Set(ids);
+    for (let d = 0; d < depth && frontier.size > 0; d++) {
+      const next = new Set<string>();
+      for (const id of frontier) {
+        for (const callee of this.callsOut.get(id) ?? []) {
+          if (!seen.has(callee) && !ids.includes(callee)) {
+            seen.add(callee);
+            next.add(callee);
+          }
+        }
+      }
+      frontier = next;
+    }
+    return seen;
   }
 
   /** Transitive callers up to `depth` hops. */
