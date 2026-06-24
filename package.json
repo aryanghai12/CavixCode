@@ -18,6 +18,7 @@
     "test": "node --test \"packages/**/test/*.test.ts\" \"services/**/test/*.test.ts\" \"eval/test/*.test.ts\"",
     "demo": "node services/orchestrator/src/demo.ts",
     "phase1": "node packages/pipeline/src/demo.ts",
+    "verify-demo": "node packages/verifier/src/demo.ts",
     "orchestrator": "node services/orchestrator/src/main.ts",
     "eval": "node eval/run.ts"
   },

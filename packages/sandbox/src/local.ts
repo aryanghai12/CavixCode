@@ -47,7 +47,7 @@ class LocalSandboxInstance implements Sandbox {
     return new Promise((resolve) => {
       const child = spawn(cmd, args, {
         cwd: opts.cwd ? this.resolve(opts.cwd) : this.workdir,
-        env: { ...process.env, ...opts.env },
+        env: cleanEnv(opts.env),
         shell: false,
       });
       let stdout = "";
@@ -85,6 +85,17 @@ class LocalSandboxInstance implements Sandbox {
     }
     return abs;
   }
+}
+
+// The sandbox must not leak the host's runtime context into the child. In
+// particular NODE_TEST_CONTEXT / NODE_OPTIONS (set when Cavix itself runs under
+// `node --test`) would make a nested `node --test` in the sandbox misreport its
+// exit code. Strip those so sandboxed processes start from a clean context.
+function cleanEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...extra };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.NODE_OPTIONS;
+  return env;
 }
 
 export class LocalSandboxBackend implements SandboxBackend {
