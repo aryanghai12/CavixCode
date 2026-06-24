@@ -64,6 +64,11 @@ export class CodeIndex {
 
   // --- queries -------------------------------------------------------------
 
+  /** All indexed file paths. */
+  allFiles(): string[] {
+    return [...this.files.keys()];
+  }
+
   stats(): { files: number; symbols: number; edges: number } {
     let edges = 0;
     for (const s of this.callsOut.values()) edges += s.size;
