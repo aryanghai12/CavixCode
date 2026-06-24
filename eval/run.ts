@@ -18,7 +18,7 @@ import { Gateway, AnthropicProvider, type GatewayConfigData } from "@cavix/gatew
 import { Reviewer } from "@cavix/orchestrator";
 import { loadSeed, type SeedPR } from "./src/dataset.ts";
 import { scorePR, aggregate, type Aggregate, type PRScore, type Prediction } from "./src/metrics.ts";
-import { phase1Predict } from "./src/phase1.ts";
+import { phase1Predict, phase2Predict, linterOnlyPredict } from "./src/phase1.ts";
 
 type Predict = (pr: SeedPR) => Promise<Prediction[]>;
 
@@ -93,29 +93,41 @@ async function main() {
     return;
   }
 
-  // Default: Phase 0 baseline vs Phase 1, before/after.
-  const phase0 = await scoreAll(prs, fixturePredictor());
-  const phase1 = await scoreAll(prs, phase1Predict);
+  // Default: side-by-side scoring across reviewers (competitors + Cavix phases).
+  const reviewers: Array<{ name: string; predict: Predict }> = [
+    { name: "linter-only (competitor)", predict: linterOnlyPredict },
+    { name: "diff-only LLM (Cavix Phase 0)", predict: fixturePredictor() },
+    { name: "context+ensemble (Cavix Phase 1)", predict: phase1Predict },
+    { name: "+ verification (Cavix Phase 2)", predict: phase2Predict },
+  ];
+  const scored = [];
+  for (const r of reviewers) scored.push({ name: r.name, agg: (await scoreAll(prs, r.predict)).agg });
 
-  console.log(`\nCavix eval — Phase 1 (deterministic + adjudicated ensemble), ${prs.length} labeled PRs\n`);
-  console.log(renderTable(phase1.scores, prs));
-  console.log("");
-  console.log("Before / after (micro-averaged F1):");
-  printAggregate("  Phase 0 (single diff-only pass):", phase0.agg);
-  printAggregate("  Phase 1 (graph context + ensemble + deterministic + adjudication):", phase1.agg);
-  const delta = phase1.agg.f1 - phase0.agg.f1;
-  console.log(`\n  ΔF1 = ${(delta >= 0 ? "+" : "")}${(delta * 100).toFixed(1)} pts  (recall ${pct(phase0.agg.recall)} → ${pct(phase1.agg.recall)})`);
+  console.log(`\nCavix eval — side-by-side, ${prs.length} labeled PRs\n`);
+  const rows = [["reviewer", "Prec", "Rec", "F1", "FP-rate", "TP", "FP", "FN"]];
+  for (const s of scored) {
+    rows.push([s.name, pct(s.agg.precision), pct(s.agg.recall), pct(s.agg.f1), pct(s.agg.falsePositiveRate), String(s.agg.tp), String(s.agg.fp), String(s.agg.fn)]);
+  }
+  const widths = rows[0].map((_, c) => Math.max(...rows.map((r) => r[c].length)));
+  const fmt = (r: string[]) => r.map((cell, c) => (c === 0 ? cell.padEnd(widths[c]) : cell.padStart(widths[c]))).join("  ");
+  console.log(fmt(rows[0]));
+  console.log(widths.map((w) => "─".repeat(w)).join("  "));
+  for (const r of rows.slice(1)) console.log(fmt(r));
+
+  const phase1 = scored[2].agg;
+  const phase2 = scored[3].agg;
+  console.log(`\nPhase 1 → Phase 2 (verification):  F1 ${pct(phase1.f1)} → ${pct(phase2.f1)}   FP-rate ${pct(phase1.falsePositiveRate)} → ${pct(phase2.falsePositiveRate)}`);
   console.log("");
 
-  if (phase1.agg.f1 < minF1) {
-    console.error(`FAIL: Phase 1 F1 ${pct(phase1.agg.f1)} < gate ${pct(minF1)}`);
+  if (phase2.f1 < minF1) {
+    console.error(`FAIL: Phase 2 F1 ${pct(phase2.f1)} < gate ${pct(minF1)}`);
     process.exit(1);
   }
-  if (phase1.agg.f1 < phase0.agg.f1) {
-    console.error(`FAIL: Phase 1 F1 ${pct(phase1.agg.f1)} regressed below Phase 0 ${pct(phase0.agg.f1)}`);
+  if (phase2.f1 < phase1.f1 || phase2.falsePositiveRate > phase1.falsePositiveRate) {
+    console.error(`FAIL: Phase 2 must not regress F1 or FP-rate vs Phase 1`);
     process.exit(1);
   }
-  console.log(`PASS: Phase 1 F1 ${pct(phase1.agg.f1)} ≥ gate ${pct(minF1)} and ≥ Phase 0 ${pct(phase0.agg.f1)}`);
+  console.log(`PASS: Phase 2 F1 ${pct(phase2.f1)} ≥ Phase 1 ${pct(phase1.f1)} and FP-rate ${pct(phase2.falsePositiveRate)} ≤ Phase 1 ${pct(phase1.falsePositiveRate)}`);
 }
 
 main().catch((err) => {

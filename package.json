@@ -21,7 +21,8 @@
     "verify-demo": "node packages/verifier/src/demo.ts",
     "orggraph-demo": "node packages/orggraph/src/demo.ts",
     "orchestrator": "node services/orchestrator/src/main.ts",
-    "eval": "node eval/run.ts"
+    "eval": "node eval/run.ts",
+    "eval:bench": "node eval/bench.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

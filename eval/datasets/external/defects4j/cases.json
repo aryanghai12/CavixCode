@@ -1,0 +1,10 @@
+[
+  {
+    "id": "Defects4J-Lang-offbyone",
+    "language": "javascript",
+    "files": [
+      { "path": "src/Calc.js", "content": "function lastN(arr, n) {\n  const out = [];\n  for (let i = arr.length - n; i <= arr.length; i++) out.push(arr[i]);\n  return out;\n}\n" }
+    ],
+    "gold": [{ "path": "src/Calc.js", "line": 3, "category": "correctness", "label": "off-by-one" }]
+  }
+]

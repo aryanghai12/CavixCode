@@ -1,0 +1,18 @@
+[
+  {
+    "id": "CVE-2023-XXXX-cmdinject",
+    "language": "python",
+    "files": [
+      { "path": "app/run.py", "content": "import os\ndef run(cmd):\n    os.system(\"ping -c 1 \" + cmd)\n" }
+    ],
+    "gold": [{ "path": "app/run.py", "line": 3, "category": "security", "label": "command-injection" }]
+  },
+  {
+    "id": "CVE-2022-XXXX-sqli",
+    "language": "javascript",
+    "files": [
+      { "path": "src/db.js", "content": "function get(id) {\n  return db.query(\"SELECT * FROM t WHERE id = \" + id);\n}\n" }
+    ],
+    "gold": [{ "path": "src/db.js", "line": 2, "category": "security", "label": "sql-injection" }]
+  }
+]

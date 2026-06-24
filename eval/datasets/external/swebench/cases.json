@@ -1,0 +1,10 @@
+[
+  {
+    "id": "SWE-bench-yaml-unsafe",
+    "language": "python",
+    "files": [
+      { "path": "loader.py", "content": "import yaml\ndef load(s):\n    return yaml.load(s)\n" }
+    ],
+    "gold": [{ "path": "loader.py", "line": 3, "category": "security", "label": "unsafe-deserialization" }]
+  }
+]
