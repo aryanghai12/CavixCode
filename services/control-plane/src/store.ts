@@ -24,7 +24,35 @@ export interface StoredFinding {
   source: string;
   immutable: boolean;
   agent?: string;
+  /** Execution-verified (Stage 10) — eligible for the public proven-catches feed. */
+  verified: boolean;
   decision?: Decision;
+}
+
+export type OrgTier = "free" | "paid";
+
+export interface Org {
+  id: string;
+  name: string;
+  tier: OrgTier;
+  /** Opt-in to publish VERIFIED findings on public repos to the proven feed. */
+  provenFeedOptIn: boolean;
+}
+
+export interface Repo {
+  id: string;
+  org: string;
+  name: string;
+  visibility: "public" | "private";
+}
+
+export interface ProvenCatch {
+  org: string;
+  repo: string;
+  title: string;
+  category: string;
+  severity: string;
+  at: string;
 }
 
 export interface ReviewRecord {
@@ -42,38 +70,62 @@ export interface SaveReviewInput {
   repo: string;
   pr: number;
   title: string;
-  findings: Finding[];
+  findings: Array<Finding & { verified?: boolean }>;
 }
 
 export interface Store {
-  createOrg(name: string): { id: string; name: string };
-  createRepo(org: string, name: string): { id: string; org: string; name: string };
-  listOrgs(): Array<{ id: string; name: string }>;
+  createOrg(name: string, opts?: { tier?: OrgTier; provenFeedOptIn?: boolean }): Org;
+  createRepo(org: string, name: string, opts?: { visibility?: "public" | "private" }): Repo;
+  getOrg(name: string): Org | undefined;
+  setProvenFeedOptIn(org: string, optIn: boolean): void;
+  listOrgs(): Org[];
   saveReview(input: SaveReviewInput): ReviewRecord;
   listReviews(org?: string, limit?: number): ReviewRecord[];
+  reviewCountSince(org: string, sinceMs: number): number;
   getFinding(id: string): StoredFinding | undefined;
   recordDecision(findingId: string, state: DecisionState, user: string): StoredFinding;
   listDecisions(): Array<{ findingId: string; reviewId: string; state: DecisionState; user: string; at: string; source: string }>;
+  provenFeed(limit?: number): ProvenCatch[];
 }
 
 export class InMemoryStore implements Store {
-  private orgs = new Map<string, { id: string; name: string }>();
-  private repos = new Map<string, { id: string; org: string; name: string }>();
+  private orgs = new Map<string, Org>();
+  private repos = new Map<string, Repo>();
   private reviews: ReviewRecord[] = [];
   private findings = new Map<string, StoredFinding>();
+  private feed: ProvenCatch[] = [];
 
-  createOrg(name: string) {
-    const org = { id: id8("org"), name };
+  createOrg(name: string, opts: { tier?: OrgTier; provenFeedOptIn?: boolean } = {}): Org {
+    const org: Org = { id: id8("org"), name, tier: opts.tier ?? "paid", provenFeedOptIn: opts.provenFeedOptIn ?? false };
     this.orgs.set(name, org);
     return org;
   }
-  createRepo(org: string, name: string) {
-    const repo = { id: id8("repo"), org, name };
+  getOrg(name: string): Org | undefined {
+    return this.orgs.get(name);
+  }
+  setProvenFeedOptIn(org: string, optIn: boolean): void {
+    const o = this.orgs.get(org);
+    if (!o) throw new Error(`no such org: ${org}`);
+    o.provenFeedOptIn = optIn;
+  }
+  createRepo(org: string, name: string, opts: { visibility?: "public" | "private" } = {}): Repo {
+    const visibility = opts.visibility ?? "private";
+    const o = this.orgs.get(org);
+    // Free tier onboards PUBLIC repos only — paid unlocks private.
+    if (o?.tier === "free" && visibility !== "public") {
+      throw new Error("free tier supports public repositories only; upgrade for private repos");
+    }
+    const repo: Repo = { id: id8("repo"), org, name, visibility };
     this.repos.set(`${org}/${name}`, repo);
     return repo;
   }
-  listOrgs() {
+  listOrgs(): Org[] {
     return [...this.orgs.values()];
+  }
+
+  reviewCountSince(org: string, sinceMs: number): number {
+    const cutoff = Date.now() - sinceMs;
+    return this.reviews.filter((r) => r.org === org && Date.parse(r.createdAt) >= cutoff).length;
   }
 
   saveReview(input: SaveReviewInput): ReviewRecord {
@@ -90,6 +142,7 @@ export class InMemoryStore implements Store {
         source: f.source,
         immutable: f.immutable === true,
         agent: f.agent,
+        verified: f.verified === true,
       };
       this.findings.set(sf.id, sf);
       return sf;
@@ -104,7 +157,21 @@ export class InMemoryStore implements Store {
       findings,
     };
     this.reviews.unshift(record); // newest first
+
+    // Proven-catches feed: only VERIFIED findings, only if the org opted in AND
+    // the repo is public. Never leak private-repo data.
+    const org = this.orgs.get(input.org);
+    const repo = this.repos.get(`${input.org}/${input.repo}`);
+    if (org?.provenFeedOptIn && repo?.visibility === "public") {
+      for (const f of findings) {
+        if (f.verified) this.feed.unshift({ org: input.org, repo: input.repo, title: f.title, category: f.category, severity: f.severity, at: record.createdAt });
+      }
+    }
     return record;
+  }
+
+  provenFeed(limit = 100): ProvenCatch[] {
+    return this.feed.slice(0, limit);
   }
 
   listReviews(org?: string, limit = 50): ReviewRecord[] {

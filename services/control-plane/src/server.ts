@@ -6,6 +6,13 @@ import { renderDashboardHtml } from "./ui.ts";
 // control plane buildable in air-gapped/minimal environments (the NestJS/Next.js
 // production version implements the same routes).
 
+// Per-tier review quota (rolling 24h). Free tier is rate-limited; paid is
+// effectively unlimited. Read at request time so config changes take effect.
+function rateLimitFor(tier: string): number {
+  if (tier === "free") return Number(process.env.CAVIX_FREE_REVIEWS_PER_DAY ?? "25");
+  return Number(process.env.CAVIX_PAID_REVIEWS_PER_DAY ?? "1000000");
+}
+
 export function createControlPlane(store: Store): http.Server {
   return http.createServer(async (req, res) => {
     try {
@@ -33,7 +40,8 @@ async function route(store: Store, req: http.IncomingMessage, res: http.ServerRe
   if (m === "POST" && p === "/api/orgs") {
     const body = await readJson(req);
     if (!body.name) return void sendJson(res, 400, { error: "name required" });
-    return void sendJson(res, 201, store.createOrg(String(body.name)));
+    const tier = body.tier === "free" ? "free" : "paid";
+    return void sendJson(res, 201, store.createOrg(String(body.name), { tier, provenFeedOptIn: body.provenFeedOptIn === true }));
   }
   if (m === "GET" && p === "/api/orgs") return void sendJson(res, 200, store.listOrgs());
 
@@ -41,13 +49,38 @@ async function route(store: Store, req: http.IncomingMessage, res: http.ServerRe
   if (m === "POST" && mm) {
     const body = await readJson(req);
     if (!body.name) return void sendJson(res, 400, { error: "name required" });
-    return void sendJson(res, 201, store.createRepo(decodeURIComponent(mm[1]), String(body.name)));
+    const visibility = body.visibility === "public" ? "public" : "private";
+    try {
+      return void sendJson(res, 201, store.createRepo(decodeURIComponent(mm[1]), String(body.name), { visibility }));
+    } catch (err) {
+      return void sendJson(res, 403, { error: (err as Error).message });
+    }
   }
+
+  mm = /^\/api\/orgs\/([^/]+)\/proven-feed$/.exec(p);
+  if (m === "POST" && mm) {
+    const body = await readJson(req);
+    try {
+      store.setProvenFeedOptIn(decodeURIComponent(mm[1]), body.optIn === true);
+      return void sendJson(res, 200, { ok: true });
+    } catch {
+      return void sendJson(res, 404, { error: "no such org" });
+    }
+  }
+
+  if (m === "GET" && p === "/api/feed/proven") return void sendJson(res, 200, store.provenFeed());
 
   if (m === "POST" && p === "/api/reviews") {
     const body = await readJson(req);
+    const org = String(body.org);
+    // Free-tier rate limit: cap reviews per rolling 24h.
+    const tier = store.getOrg(org)?.tier ?? "paid";
+    const limit = rateLimitFor(tier);
+    if (store.reviewCountSince(org, 24 * 3600_000) >= limit) {
+      return void sendJson(res, 429, { error: `rate limit reached for ${tier} tier (${limit}/day)` });
+    }
     const record = store.saveReview({
-      org: String(body.org),
+      org,
       repo: String(body.repo),
       pr: Number(body.pr),
       title: String(body.title ?? ""),

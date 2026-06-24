@@ -73,6 +73,55 @@ test("decisions: invalid state and unknown finding are rejected", async () => {
   });
 });
 
+test("free tier: onboards public repos only, and rejects private", async () => {
+  await withServer(async (base) => {
+    await post(base, "/api/orgs", { name: "oss", tier: "free", provenFeedOptIn: true });
+    const pub = await post(base, "/api/orgs/oss/repos", { name: "lib", visibility: "public" });
+    assert.equal(pub.status, 201);
+    const priv = await post(base, "/api/orgs/oss/repos", { name: "secret", visibility: "private" });
+    assert.equal(priv.status, 403, "free tier cannot onboard private repos");
+  });
+});
+
+test("free tier: rate limit returns 429 once the daily quota is exceeded", async () => {
+  process.env.CAVIX_FREE_REVIEWS_PER_DAY = "2";
+  await withServer(async (base) => {
+    await post(base, "/api/orgs", { name: "oss", tier: "free" });
+    const review = { org: "oss", repo: "lib", pr: 1, title: "t", findings: [] };
+    assert.equal((await post(base, "/api/reviews", review)).status, 201);
+    assert.equal((await post(base, "/api/reviews", review)).status, 201);
+    assert.equal((await post(base, "/api/reviews", review)).status, 429, "third review over the free quota");
+  });
+  delete process.env.CAVIX_FREE_REVIEWS_PER_DAY;
+});
+
+test("proven-catches feed: only verified findings from opted-in public repos", async () => {
+  await withServer(async (base) => {
+    await post(base, "/api/orgs", { name: "oss", tier: "free", provenFeedOptIn: true });
+    await post(base, "/api/orgs/oss/repos", { name: "lib", visibility: "public" });
+    await post(base, "/api/reviews", {
+      org: "oss", repo: "lib", pr: 5, title: "t",
+      findings: [
+        { path: "a.js", line: 1, severity: "high", category: "security", title: "verified sqli", body: "", source: "llm", confidence: 0.9, verified: true },
+        { path: "b.js", line: 2, severity: "low", category: "standards", title: "unverified nit", body: "", source: "llm", confidence: 0.5, verified: false },
+      ],
+    });
+    const feed = await (await fetch(base + "/api/feed/proven")).json();
+    assert.equal(feed.length, 1, "only the verified finding is published");
+    assert.equal(feed[0].title, "verified sqli");
+  });
+});
+
+test("proven feed excludes private repos even when opted in", async () => {
+  await withServer(async (base) => {
+    await post(base, "/api/orgs", { name: "co", tier: "paid", provenFeedOptIn: true });
+    await post(base, "/api/orgs/co/repos", { name: "app", visibility: "private" });
+    await post(base, "/api/reviews", { org: "co", repo: "app", pr: 1, title: "t", findings: [{ path: "a", line: 1, severity: "high", category: "security", title: "secret bug", body: "", source: "llm", confidence: 0.9, verified: true }] });
+    const feed = await (await fetch(base + "/api/feed/proven")).json();
+    assert.equal(feed.length, 0, "private repo never leaks to the public feed");
+  });
+});
+
 test("dashboard HTML renders findings with accept/reject controls", () => {
   const store = new InMemoryStore();
   const rec = store.saveReview({ org: "acme", repo: "w", pr: 1, title: "t", findings: [
