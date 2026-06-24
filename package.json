@@ -19,6 +19,7 @@
     "demo": "node services/orchestrator/src/demo.ts",
     "phase1": "node packages/pipeline/src/demo.ts",
     "verify-demo": "node packages/verifier/src/demo.ts",
+    "orggraph-demo": "node packages/orggraph/src/demo.ts",
     "orchestrator": "node services/orchestrator/src/main.ts",
     "eval": "node eval/run.ts"
   },
