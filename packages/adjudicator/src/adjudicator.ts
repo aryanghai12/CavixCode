@@ -35,7 +35,12 @@ const DEFAULTS = { confidenceThreshold: 0.5, lineTolerance: 2 };
 const DETERMINISTIC: ReadonlySet<Finding["source"]> = new Set(["secret", "sast", "linter"]);
 
 export function adjudicate(findings: Finding[], options: AdjudicationOptions = {}): AdjudicationResult {
-  const opts = { ...DEFAULTS, ...options };
+  // Use ?? per-field: spreading {...options} would let an explicit `undefined`
+  // (e.g. an unset deps.confidenceThreshold) clobber the default with undefined.
+  const opts = {
+    confidenceThreshold: options.confidenceThreshold ?? DEFAULTS.confidenceThreshold,
+    lineTolerance: options.lineTolerance ?? DEFAULTS.lineTolerance,
+  };
 
   // (1) Immutable policy findings bypass everything.
   const immutable = findings.filter((f) => f.immutable);
