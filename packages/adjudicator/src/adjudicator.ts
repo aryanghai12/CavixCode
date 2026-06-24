@@ -32,7 +32,7 @@ export interface AdjudicationResult {
 }
 
 const DEFAULTS = { confidenceThreshold: 0.5, lineTolerance: 2 };
-const DETERMINISTIC: ReadonlySet<Finding["source"]> = new Set(["secret", "sast", "linter"]);
+const DETERMINISTIC: ReadonlySet<Finding["source"]> = new Set(["secret", "sast", "linter", "telemetry"]);
 
 export function adjudicate(findings: Finding[], options: AdjudicationOptions = {}): AdjudicationResult {
   // Use ?? per-field: spreading {...options} would let an explicit `undefined`

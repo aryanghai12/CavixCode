@@ -6,9 +6,9 @@
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
-// Where a finding came from. Deterministic sources (linter/secret/sast/policy)
-// are the ones the LLM is not allowed to silently drop downstream.
-export type FindingSource = "llm" | "linter" | "secret" | "sast" | "policy";
+// Where a finding came from. Deterministic sources (linter/secret/sast/telemetry/
+// policy) are the ones the LLM is not allowed to silently drop downstream.
+export type FindingSource = "llm" | "linter" | "secret" | "sast" | "telemetry" | "policy";
 
 // A piece of cited evidence backing a finding — used by Stage 8 agents to ground
 // a claim (e.g. "the contract is defined at auth.ts:12") and shown to reviewers.
