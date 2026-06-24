@@ -22,15 +22,15 @@ Model-agnostic. BYOK-first. Self-hostable, including air-gapped.
 | 2 | Ephemeral sandbox provisioning (Firecracker/gVisor; no egress) | ✅ built (Local/Docker/CF) |
 | 3 | Deterministic pre-analysis: linters + SAST + secrets + policy gate | ✅ built |
 | 4 | AST + intra-repo semantic graph (tree-sitter, stack-graphs) | ✅ built (heuristic parsers) |
-| 5 | Cross-repo / microservice impact graph | ⬜ later |
-| 6 | CI/CD telemetry & regression prediction (ClickHouse) | ⬜ later |
+| 5 | Cross-repo / microservice impact graph | ✅ built |
+| 6 | CI/CD telemetry & regression prediction (ClickHouse) | ✅ built |
 | 7 | Context retrieval & compression (RAG + cheap models) | ✅ built |
 | 8 | Multi-agent ensemble (model routing) | ✅ built (7 agents) |
 | 9 | Adjudication (dedupe, vote, calibrate, threshold) | ✅ built |
-| 10 | Execution-grounded verification (repro + PoC + fix-and-run) | ⬜ next |
-| 11 | Synthesis & posting (summary, severity, 1-click fixes) | 🟡 inline comments + summary |
-| 12 | Feedback & learning loop | 🟡 decisions recorded (dashboard) |
-| 13 | Teardown, zero-retention, observability, cost accounting | 🟡 cost accounting in gateway |
+| 10 | Execution-grounded verification (repro + PoC + fix-and-run) | ✅ built |
+| 11 | Synthesis & posting (summary, severity, 1-click fixes) | ✅ built (5 platforms) |
+| 12 | Feedback & learning loop | ✅ built (calibration) |
+| 13 | Teardown, zero-retention, observability, cost accounting | 🟡 sandbox teardown + cost accounting |
 
 Phase 0 delivers a thin but **end-to-end** slice: a real PR webhook flows
 through the edge, into a durable workflow, through a pluggable BYOK LLM gateway,
@@ -54,13 +54,20 @@ packages/
   context/       Stage 7 — RAG context assembly + cheap-model compression
   agents/        Stage 8 — 7-agent ensemble + model routing
   adjudicator/   Stage 9 — dedupe, vote, threshold, policy immunity
+  verifier/      Stage 10 — execution-grounded verification (reproduce/PoC)
+  orggraph/      Stage 5 — cross-repo impact (contracts → consumer call sites)
+  telemetry/     Stage 6 — CI/CD telemetry + regression prediction
+  learning/      Stage 12 — accept/reject calibration loop
+  platforms/     Stage 11 — GitHub/GitLab/Bitbucket/Azure review adapters
   pipeline/      Composes Stages 3/3c/4/7/8/9 → runPhase1Review (+ demo)
-eval/            Gold-labeled PRs + precision/recall/F1 before/after harness
+eval/            Gold-labeled PRs + competitor + external-benchmark harness
 docker-compose.yml   Postgres + Redis for local dev
 ```
 
-Demos: `npm run demo` (Phase 0 PR comment) · `npm run phase1` (index this repo,
-cross-file catch, policy gate on/off) · `npm run eval` (Phase 0→1 F1 before/after).
+Demos: `npm run demo` (Phase 0 PR comment) · `npm run phase1` (cross-file catch,
+policy gate) · `npm run verify-demo` (reproduce a bug + PoC in a real sandbox) ·
+`npm run orggraph-demo` (cross-repo impact trace) · `npm run eval` (Phase 0→1→2
+side-by-side) · `npm run eval:bench` (external benchmarks).
 
 ## Quick start
 

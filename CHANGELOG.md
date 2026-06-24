@@ -5,6 +5,45 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Phase 2 — differentiators (Stages 10, 5, 6, 12 + platforms + free tier + benchmarks)
+
+#### Added
+- **Stage 10 — verifier (`packages/verifier`)**: execution-grounded verification.
+  Detects build/test setup, generates a minimal failing test (or a PoC exploit
+  for security findings), reproduces in a hardened sandbox (no egress, caps,
+  ephemeral), optionally applies the fix and re-runs the suite. Marks
+  VERIFIED/UNVERIFIED/INCONCLUSIVE; gate skips facts + trivial nits;
+  `verifyAndFilter` surfaces VERIFIED + facts and suppresses proven false alarms.
+  Real `node`-in-sandbox e2e tests + demo.
+- **Stage 5 — orggraph (`packages/orggraph`)**: cross-repo impact. Extracts
+  provided interfaces (OpenAPI, protobuf, GraphQL, package names) and consumer
+  call sites; a contract-changing PR is traced to consumers in other repos with
+  exact call sites.
+- **Stage 6 — telemetry (`packages/telemetry`)**: CI/CD ingest (ClickHouse port),
+  baselines + flaky detection, regression prediction (measured + predicted-risk),
+  optional sandbox benchmark-vs-baseline; deterministic `telemetry` findings.
+- **Stage 12 — learning (`packages/learning`)**: calibrate per-org thresholds from
+  accept/reject decisions; feeds Stage 9 thresholds and the Stage 10 verify gate;
+  lowers false positives.
+- **Platforms (`packages/platforms`)**: one `ReviewPlatform` port + GitHub,
+  GitLab, Bitbucket Cloud, Bitbucket Server/DC, and Azure DevOps adapters.
+- **Free/OSS tier (`services/control-plane`)**: tiers, public-repo-only
+  onboarding, per-tier rate limits, opt-in proven-catches feed (verified findings
+  from public repos only).
+- **Eval**: Phase 2 verification scoring, side-by-side competitor table, and
+  Defects4J / SWE-bench / CVEfixes benchmark adapters.
+
+#### Verified (acceptance gate)
+- A planted bug is reproduced in the sandbox → VERIFIED; a non-reproducing false
+  alarm → UNVERIFIED and suppressed (verifier tests + `npm run verify-demo`).
+- A planted vulnerability gets a working PoC exploit test (real `node` run).
+- A breaking change in repo A is flagged as impacting repo B with exact call
+  sites (`npm run orggraph-demo`).
+- A perf-regressing PR triggers a telemetry warning (telemetry tests).
+- FP-rate drops and F1 rises vs Phase 1: **F1 95.7% → 100%, FP-rate 8.3% → 0%**
+  (`npm run eval`). GitLab + Bitbucket Server + Azure each post a review
+  (platform tests). The verification sandbox uses no egress + hard caps.
+
 ### Phase 1 — context-aware review (Stages 2, 3, 3c, 4, 7, 8, 9 + dashboard)
 
 #### Added

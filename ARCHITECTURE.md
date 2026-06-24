@@ -196,7 +196,60 @@ a `symbols` table (id, name, path, line, kind, language), an `edges` table
 `PostgresGraphStore` would back the same query methods — the same isolation
 strategy used for Redis/sandbox elsewhere.
 
-## What Phase 0 deliberately defers
+## Phase 2 — the differentiators (Stages 10, 5, 6, 12)
+
+### Stage 10 verification — the moat (how one verification flows)
+
+The verifier slots between the ensemble (Stage 8) and adjudication (Stage 9):
+
+```
+finding ─▶ shouldVerify? (skip facts + trivial nits; verify high-impact/security/confident)
+   │ yes
+   ▼
+provision sandbox (network=none, cpu/mem/pids caps, ephemeral)
+   ▼ write repo files + generate test (failing repro, or PoC exploit for security)
+run test (pre-fix) ──▶ reproduced?  (correctness: test FAILS; security: exploit PASSES)
+   │ no  → UNVERIFIED  → SUPPRESS (proven false alarm)
+   │ yes
+   ▼ apply suggested fix → re-run test → run existing suite
+VERIFIED (reproduced; fix resolves it; suite green) → SURFACE with proof
+   ▼ destroy sandbox (no residual code)
+```
+
+The status drives surfacing: by default only VERIFIED findings (plus deterministic
+and policy facts) reach the PR; findings proven not to reproduce are dropped. This
+is why Cavix's comments are facts: each non-trivial one was reproduced in an
+isolated sandbox. The two-backend sandbox rule still holds — verification only ever
+touches the `Sandbox` port, so Docker/Firecracker/Cloudflare are interchangeable.
+
+### Stage 5 cross-repo impact (how one trace flows)
+
+Repos are ingested once: contracts (OpenAPI/proto/GraphQL/package metadata) →
+**provided** interfaces; source → **consumer** call sites. A PR that edits a
+contract file is diffed to find which interfaces changed, then consumer edges are
+walked to other repos. Example: editing `GET /orders/{id}` in `orders-api` →
+`checkout` (`src/checkout.js:4`) and `billing` (`src/invoice.js:1`) with the exact
+`fetch(...)` lines. This is the downstream-impact differentiator a single-repo
+reviewer structurally cannot produce.
+
+### Stages 6 + 12 — prediction and learning
+
+Stage 6 correlates a PR's touched functions with historical CI/CD benchmarks
+(ClickHouse in prod) and warns on measured or predicted regressions, optionally
+running the affected benchmark in the sandbox. Stage 12 calibrates per-org
+thresholds from dashboard accept/reject decisions and feeds both the Stage 9
+threshold and the Stage 10 verify gate — the system learns what's worth proving
+and which categories the org trusts, lowering false positives over time.
+
+### Why FP-rate drops and F1 rises across phases
+
+On the eval set: linter-only (F1 77.8%, recall 63.6%) → Phase 0 diff-only LLM
+(81.8%) → Phase 1 context + ensemble + deterministic (95.7%, FP-rate 8.3%) →
+Phase 2 + verification (100%, FP-rate 0%). Phase 1's recall gain comes from graph
+context; Phase 2's precision gain comes from verification suppressing the finding
+that doesn't reproduce.
+
+## What remains (post-Phase 2)
 
 Stages 2–7 and 9–13 are stubbed by clean seams, not built: the sandbox
 (`Stage 2`), deterministic pre-analysis and the optional policy gate (`Stage 3`),
