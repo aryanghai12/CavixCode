@@ -5,6 +5,49 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Phase 1 — context-aware review (Stages 2, 3, 3c, 4, 7, 8, 9 + dashboard)
+
+#### Added
+- **Stage 4 — analyzer (`packages/analyzer`)**: heuristic JS/TS/Python/Go parsers
+  behind a `Parser` port; whole-repo `CodeIndex` with cross-file call resolution;
+  `blastRadiusFromDiff` (changed symbols + transitive callers + touched files);
+  incremental re-index; `Embedder` port + deterministic `FakeEmbedder` + cosine.
+- **Stage 3 — deterministic (`packages/deterministic`)**: `SecretScanner`,
+  `BuiltinRuleScanner` (15 in-process SAST rules + an SSRF data-flow rule), and a
+  registry of 24 external linters/SAST selected by language and normalized from
+  SARIF / semgrep-JSON. All normalized to the common `Finding` schema.
+- **Stage 3c — policy gate (`packages/policy`)**: OFF by default; when enabled,
+  emits `source=policy`, `immutable=true` findings (generic governance rules:
+  endpoint-needs-auth (cross-file aware), banned-import). Not security-specific.
+- **Stage 2 — sandbox (`packages/sandbox`)**: one `Sandbox` port, backends
+  Local (dev) / Docker (isolation: no-egress, CPU/mem/pids caps, ro-rootfs) /
+  Cloudflare (managed) + fake; `shallowClone` of the merge commit.
+- **Stage 7 — context (`packages/context`)**: `ContextAssembler` (blast-radius
+  caller snippets + past discussions + embedding neighbors), cheap-model
+  compression, token-budgeted packing.
+- **Stage 8 — ensemble (`packages/agents`)**: 7 specialized agents in parallel
+  with abstention, cited cross-file evidence, and a cheap/frontier model router.
+- **Stage 9 — adjudicator (`packages/adjudicator`)**: dedupe + vote + threshold;
+  immutable policy findings pass through untouched; deterministic facts survive.
+- **`packages/pipeline`**: composes the stages into `runPhase1Review`; a demo
+  indexes this repo and shows a cross-file catch + policy off/on.
+- **`services/control-plane`**: org/repo onboarding, recent reviews, and
+  per-finding accept/reject decisions (the Phase 2 learning-loop signal) + a
+  minimal HTML dashboard.
+- **Eval**: Phase 1 predictor (real deterministic + real adjudication + fixtured
+  ensemble) with a before/after table.
+
+#### Verified (acceptance gate)
+- Indexing a real medium repo completes (this monorepo: 85 files / 193 symbols /
+  265 edges in ~9ms) and re-indexes incrementally on push (~2ms / file).
+- A review references cross-file context: the api-breaking finding cites
+  `routes.ts` for a change in `auth.ts` (shown by `npm run phase1`).
+- Policy gate ENABLED emits an immutable finding that survives adjudication;
+  OFF (default) forces nothing (pipeline + adjudicator tests, `npm run phase1`).
+- Eval F1 beats the Phase 0 baseline by a clear margin: **81.8% → 95.7%**
+  (recall 81.8% → 100%, FP-rate 18.2% → 8.3%).
+- Dashboard records accept/reject decisions (control-plane tests).
+
 ### Phase 0 — end-to-end skeleton (Stages 0 + 1)
 
 #### Added

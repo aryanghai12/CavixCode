@@ -131,6 +131,71 @@ fails if aggregate F1 drops below `EVAL_MIN_F1`, so review quality is a tracked
 number, not a vibe — the foundation the later proof/verification stages must
 improve.
 
+## Phase 1 — context-aware review (Stages 2,3,3c,4,7,8,9)
+
+Phase 1 turns the diff-only reviewer into a context-aware one. The data flow that
+the diff now travels:
+
+```
+diff ─▶ [Stage 4 CodeIndex] blast radius (changed symbols + cross-file callers)
+     ├─▶ [Stage 3 deterministic] secrets + SAST + 24 linters  ─┐
+     ├─▶ [Stage 3c policy gate (opt-in)] immutable findings   ─┤
+     └─▶ [Stage 7 context] caller snippets + discussions +     │
+          embeddings, cheap-model compressed, budgeted  ─▶     │
+            [Stage 8 ensemble] 7 agents ∥ (cited evidence) ─▶  │
+                                       [Stage 9 adjudication] ◀─┘
+                                          dedupe·vote·threshold
+                                          (immutable always survive)
+                                                 │
+                                                 ▼  posted review + dashboard
+```
+
+### How graph retrieval improved recall (the required explanation)
+
+A diff-only reviewer sees only the changed lines, so any bug that is wrong *in
+light of another file* is invisible to it — e.g. tightening `validateToken`'s
+contract in `auth.ts` is only a defect because `handleLogin` in `routes.ts` calls
+it the old way. Stage 4 builds a whole-repo call graph and `blastRadiusFromDiff`
+projects the change onto it to find the **transitive callers across files**.
+Stage 7 then pulls those callers' code into the prompt. So the security /
+api-breaking agents are given the exact other-file evidence they need to make the
+catch; without it they would abstain. Embeddings add a second, complementary
+retrieval channel for related code that has no direct call edge. Concretely on the
+eval set this lifted **recall 81.8% → 100%** and **F1 81.8% → 95.7%**: the new
+true positives are precisely the cases that needed reasoning + cross-file context
+(path traversal, missing await, off-by-one, the cross-file break) that a single
+diff-only pass missed.
+
+### Why the optional policy gate is structurally non-bypassable (the required explanation)
+
+When an org enables the gate, its findings are non-bypassable by *construction*,
+not by policy:
+
+1. **They never enter the LLM path.** `PolicyEngine.evaluate` runs deterministic
+   rules over the code/graph and emits findings directly. No model is asked
+   whether they are real, so no model can argue them away.
+2. **They are tagged `immutable: true`.** The adjudicator (Stage 9) has a hard
+   invariant: immutable findings are partitioned out *before* clustering and are
+   never thresholded, merged, or dropped — they are concatenated to the survivors
+   verbatim. There is no code path in which an LLM (or a low confidence score)
+   removes one. The adjudicator tests assert exactly this.
+3. **Posting includes them unconditionally.** They reach the PR regardless of the
+   ensemble's opinion.
+
+And when the gate is OFF (the default), there simply are no immutable findings, so
+nothing is force-passed — adjudication proceeds normally. The gate is a generic,
+org-owned governance mechanism (e.g. "every endpoint needs an auth check"), not an
+OWASP/security product, and most orgs will leave it off.
+
+### Stage 4 persistence (in-memory now, Postgres later)
+
+`CodeIndex` is in-memory in Phase 1 but its shape mirrors the production schema:
+a `symbols` table (id, name, path, line, kind, language), an `edges` table
+(caller_id, callee_id), and `pgvector` embeddings keyed by symbol/file. The
+`Parser` port lets tree-sitter / stack-graphs replace the heuristic parsers, and a
+`PostgresGraphStore` would back the same query methods — the same isolation
+strategy used for Redis/sandbox elsewhere.
+
 ## What Phase 0 deliberately defers
 
 Stages 2–7 and 9–13 are stubbed by clean seams, not built: the sandbox

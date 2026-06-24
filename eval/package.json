@@ -6,6 +6,8 @@
   "dependencies": {
     "@cavix/core": "*",
     "@cavix/gateway": "*",
-    "@cavix/orchestrator": "*"
+    "@cavix/orchestrator": "*",
+    "@cavix/deterministic": "*",
+    "@cavix/adjudicator": "*"
   }
 }

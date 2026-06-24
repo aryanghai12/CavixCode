@@ -17,7 +17,8 @@
 import { Gateway, AnthropicProvider, type GatewayConfigData } from "@cavix/gateway";
 import { Reviewer } from "@cavix/orchestrator";
 import { loadSeed, type SeedPR } from "./src/dataset.ts";
-import { scorePR, aggregate, type PRScore, type Prediction } from "./src/metrics.ts";
+import { scorePR, aggregate, type Aggregate, type PRScore, type Prediction } from "./src/metrics.ts";
+import { phase1Predict } from "./src/phase1.ts";
 
 type Predict = (pr: SeedPR) => Promise<Prediction[]>;
 
@@ -67,37 +68,54 @@ function renderTable(scores: PRScore[], prs: SeedPR[]): string {
   return out.join("\n");
 }
 
-async function main() {
-  const mode = (process.env.EVAL_MODE ?? "fixture").toLowerCase();
-  const predict = mode === "live" ? livePredictor() : fixturePredictor();
-  const minF1 = Number(process.env.EVAL_MIN_F1 ?? "0.6");
+async function scoreAll(prs: SeedPR[], predict: Predict): Promise<{ scores: PRScore[]; agg: Aggregate }> {
+  const scores: PRScore[] = [];
+  for (const pr of prs) scores.push(scorePR(pr.id, pr.gold, await predict(pr)));
+  return { scores, agg: aggregate(scores) };
+}
 
+function printAggregate(label: string, agg: Aggregate): void {
+  console.log(`${label}`);
+  console.log(`  Precision ${pct(agg.precision)}  Recall ${pct(agg.recall)}  F1 ${pct(agg.f1)}  FP-rate ${pct(agg.falsePositiveRate)}  (TP ${agg.tp} FP ${agg.fp} FN ${agg.fn})`);
+}
+
+async function main() {
+  const minF1 = Number(process.env.EVAL_MIN_F1 ?? "0.6");
   const prs = loadSeed();
   if (prs.length === 0) throw new Error("no seed PRs found");
 
-  const scores: PRScore[] = [];
-  for (const pr of prs) {
-    const preds = await predict(pr);
-    scores.push(scorePR(pr.id, pr.gold, preds));
+  // Live mode: run the real Phase-0 reviewer through the BYOK gateway.
+  if ((process.env.EVAL_MODE ?? "").toLowerCase() === "live") {
+    const { scores, agg } = await scoreAll(prs, livePredictor());
+    console.log(`\nCavix eval — mode=live, ${prs.length} PRs\n`);
+    console.log(renderTable(scores, prs));
+    printAggregate("\nAggregate:", agg);
+    return;
   }
 
-  const agg = aggregate(scores);
+  // Default: Phase 0 baseline vs Phase 1, before/after.
+  const phase0 = await scoreAll(prs, fixturePredictor());
+  const phase1 = await scoreAll(prs, phase1Predict);
 
-  console.log(`\nCavix eval — mode=${mode}, ${prs.length} labeled PRs\n`);
-  console.log(renderTable(scores, prs));
+  console.log(`\nCavix eval — Phase 1 (deterministic + adjudicated ensemble), ${prs.length} labeled PRs\n`);
+  console.log(renderTable(phase1.scores, prs));
   console.log("");
-  console.log("Aggregate (micro-averaged):");
-  console.log(`  Precision           ${pct(agg.precision)}   (TP ${agg.tp} / TP+FP ${agg.tp + agg.fp})`);
-  console.log(`  Recall              ${pct(agg.recall)}   (TP ${agg.tp} / TP+FN ${agg.tp + agg.fn})`);
-  console.log(`  F1                  ${pct(agg.f1)}`);
-  console.log(`  False-positive rate ${pct(agg.falsePositiveRate)}   (FP ${agg.fp} / emitted ${agg.tp + agg.fp})`);
+  console.log("Before / after (micro-averaged F1):");
+  printAggregate("  Phase 0 (single diff-only pass):", phase0.agg);
+  printAggregate("  Phase 1 (graph context + ensemble + deterministic + adjudication):", phase1.agg);
+  const delta = phase1.agg.f1 - phase0.agg.f1;
+  console.log(`\n  ΔF1 = ${(delta >= 0 ? "+" : "")}${(delta * 100).toFixed(1)} pts  (recall ${pct(phase0.agg.recall)} → ${pct(phase1.agg.recall)})`);
   console.log("");
 
-  if (agg.f1 < minF1) {
-    console.error(`FAIL: F1 ${pct(agg.f1)} < gate ${pct(minF1)} (EVAL_MIN_F1)`);
+  if (phase1.agg.f1 < minF1) {
+    console.error(`FAIL: Phase 1 F1 ${pct(phase1.agg.f1)} < gate ${pct(minF1)}`);
     process.exit(1);
   }
-  console.log(`PASS: F1 ${pct(agg.f1)} ≥ gate ${pct(minF1)}`);
+  if (phase1.agg.f1 < phase0.agg.f1) {
+    console.error(`FAIL: Phase 1 F1 ${pct(phase1.agg.f1)} regressed below Phase 0 ${pct(phase0.agg.f1)}`);
+    process.exit(1);
+  }
+  console.log(`PASS: Phase 1 F1 ${pct(phase1.agg.f1)} ≥ gate ${pct(minF1)} and ≥ Phase 0 ${pct(phase0.agg.f1)}`);
 }
 
 main().catch((err) => {

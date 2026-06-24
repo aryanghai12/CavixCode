@@ -19,17 +19,17 @@ Model-agnostic. BYOK-first. Self-hostable, including air-gapped.
 |---|-------|----------------|
 | 0 | Edge ingestion & concurrency (Go webhook → priority queue) | ✅ built |
 | 1 | Durable job orchestration (Temporal-swappable) | ✅ built (BullMQ) |
-| 2 | Ephemeral sandbox provisioning (Firecracker/gVisor; no egress) | ⬜ later |
-| 3 | Deterministic pre-analysis: linters + SAST + secrets + policy gate | ⬜ later |
-| 4 | AST + intra-repo semantic graph (tree-sitter, stack-graphs) | ⬜ later |
+| 2 | Ephemeral sandbox provisioning (Firecracker/gVisor; no egress) | ✅ built (Local/Docker/CF) |
+| 3 | Deterministic pre-analysis: linters + SAST + secrets + policy gate | ✅ built |
+| 4 | AST + intra-repo semantic graph (tree-sitter, stack-graphs) | ✅ built (heuristic parsers) |
 | 5 | Cross-repo / microservice impact graph | ⬜ later |
 | 6 | CI/CD telemetry & regression prediction (ClickHouse) | ⬜ later |
-| 7 | Context retrieval & compression (RAG + cheap models) | ⬜ later |
-| 8 | Multi-agent ensemble (model routing) | 🟡 single-model seam in place |
-| 9 | Adjudication (dedupe, vote, calibrate, threshold) | ⬜ later |
-| 10 | Execution-grounded verification (repro + PoC + fix-and-run) | ⬜ later |
+| 7 | Context retrieval & compression (RAG + cheap models) | ✅ built |
+| 8 | Multi-agent ensemble (model routing) | ✅ built (7 agents) |
+| 9 | Adjudication (dedupe, vote, calibrate, threshold) | ✅ built |
+| 10 | Execution-grounded verification (repro + PoC + fix-and-run) | ⬜ next |
 | 11 | Synthesis & posting (summary, severity, 1-click fixes) | 🟡 inline comments + summary |
-| 12 | Feedback & learning loop | ⬜ later |
+| 12 | Feedback & learning loop | 🟡 decisions recorded (dashboard) |
 | 13 | Teardown, zero-retention, observability, cost accounting | 🟡 cost accounting in gateway |
 
 Phase 0 delivers a thin but **end-to-end** slice: a real PR webhook flows
@@ -43,11 +43,24 @@ quality of those comments from day one.
 services/
   edge/          Stage 0 — Go GitHub-App webhook receiver → Redis Stream
   orchestrator/  Stage 1 — TS durable workflow → diff → LLM pass → PR comments
+  control-plane/ Dashboard API: onboarding, reviews, accept/reject decisions
 packages/
+  core/          Shared domain types + unified-diff parser
   gateway/       Pluggable, BYOK-first LLM gateway with token + cost logging
-eval/            Gold-labeled PRs + precision/recall/F1 harness
+  sandbox/       Stage 2 — one sandbox port (Local/Docker/Cloudflare backends)
+  deterministic/ Stage 3 — secrets + SAST + 24-linter registry
+  policy/        Stage 3c — optional, off-by-default org policy gate
+  analyzer/      Stage 4 — code graph, blast radius, incremental index
+  context/       Stage 7 — RAG context assembly + cheap-model compression
+  agents/        Stage 8 — 7-agent ensemble + model routing
+  adjudicator/   Stage 9 — dedupe, vote, threshold, policy immunity
+  pipeline/      Composes Stages 3/3c/4/7/8/9 → runPhase1Review (+ demo)
+eval/            Gold-labeled PRs + precision/recall/F1 before/after harness
 docker-compose.yml   Postgres + Redis for local dev
 ```
+
+Demos: `npm run demo` (Phase 0 PR comment) · `npm run phase1` (index this repo,
+cross-file catch, policy gate on/off) · `npm run eval` (Phase 0→1 F1 before/after).
 
 ## Quick start
 
