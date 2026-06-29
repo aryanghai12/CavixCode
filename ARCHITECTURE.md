@@ -249,7 +249,47 @@ Phase 2 + verification (100%, FP-rate 0%). Phase 1's recall gain comes from grap
 context; Phase 2's precision gain comes from verification suppressing the finding
 that doesn't reproduce.
 
-## What remains (post-Phase 2)
+## Phase 3 — enterprise deployability (self-host, air-gap, governance)
+
+### Air-gapped data flow (the required explanation)
+
+In air-gapped mode Cavix runs entirely inside one Kubernetes namespace and makes
+**zero outbound calls**. The orchestrator clones the PR commit into an isolated
+sandbox, runs Stages 3–10 in-process, and sends context only to the in-cluster
+self-hosted model (`cavix-model`, an OpenAI-compatible server). Two independent
+layers prove nothing leaves:
+
+1. **NetworkPolicy `cavix-default-deny-egress`** (`egress: []`, no `0.0.0.0/0`) —
+   the CNI drops any internet-bound packet. A second policy permits only DNS and
+   in-cluster services.
+2. **Gateway `EgressGuard`** — every `fetch` is wrapped to allow only the model
+   host; any other host throws `EgressBlockedError`. Even a mis-configured URL or
+   a malicious dependency cannot exfiltrate.
+
+`npm run airgap-demo` and `docs/compliance/AIR_GAPPED_DATA_FLOW.md` demonstrate
+both layers: the in-cluster model is reached; anthropic/openai/github are blocked.
+
+### Governance, retention, licensing
+
+- **Identity**: SAML 2.0 SSO (signature/audience/validity/replay), SCIM 2.0
+  provisioning → RBAC roles, and a hash-chained tamper-evident audit log.
+- **Zero-retention (Stage 13)**: the review runs in an ephemeral sandbox whose
+  destruction is *verified* (no residual on disk); only metadata persists. This
+  is the teardown/zero-retention half of Stage 13.
+- **Licensing**: offline Ed25519-signed licenses — entitlements (seats, features,
+  air-gap) are signed and verified with no network, suitable for air-gapped sites.
+
+### Policy graduation & legacy
+
+The optional Stage-3c gate graduates into an org policy engine: admins write
+plain-English rules (or a `STANDARDS.md`) that compile into deterministic,
+immutable checks the ensemble cannot drop, with per-repo overrides — still off by
+default. The analyzer/agents extend to COBOL, PL/SQL, C/C++, older Java/.NET, and
+IaC with *located* findings; a modernization mode proposes migrations and runs
+them through the **same Stage 10 verifier** before suggesting — so even a
+migration is a proven fact, not a guess.
+
+## What remains (post-Phase 3)
 
 Stages 2–7 and 9–13 are stubbed by clean seams, not built: the sandbox
 (`Stage 2`), deterministic pre-analysis and the optional policy gate (`Stage 3`),

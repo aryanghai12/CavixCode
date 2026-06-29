@@ -5,6 +5,37 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Phase 3 — enterprise deployability (self-host, air-gap, governance, legacy, compliance)
+
+#### Added
+- **Air-gapped mode (`packages/gateway`)**: `SelfHostedProvider` (OpenAI-compatible
+  in-cluster model) + `EgressGuard` (allowlist; all other hosts throw) +
+  `createAirgappedGateway`. Zero outbound calls; proven by tests + the air-gap demo.
+- **Governance (`packages/governance`)**: SAML 2.0 assertion verification, SCIM 2.0
+  provisioning → RBAC roles, and a tamper-evident hash-chained audit log.
+- **Policy graduation (`packages/policy`)**: English-rule compiler → deterministic
+  immutable checks, STANDARDS.md ingestion, per-repo overrides (still off by default).
+- **Legacy languages (`packages/legacy`)**: located COBOL/PL-SQL/C-C++/Java/.NET/IaC
+  analysis + a modernization mode that verifies migrations through Stage 10.
+- **Zero-retention (`packages/zero-retention`)**: ephemeral review lifecycle with a
+  verified purge + metadata-only persistence.
+- **Offline licensing (`packages/license`)**: Ed25519-signed licenses verified
+  offline (air-gap safe); seat + feature entitlements.
+- **Self-host infra (`deploy/`)**: Helm chart with a deny-all-egress NetworkPolicy
+  and hardened pods, Terraform, and cosign image signing.
+- **Compliance (`docs/compliance/`)**: air-gapped data-flow proof, security
+  hardening, SOC 2 / ISO 27001 control mapping.
+
+#### Verified (acceptance gate)
+- Air-gapped mode makes zero outbound calls: `npm run airgap-demo` reaches only the
+  in-cluster model; anthropic/openai/github are blocked (NetworkPolicy + EgressGuard).
+- SSO (SAML), SCIM provisioning, RBAC, and a tamper-evident audit trail all function.
+- A custom English policy rule is enforced on a test repo (off by default).
+- COBOL and PL/SQL PRs get meaningful, located reviews (named paragraphs/procedures).
+- Zero-retention: customer code present during a review is gone after, verified.
+- `helm lint`/`helm template … | kubectl apply --dry-run` validate the chart; a
+  deny-all-egress NetworkPolicy with no `0.0.0.0/0` is the kernel-layer air-gap proof.
+
 ### Phase 2 — differentiators (Stages 10, 5, 6, 12 + platforms + free tier + benchmarks)
 
 #### Added
