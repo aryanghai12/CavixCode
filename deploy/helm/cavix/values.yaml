@@ -1,0 +1,62 @@
+# Cavix Helm values. Defaults are SECURE and AIR-GAP-READY: egress is denied,
+# the model runs in-cluster, and pods are hardened (non-root, read-only rootfs).
+
+# When true: no component may make outbound calls; the LLM is the in-cluster
+# self-hosted model only. This drives the deny-all-egress NetworkPolicy and the
+# orchestrator's gateway mode.
+airGapped: true
+
+image:
+  # Point at your private/offline registry. Images are cosign-signed (see
+  # deploy/sign-images.sh); enforce signatures with a Kyverno/Sigstore policy.
+  registry: registry.internal/cavix
+  tag: "0.3.0"
+  pullPolicy: IfNotPresent
+  pullSecret: cavix-registry
+
+# Self-hosted open model served with an OpenAI-compatible API (vLLM/Ollama/TGI).
+model:
+  enabled: true
+  image: registry.internal/cavix/model-runtime
+  servedModel: "llama-3.1-70b-instruct"
+  service: cavix-model
+  port: 8000
+  resources:
+    requests: { cpu: "4", memory: 24Gi }
+    limits: { cpu: "8", memory: 48Gi, nvidia.com/gpu: 1 }
+
+orchestrator:
+  replicas: 2
+  resources:
+    requests: { cpu: "500m", memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
+
+controlPlane:
+  replicas: 2
+  port: 8088
+  resources:
+    requests: { cpu: "250m", memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+# Stage 2/10 sandbox backend: gvisor/firecracker (self-host) or docker.
+sandbox:
+  backend: gvisor
+  runtimeClassName: gvisor
+
+postgres:
+  host: cavix-postgres
+  port: 5432
+redis:
+  host: cavix-redis
+  port: 6379
+
+# License (offline Ed25519). The vendor public key ships in the image; the signed
+# license file is mounted from this secret.
+license:
+  secretName: cavix-license
+
+# Pod hardening applied to every workload.
+podSecurity:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  seccompProfile: RuntimeDefault

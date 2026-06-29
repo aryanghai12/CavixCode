@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cavix
+description: Cavix — self-hostable, air-gappable AI code review that proves its findings.
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+keywords: [code-review, security, air-gapped, self-hosted]
+maintainers:
+  - name: Cavix

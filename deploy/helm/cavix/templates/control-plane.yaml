@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cavix-control-plane
+  labels:
+    app.kubernetes.io/name: control-plane
+    {{- include "cavix.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/name: control-plane, app.kubernetes.io/part-of: cavix }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: control-plane, app.kubernetes.io/part-of: cavix }
+    spec:
+      imagePullSecrets: [{ name: {{ .Values.image.pullSecret }} }]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: {{ .Values.podSecurity.runAsNonRoot }}
+        seccompProfile: { type: {{ .Values.podSecurity.seccompProfile }} }
+      containers:
+        - name: control-plane
+          image: {{ .Values.image.registry }}/control-plane:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "cavix.securityContext" . | nindent 12 }}
+          ports: [{ containerPort: {{ .Values.controlPlane.port }} }]
+          env:
+            - { name: CAVIX_CONTROL_PLANE_PORT, value: {{ .Values.controlPlane.port | quote }} }
+            - { name: CAVIX_AIRGAPPED, value: {{ .Values.airGapped | quote }} }
+          resources: {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          readinessProbe: { httpGet: { path: /healthz, port: {{ .Values.controlPlane.port }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cavix-control-plane
+  labels:
+    {{- include "cavix.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/name: control-plane, app.kubernetes.io/part-of: cavix }
+  ports: [{ port: {{ .Values.controlPlane.port }}, targetPort: {{ .Values.controlPlane.port }} }]

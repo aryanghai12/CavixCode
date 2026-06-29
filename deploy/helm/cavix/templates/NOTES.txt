@@ -1,0 +1,16 @@
+Cavix {{ .Chart.AppVersion }} installed in namespace "{{ .Release.Namespace }}".
+
+Mode: {{ if .Values.airGapped }}AIR-GAPPED (zero outbound; in-cluster model only){{ else }}connected (BYOK cloud models permitted){{ end }}
+
+Prove the air-gap (no egress leaves the cluster):
+  kubectl -n {{ .Release.Namespace }} get networkpolicy
+  # cavix-default-deny-egress has egress: []  (no 0.0.0.0/0 anywhere)
+  kubectl -n {{ .Release.Namespace }} exec deploy/cavix-orchestrator -- \
+    sh -c 'wget -T3 -qO- https://api.anthropic.com || echo "BLOCKED (expected)"'
+  # → BLOCKED (expected): the NetworkPolicy denies it, and the gateway EgressGuard
+  #   refuses any host that is not the in-cluster model.
+
+Dashboard:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/cavix-control-plane {{ .Values.controlPlane.port }}:{{ .Values.controlPlane.port }}
+
+License: mounted from secret "{{ .Values.license.secretName }}" and verified OFFLINE.

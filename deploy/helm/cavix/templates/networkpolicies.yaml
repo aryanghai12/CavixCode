@@ -1,0 +1,67 @@
+{{- if .Values.airGapped }}
+# ── THE AIR-GAP PROOF ────────────────────────────────────────────────────────
+# Default-deny ALL egress for every Cavix pod. With this applied, no component can
+# open a connection to the internet — model inference, SCM, and analysis all stay
+# in-cluster. The only egress allowed is DNS and the explicit in-cluster services
+# below. There is deliberately NO rule permitting 0.0.0.0/0.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cavix-default-deny-egress
+  labels:
+    {{- include "cavix.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cavix
+  policyTypes: [Egress]
+  egress: []   # deny everything not explicitly allowed below
+---
+# Allow only: cluster DNS, the in-cluster model, Postgres, Redis, and traffic to
+# other Cavix pods in this namespace. No external CIDR appears anywhere.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cavix-allow-incluster-egress
+  labels:
+    {{- include "cavix.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cavix
+  policyTypes: [Egress]
+  egress:
+    # Cluster DNS (kube-dns).
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Everything else stays within this namespace (model, postgres, redis, peers).
+    - to:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: {{ .Values.model.port }} }
+        - { protocol: TCP, port: {{ .Values.postgres.port }} }
+        - { protocol: TCP, port: {{ .Values.redis.port }} }
+        - { protocol: TCP, port: {{ .Values.controlPlane.port }} }
+{{- end }}
+---
+# Ingress is also default-deny; the webhook ingress is opened explicitly elsewhere.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cavix-default-deny-ingress
+  labels:
+    {{- include "cavix.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cavix
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cavix-orchestrator
+  labels:
+    app.kubernetes.io/name: orchestrator
+    {{- include "cavix.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/name: orchestrator, app.kubernetes.io/part-of: cavix }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: orchestrator, app.kubernetes.io/part-of: cavix }
+    spec:
+      imagePullSecrets: [{ name: {{ .Values.image.pullSecret }} }]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: {{ .Values.podSecurity.runAsNonRoot }}
+        seccompProfile: { type: {{ .Values.podSecurity.seccompProfile }} }
+      containers:
+        - name: orchestrator
+          image: {{ .Values.image.registry }}/orchestrator:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "cavix.securityContext" . | nindent 12 }}
+          env:
+            - { name: CAVIX_AIRGAPPED, value: {{ .Values.airGapped | quote }} }
+            - { name: CAVIX_LLM_PROVIDER, value: {{ if .Values.airGapped }}"selfhosted"{{ else }}"anthropic"{{ end }} }
+            - { name: CAVIX_MODEL_BASE_URL, value: "http://{{ .Values.model.service }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.model.port }}" }
+            - { name: CAVIX_LLM_MODEL, value: {{ .Values.model.servedModel | quote }} }
+            - { name: CAVIX_REDIS_HOST, value: {{ .Values.redis.host | quote }} }
+            - { name: CAVIX_REDIS_PORT, value: {{ .Values.redis.port | quote }} }
+            - { name: CAVIX_SANDBOX_BACKEND, value: {{ .Values.sandbox.backend | quote }} }
+            - { name: CAVIX_ZERO_RETENTION, value: "true" }
+          resources: {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+          volumeMounts:
+            - { name: license, mountPath: /etc/cavix/license, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      runtimeClassName: {{ .Values.sandbox.runtimeClassName }}
+      volumes:
+        - { name: license, secret: { secretName: {{ .Values.license.secretName }} } }
+        - { name: tmp, emptyDir: { medium: Memory } }
