@@ -1,0 +1,16 @@
+{
+  "name": "@cavix/ide",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cavix/core": "*",
+    "@cavix/deterministic": "*",
+    "@cavix/legacy": "*",
+    "@cavix/adjudicator": "*",
+    "@cavix/agents": "*",
+    "@cavix/gateway": "*"
+  }
+}

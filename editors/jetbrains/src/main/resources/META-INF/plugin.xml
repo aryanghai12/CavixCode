@@ -1,0 +1,25 @@
+<!-- Cavix JetBrains plugin — pre-PR local review. Adds a "Cavix: Review working
+     tree" action that posts the project files to the local Cavix review server
+     and renders results as inspections/annotations. Same engine as the PR pipeline. -->
+<idea-plugin>
+  <id>com.cavix.review</id>
+  <name>Cavix — pre-PR review</name>
+  <version>0.4.0</version>
+  <vendor>Cavix</vendor>
+  <description>Run Cavix's review engine on your working tree before opening a PR.</description>
+
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <applicationConfigurable instance="com.cavix.review.CavixSettings" displayName="Cavix"/>
+    <externalAnnotator language="" implementationClass="com.cavix.review.CavixAnnotator"/>
+  </extensions>
+
+  <actions>
+    <action id="Cavix.ReviewWorkingTree" class="com.cavix.review.ReviewWorkingTreeAction"
+            text="Cavix: Review working tree (pre-PR)"
+            description="Run Cavix's review engine on the current working tree.">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+    </action>
+  </actions>
+</idea-plugin>

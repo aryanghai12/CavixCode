@@ -1,0 +1,24 @@
+{
+  "name": "cavix-vscode",
+  "displayName": "Cavix — pre-PR review",
+  "description": "Run Cavix's review engine on your working tree before you open a PR.",
+  "version": "0.4.0",
+  "publisher": "cavix",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Linters", "Programming Languages"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "cavix.reviewWorkingTree", "title": "Cavix: Review working tree (pre-PR)" }
+    ],
+    "configuration": {
+      "title": "Cavix",
+      "properties": {
+        "cavix.serverUrl": { "type": "string", "default": "http://127.0.0.1:7077", "description": "Local Cavix review server (createLocalReviewServer)." },
+        "cavix.reviewOnSave": { "type": "boolean", "default": true }
+      }
+    }
+  },
+  "scripts": { "build": "tsc -p ./" }
+}
