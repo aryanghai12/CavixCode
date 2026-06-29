@@ -101,7 +101,7 @@ export class Verifier {
       const reason = exploit
         ? "PoC exploit demonstrated the vulnerability in the sandbox"
         : "bug reproduced by a failing test in the sandbox" + (fixWorks ? "; suggested fix resolves it" : "");
-      return { status: "VERIFIED", reproduced: true, fixWorks, suitePasses, exploit, logs, reason, costUsd, testPath: generated.testPath, testCode: generated.testCode };
+      return { status: "VERIFIED", reproduced: true, fixWorks, suitePasses, exploit, logs, reason, costUsd, testPath: generated.testPath, testCode: generated.testCode, appliedFix: generated.fix ? [generated.fix] : undefined };
     } catch (err) {
       return inconclusive(exploit, `sandbox error: ${(err as Error).message}`, logs, 0);
     } finally {

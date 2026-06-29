@@ -27,6 +27,8 @@ export interface VerificationResult {
   /** The generated reproduction/exploit test that was run. */
   testPath?: string;
   testCode?: string;
+  /** The fix files that were applied and re-verified (drives the fix-PR agent). */
+  appliedFix?: Array<{ path: string; content: string }>;
   logs: StepLog[];
   reason: string;
   costUsd: number;
