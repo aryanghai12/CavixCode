@@ -64,6 +64,11 @@ packages/
   zero-retention/ Stage 13 — verified no-customer-code-persists
   license/       Offline Ed25519 signed licenses
   legacy/        COBOL/PL-SQL/C-C++/Java/.NET/IaC + modernization
+  fixpr/         Verified fix-PR agent (draft, human-approval, never auto-merge)
+  ide/           Pre-PR local review engine (VS Code + JetBrains plugins)
+  batch/         Modernization at scale, verification-gated per change
+  lenses/        Review-lens marketplace + per-org confidence models
+  analytics/     ROI: action rate, defects caught, reviewer-hours saved
   pipeline/      Composes Stages 3/3c/4/7/8/9 → runPhase1Review (+ demo)
 eval/            Gold-labeled PRs + competitor + external-benchmark harness
 deploy/          Helm chart (deny-all-egress) + Terraform + cosign signing
@@ -74,8 +79,9 @@ docker-compose.yml   Postgres + Redis for local dev
 Demos: `npm run demo` (Phase 0 PR comment) · `npm run phase1` (cross-file catch,
 policy gate) · `npm run verify-demo` (reproduce a bug + PoC in a real sandbox) ·
 `npm run orggraph-demo` (cross-repo impact trace) · `npm run airgap-demo` (prove
-no egress + offline license + zero-retention) · `npm run eval` (Phase 0→1→2
-side-by-side) · `npm run eval:bench` (external benchmarks).
+no egress + offline license + zero-retention) · `npm run phase4-demo` (verified
+fix-PR + IDE review + ROI) · `npm run eval` (Phase 0→1→2 side-by-side) ·
+`npm run eval:bench` (external benchmarks).
 
 Self-host / air-gapped deployment: see [deploy/README.md](deploy/README.md) and
 [docs/compliance/AIR_GAPPED_DATA_FLOW.md](docs/compliance/AIR_GAPPED_DATA_FLOW.md).

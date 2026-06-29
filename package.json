@@ -21,6 +21,7 @@
     "verify-demo": "node packages/verifier/src/demo.ts",
     "orggraph-demo": "node packages/orggraph/src/demo.ts",
     "airgap-demo": "node scripts/airgap-demo.ts",
+    "phase4-demo": "node scripts/phase4-demo.ts",
     "orchestrator": "node services/orchestrator/src/main.ts",
     "eval": "node eval/run.ts",
     "eval:bench": "node eval/bench.ts"

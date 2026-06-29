@@ -5,6 +5,31 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Phase 4 — trusted automated engineer (fix-PRs, IDE, batch, lenses, ROI)
+
+#### Added
+- **Verified fix-PR agent (`packages/fixpr`)**: opens its own fix PRs, but ONLY
+  when Stage 10 proves the fix (repro fails before, passes after, suite stays
+  green). Always a DRAFT labeled `needs-human-approval`; Cavix never auto-merges.
+- **IDE local review (`packages/ide`)** + VS Code/JetBrains plugin manifests:
+  pre-PR review with the SAME engine (deterministic + legacy + optional ensemble),
+  offline by default, served to editors over a localhost server.
+- **Batch modernization (`packages/batch`)**: migration at scale where EACH change
+  is independently gated through Stage 10; unverified migrations are excluded.
+- **Review lenses (`packages/lenses`)**: a marketplace substrate — installable
+  packs of English/policy rules + extra agents + a bundled per-org confidence
+  model; validated and composed into the pipeline.
+- **ROI analytics (`packages/analytics`)**: per-team action rate, defects caught
+  (verified), and reviewer-hours saved via an explicit, tunable model.
+
+#### Verified (acceptance gate)
+- The fix-PR agent opens a draft PR whose fix is verified green; an unverifiable
+  fix is NOT proposed (`npm run phase4-demo`; fixpr tests with a real sandbox).
+- The IDE plugin returns a useful local review before a PR is opened (ide tests).
+- ROI analytics produce reviewer-hours-saved and action-rate numbers (analytics
+  tests + demo: 86% action rate, 6 defects caught, ~6 hours saved).
+- Every autonomous action stays verification-gated and human-approvable.
+
 ### Phase 3 — enterprise deployability (self-host, air-gap, governance, legacy, compliance)
 
 #### Added

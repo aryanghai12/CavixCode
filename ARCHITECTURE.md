@@ -289,7 +289,32 @@ IaC with *located* findings; a modernization mode proposes migrations and runs
 them through the **same Stage 10 verifier** before suggesting — so even a
 migration is a proven fact, not a guess.
 
-## What remains (post-Phase 3)
+## Phase 4 — trusted automated engineer
+
+Cavix goes from reviewer to engineer, but the moat is the leash: **every
+autonomous action is Stage-10-gated and human-approvable.**
+
+- **Verified fix-PR agent** (`packages/fixpr`): generates a candidate fix, runs it
+  through the verifier (repro red → green, suite green), and opens a PR only if it
+  passes — always a *draft* labeled `needs-human-approval`. There is deliberately
+  no merge method. Unverifiable fixes are silently not proposed. This is the same
+  "prove it before you speak" discipline applied to *acting*, not just commenting.
+- **IDE local review** (`packages/ide`): the exact pipeline engine, run on the
+  working tree before a PR exists, offline by default — so what you see in the
+  editor is what Cavix would post.
+- **Batch modernization** (`packages/batch`): the same per-change verification
+  gate, fanned out across many files/repos with bounded concurrency; only verified
+  migrations survive into human-approvable PRs.
+- **Lenses** (`packages/lenses`): a marketplace of shareable rule/agent packs plus
+  per-org confidence models, validated and composed into the pipeline.
+- **ROI analytics** (`packages/analytics`): the action-rate / defects-caught /
+  reviewer-hours-saved numbers, from an explicit model — the sales-motion metrics.
+
+The through-line across all four phases: a finding, a fix, a migration, or an
+auto-PR is only ever surfaced as a *proven fact* — verified in an isolated
+sandbox — and a human always holds the merge button.
+
+## What remains (post-Phase 4)
 
 Stages 2–7 and 9–13 are stubbed by clean seams, not built: the sandbox
 (`Stage 2`), deterministic pre-analysis and the optional policy gate (`Stage 3`),
