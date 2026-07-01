@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cavix/edge/internal/canonical"
 	"github.com/cavix/edge/internal/dedupe"
 	"github.com/cavix/edge/internal/queue"
 )
@@ -24,15 +25,21 @@ const enqueueTimeout = 80 * time.Millisecond
 // ACK fast. It depends only on ports (queue.Producer, dedupe.Store), so tests
 // run with in-memory fakes and no infrastructure.
 type Handler struct {
-	secret string
-	queue  queue.Producer
-	dedupe dedupe.Store
-	log    *slog.Logger
+	secret     string
+	queue      queue.Producer
+	dedupe     dedupe.Store
+	log        *slog.Logger
+	botHandle  string          // e.g. "cavix" → responds to "@cavix review"
+	allowedCmd map[string]bool // author_associations allowed to run commands
 }
 
-// NewHandler wires the edge handler.
-func NewHandler(secret string, q queue.Producer, d dedupe.Store, log *slog.Logger) *Handler {
-	return &Handler{secret: secret, queue: q, dedupe: d, log: log}
+// NewHandler wires the edge handler. botHandle is the GitHub App's mention handle
+// (empty → "cavix"); commands are honored only from allowed author associations.
+func NewHandler(secret string, q queue.Producer, d dedupe.Store, log *slog.Logger, botHandle string) *Handler {
+	if botHandle == "" {
+		botHandle = "cavix"
+	}
+	return &Handler{secret: secret, queue: q, dedupe: d, log: log, botHandle: botHandle, allowedCmd: DefaultAllowedAssociations}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -69,35 +76,57 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. We only act on pull_request events; ACK everything else so GitHub
-	//    doesn't retry, but produce no job.
-	if event != "pull_request" {
-		h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"unsupported_event"}`)
-		return
-	}
-
-	// 5. Normalize to the canonical ReviewJob.
-	job, err := Normalize(body, delivery)
-	if err != nil {
-		if errors.Is(err, ErrNotTrigger) {
-			h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"non_trigger_action"}`)
+	// 4. Route by event.
+	switch event {
+	case "pull_request":
+		job, err := Normalize(body, delivery)
+		if err != nil {
+			if errors.Is(err, ErrNotTrigger) {
+				h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"non_trigger_action"}`)
+				return
+			}
+			h.log.Warn("normalize failed", "delivery", delivery, "err", err.Error())
+			http.Error(w, "unprocessable payload", http.StatusBadRequest)
 			return
 		}
-		h.log.Warn("normalize failed", "delivery", delivery, "err", err.Error())
-		http.Error(w, "unprocessable payload", http.StatusBadRequest)
-		return
-	}
+		h.enqueue(w, r, start, delivery, job)
 
-	// 6. Idempotency: drop logical duplicates (redeliveries of the same commit).
+	case "issue_comment":
+		// A human typed "@<handle> <command>" on a PR. Parse + authorize + enqueue.
+		job, err := NormalizeIssueComment(body, delivery, h.botHandle)
+		if err != nil {
+			if errors.Is(err, ErrNotTrigger) {
+				h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"not_a_command"}`)
+				return
+			}
+			h.log.Warn("issue_comment normalize failed", "delivery", delivery, "err", err.Error())
+			http.Error(w, "unprocessable payload", http.StatusBadRequest)
+			return
+		}
+		if !IsAuthorized(job.AuthorAssociation, h.allowedCmd) {
+			h.log.Warn("unauthorized command", "delivery", delivery, "repo", job.Repo, "pr", job.PRNumber,
+				"author", job.Author, "assoc", job.AuthorAssociation, "command", job.Command)
+			h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"unauthorized"}`)
+			return
+		}
+		h.log.Info("command received", "delivery", delivery, "repo", job.Repo, "pr", job.PRNumber,
+			"command", job.Command, "author", job.Author)
+		h.enqueue(w, r, start, delivery, job)
+
+	default:
+		h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"unsupported_event"}`)
+	}
+}
+
+// enqueue dedupes, persists, and acks a job (steps 6–7). Command jobs carry a
+// per-comment idempotency key, so they are never deduped — each invocation runs.
+func (h *Handler) enqueue(w http.ResponseWriter, r *http.Request, start time.Time, delivery string, job canonical.ReviewJob) {
 	if h.dedupe.SeenBefore(job.IdempotencyKey) {
-		h.log.Info("duplicate dropped",
-			"delivery", delivery, "repo", job.Repo, "pr", job.PRNumber, "action", job.Action)
+		h.log.Info("duplicate dropped", "delivery", delivery, "repo", job.Repo, "pr", job.PRNumber, "action", job.Action)
 		h.writeJSON(w, http.StatusAccepted, `{"status":"duplicate"}`)
 		return
 	}
 
-	// 7. Enqueue durably, THEN ack. If enqueue fails we return 5xx so GitHub
-	//    retries — we never ack work we didn't persist.
 	ctx, cancel := context.WithTimeout(r.Context(), enqueueTimeout)
 	defer cancel()
 	msgID, err := h.queue.Enqueue(ctx, job)
@@ -108,11 +137,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tookMs := time.Since(start).Milliseconds()
-	h.log.Info("review job enqueued",
+	h.log.Info("job enqueued",
 		"delivery", delivery, "msg_id", msgID, "repo", job.Repo, "pr", job.PRNumber,
-		"action", job.Action, "head_sha", job.HeadSHA, "idempotency", job.IdempotencyKey,
-		"ack_ms", tookMs)
-
+		"trigger", job.Trigger, "action", job.Action, "command", job.Command,
+		"idempotency", job.IdempotencyKey, "ack_ms", tookMs)
 	h.writeJSON(w, http.StatusAccepted, `{"status":"queued"}`)
 }
 

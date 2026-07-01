@@ -18,7 +18,7 @@ const testSecret = "webhook-secret"
 
 func newTestHandler(q queue.Producer) *Handler {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil)) // silence logs in tests
-	return NewHandler(testSecret, q, dedupe.NewMemoryStore(time.Hour), log)
+	return NewHandler(testSecret, q, dedupe.NewMemoryStore(time.Hour), log, "cavix")
 }
 
 // post builds a signed request to /webhook with the given event + body.

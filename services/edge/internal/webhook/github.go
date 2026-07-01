@@ -99,6 +99,7 @@ func Normalize(body []byte, deliveryID string) (canonical.ReviewJob, error) {
 		Title:          ev.PullRequest.Title,
 		Author:         ev.PullRequest.User.Login,
 		EnqueuedAt:     time.Now().UTC().Format(time.RFC3339),
+		Trigger:        canonical.TriggerPullRequest,
 	}
 	job.IdempotencyKey = idempotencyKey(job)
 	return job, nil

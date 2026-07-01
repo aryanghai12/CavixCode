@@ -17,6 +17,7 @@ type Config struct {
 	StreamKey     string        // Redis Stream to XADD jobs onto
 	DedupeTTL     time.Duration // idempotency window
 	EnqueueDialMs time.Duration // dial timeout for Redis
+	BotHandle     string        // mention handle: "@<handle> review" (e.g. "cavixcode")
 }
 
 // Load reads config from env with safe defaults.
@@ -28,6 +29,7 @@ func Load() (Config, error) {
 		StreamKey:     getenv("CAVIX_STREAM_KEY", "cavix:reviewjobs"),
 		DedupeTTL:     24 * time.Hour,
 		EnqueueDialMs: 2 * time.Second,
+		BotHandle:     getenv("CAVIX_BOT_HANDLE", "cavix"),
 	}
 	if c.WebhookSecret == "" {
 		// Fail closed: without a secret we cannot verify webhooks, so refuse to

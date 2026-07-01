@@ -39,7 +39,28 @@ type ReviewJob struct {
 	Title      string `json:"title"`
 	Author     string `json:"author"`
 	EnqueuedAt string `json:"enqueued_at"` // RFC3339, set at enqueue time
+
+	// Trigger tells the orchestrator WHY this job exists:
+	//   "pull_request" — an automatic review (opened/synchronize/…)
+	//   "command"      — a human typed "@cavix <command>" on the PR
+	Trigger string `json:"trigger"`
+
+	// Command fields are set only when Trigger == "command".
+	Command           string `json:"command,omitempty"`            // review|resolve|pause|resume|help|summary|ask
+	CommandArgs       string `json:"command_args,omitempty"`       // free text (e.g. an "ask" question or flags)
+	CommentID         int64  `json:"comment_id,omitempty"`         // the comment that issued the command
+	AuthorAssociation string `json:"author_association,omitempty"` // OWNER|MEMBER|COLLABORATOR|…
+
+	// ForceFresh asks the orchestrator to discard the incremental cache and any
+	// stale bot reviews, then review from scratch. Set by "@cavix review".
+	ForceFresh bool `json:"force_fresh,omitempty"`
 }
 
 // DefaultPriority is the baseline urgency for an ordinary PR.
 const DefaultPriority = 100
+
+// Trigger values.
+const (
+	TriggerPullRequest = "pull_request"
+	TriggerCommand     = "command"
+)

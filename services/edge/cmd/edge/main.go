@@ -46,7 +46,7 @@ func main() {
 	defer producer.Close()
 
 	dd := dedupe.NewMemoryStore(cfg.DedupeTTL)
-	handler := webhook.NewHandler(cfg.WebhookSecret, producer, dd, log)
+	handler := webhook.NewHandler(cfg.WebhookSecret, producer, dd, log, cfg.BotHandle)
 
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", handler)
