@@ -1,5 +1,6 @@
 export * from "./types.ts";
-export { GitHubPlatform } from "./github.ts";
+export { GitHubPlatform, type CheckRunInput } from "./github.ts";
+export { AppTokenProvider, type AppTokenProviderOptions } from "./github-app.ts";
 export { GitLabPlatform } from "./gitlab.ts";
 export { BitbucketCloudPlatform, BitbucketServerPlatform } from "./bitbucket.ts";
 export { AzureDevOpsPlatform } from "./azure.ts";
