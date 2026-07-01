@@ -5,6 +5,33 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Phase 5 — production GitHub App + `@cavix` commands + competitor parity
+
+#### Added
+- **`@cavix` command handling (edge, Go)**: `issue_comment` webhooks are parsed
+  for `@<handle> <command>` (review/re-review/resolve/pause/resume/help/summary/
+  ask). Commands carry a unique per-comment idempotency key so they are **never
+  deduplicated** (fresh every time); only OWNER/MEMBER/COLLABORATOR may trigger.
+  Handle configurable via `CAVIX_BOT_HANDLE`.
+- **GitHub App auth (`packages/platforms`)**: `AppTokenProvider` mints an RS256
+  App JWT → per-installation access token (cached), plus **Check Runs**
+  (create/update) and **review management** (list/dismiss own reviews, delete
+  stale comments).
+- **Review session (`packages/review-session`)**: fresh vs incremental planning;
+  `@cavix review` dismisses stale reviews + deletes stale comments + **busts the
+  cache** for a full re-review; incremental never reposts a finding.
+- **Repo config (`packages/repoconfig`)**: `.cavix.yaml`/`.cavix.json` with auto-
+  review toggle, path filters (globs), disabled agents, policy toggle, tone, and
+  `failOn` severities — dependency-free YAML-subset parser.
+
+#### Verified (acceptance gate)
+- `@cavix review` on a PR triggers a fresh review that removes stale reviews/cache
+  (edge command tests + review-session tests).
+- Production install flow documented end-to-end (GitHub App create → install → run
+  → event flow → commands → config → required check) in GUIDE §8B, with a
+  CodeRabbit competitor-parity table.
+- Full suite green: 190 TypeScript tests + the Go edge suite.
+
 ### Phase 4 — trusted automated engineer (fix-PRs, IDE, batch, lenses, ROI)
 
 #### Added

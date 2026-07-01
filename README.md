@@ -9,7 +9,9 @@ proof it crosses the repo boundary to flag downstream impact on other services,
 predicts operational regressions from CI/CD telemetry, and (optionally) enforces
 an org-owned policy-as-code gate for regulated buyers.
 
-Model-agnostic. BYOK-first. Self-hostable, including air-gapped.
+Model-agnostic. BYOK-first. Self-hostable, including air-gapped. Installs as a
+GitHub App and responds to `@cavix review` (fresh review, stale ones dismissed) —
+plus GitLab, Bitbucket, and Azure DevOps. See [GUIDE.md](GUIDE.md) §8B to go live.
 
 ---
 
@@ -69,6 +71,8 @@ packages/
   batch/         Modernization at scale, verification-gated per change
   lenses/        Review-lens marketplace + per-org confidence models
   analytics/     ROI: action rate, defects caught, reviewer-hours saved
+  review-session/ @cavix review: fresh vs incremental + stale-review removal
+  repoconfig/    .cavix.yaml/.json (path filters, agents, failOn, tone)
   pipeline/      Composes Stages 3/3c/4/7/8/9 → runPhase1Review (+ demo)
 eval/            Gold-labeled PRs + competitor + external-benchmark harness
 deploy/          Helm chart (deny-all-egress) + Terraform + cosign signing

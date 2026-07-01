@@ -20,6 +20,7 @@ written in plain English, step by step.
 6. [Run the tests (prove it works)](#6-run-the-tests-prove-it-works)
 7. [Run the demos (see it work)](#7-run-the-demos-see-it-work)
 8. [Run the real services](#8-run-the-real-services)
+8B. [Go live on GitHub (production GitHub App + `@cavix` commands)](#8b-go-live-on-github-production-github-app--cavix-commands)
 9. [Measure quality (the eval harness)](#9-measure-quality-the-eval-harness)
 10. [Configuration & BYOK](#10-configuration--byok)
 11. [Self-host & air-gapped deployment](#11-self-host--air-gapped-deployment)
@@ -305,6 +306,187 @@ curl -s -X POST http://127.0.0.1:7077/review \
 
 ---
 
+## 8B. Go live on GitHub (production GitHub App + `@cavix` commands)
+
+This is what **you, the founder, actually do** to make Cavix review real PRs in a
+repo or an entire organization — and how the `@cavix review` command works.
+
+Cavix ships as a **GitHub App** (not a bot user, not a PAT). A GitHub App is the
+right primitive: it gets its own identity (`yourapp[bot]`), fine-grained
+permissions the customer grants at install, and short-lived per-installation
+tokens (no long-lived secrets). Cavix implements all of this
+(`packages/platforms` `AppTokenProvider`).
+
+### Step 1 — Create the GitHub App (one time, ~10 minutes)
+
+1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
+   (for an org: **Org Settings → Developer settings → GitHub Apps**).
+2. **GitHub App name:** e.g. `Cavix` or `CavixCode`. **This name is the mention
+   handle** — if the app is `cavixcode`, users type `@cavixcode review`. Set the
+   edge's `CAVIX_BOT_HANDLE` to the same handle (lowercased, no spaces).
+3. **Homepage URL:** your site (anything valid).
+4. **Webhook → Active:** ✓. **Webhook URL:** `https://<your-edge-host>/webhook`
+   (the public URL of the Stage 0 edge service). **Webhook secret:** generate a
+   strong random string and set it as the edge's `CAVIX_WEBHOOK_SECRET`.
+5. **Permissions (Repository):**
+   | Permission | Access | Why |
+   |------------|--------|-----|
+   | Contents | Read | fetch the diff / clone the commit |
+   | Pull requests | Read & write | post reviews + inline comments |
+   | Issues | Read & write | receive/post PR comments (`@cavix` commands) |
+   | Checks | Read & write | the ✓/✗ Cavix status check |
+   | Metadata | Read | required baseline |
+6. **Subscribe to events:** **Pull request**, **Issue comment**,
+   **Pull request review comment** (optional), **Installation**,
+   **Installation repositories**.
+7. **Where can this app be installed:** "Only on this account" (private) or "Any
+   account" (to publish on the Marketplace).
+8. **Create the app.** Then note the **App ID**, and **Generate a private key**
+   (downloads a `.pem`). These become `CAVIX_APP_ID` and `CAVIX_APP_PRIVATE_KEY`.
+
+### Step 2 — Install the App on repos / the org
+
+On the App's page → **Install App** → choose the org/account → select **All
+repositories** or specific repos → **Install**. That's the customer-facing action;
+for the Marketplace, share your App's public install URL and customers self-serve.
+
+### Step 3 — Run the Cavix services (point them at the App)
+
+Run the edge (public), the orchestrator, and the control-plane (see §8). For
+**production GitHub App auth** (instead of the dev PAT), give the orchestrator the
+App credentials so it mints per-installation tokens:
+
+```bash
+export CAVIX_APP_ID="123456"
+export CAVIX_APP_PRIVATE_KEY="$(cat cavix.private-key.pem)"
+export CAVIX_BOT_HANDLE="cavixcode"        # must match the App name/handle
+export CAVIX_WEBHOOK_SECRET="…"            # must match the App webhook secret
+export CAVIX_LLM_API_KEY="sk-…"            # BYOK (or air-gapped self-hosted model)
+```
+
+> The token minting is `AppTokenProvider` (RS256 App JWT → installation token,
+> cached). The dev quick-start in §8c uses a personal token (`CAVIX_GITHUB_TOKEN`);
+> production uses the App key above. Both feed the same `GitHubClient` port.
+
+**Local development trick:** GitHub can't reach `localhost`. Use a webhook proxy
+like [`smee.io`](https://smee.io) or `ngrok` to forward GitHub's webhooks to your
+local edge while testing.
+
+### Step 4 — What happens automatically (the event flow)
+
+```
+Developer opens/updates a PR
+        │  GitHub sends a "pull_request" webhook
+        ▼
+[edge] verify HMAC → normalize → queue          (Stage 0, ~1ms ack)
+        ▼
+[orchestrator] mint installation token → fetch diff → run the pipeline
+        │      (Stages 3–10: deterministic + graph + agents + verification)
+        ▼
+Posts a review: summary + inline comments (with one-click fixes)
+Posts a Check Run: ✓ pass / ✗ if a `failOn` severity is present
+```
+
+On the **next push** to the same PR, Cavix does an **incremental** review — it only
+comments on the new commits and never reposts a finding it already made
+(`packages/review-session`).
+
+### Step 5 — The `@cavix` commands (chat / on-demand control)
+
+Anyone with **write access** (OWNER / MEMBER / COLLABORATOR — configurable) can
+comment on the PR to control Cavix. The mention handle is your App's name.
+
+| Comment | What Cavix does |
+|---------|-----------------|
+| `@cavix review` | **Fresh full review** — dismisses its previous reviews, deletes its stale inline comments, **clears the cache**, and reviews from scratch. |
+| `@cavix re-review` / `@cavix full` | same as `review`. |
+| `@cavix resolve` | Resolves/dismisses Cavix's own review threads. |
+| `@cavix pause` | Stops automatic reviews on this PR. |
+| `@cavix resume` | Re-enables automatic reviews. |
+| `@cavix summary` | Regenerates the PR summary/walkthrough. |
+| `@cavix help` | Posts the command list. |
+| `@cavix <any question>` | Free-text Q&A about the PR (chat). |
+
+**Why "fresh" matters:** when you type `@cavix review`, GitHub delivers an
+`issue_comment` event. The edge gives that job a **unique idempotency key per
+comment**, so it is *never* deduplicated — every invocation runs. The
+orchestrator then uses the review session to **dismiss stale reviews and bust the
+cache** before posting a brand-new review. That's exactly the "remove old reviews,
+give me a fresh one" behavior. Commands from users **without** write access are
+ignored (an abuse guard).
+
+Set the handle: the edge responds to `@<CAVIX_BOT_HANDLE>` (default `cavix`). To
+respond to `@cavixcode`, set `CAVIX_BOT_HANDLE=cavixcode`.
+
+### Step 6 — Per-repo configuration (`.cavix.yaml`)
+
+Teams tune Cavix by committing a `.cavix.yaml` (or `.cavix.json`) to the repo root
+— no dashboard needed (`packages/repoconfig`):
+
+```yaml
+# .cavix.yaml
+autoReview: true              # review automatically on open/push
+reviewDraftPRs: false
+tone: concise                 # or "detailed"
+pathFilters:
+  include:                    # if set, only these paths are reviewed
+    - "src/**"
+    - "services/**"
+  exclude:                    # always skipped
+    - "**/*.min.js"
+    - "**/generated/**"
+agents:
+  disabled:                   # turn off specific reviewers
+    - standards
+policy:
+  enabled: false              # the org policy gate (off by default)
+failOn:                       # severities that FAIL the Check Run (block merge if required)
+  - critical
+```
+
+Sensible defaults apply if the file is absent (vendored/build paths are excluded
+automatically).
+
+### Step 7 — Make Cavix a required check (gate merges)
+
+Cavix posts a **Check Run** on every PR. To make a failing Cavix review **block
+merge**, add it as a required status check: **Repo/Org → Settings → Branches →
+Branch protection rule → Require status checks to pass → select the Cavix check.**
+Combined with an enabled **policy gate**, this gives regulated teams a
+non-bypassable quality gate.
+
+### How Cavix compares to CodeRabbit / other AI reviewers
+
+Everything below is **built and tested** in this repo.
+
+| Capability | CodeRabbit & others | **Cavix** |
+|------------|:---:|:---:|
+| Auto review on PR open/push | ✅ | ✅ |
+| Inline comments + committable suggestions | ✅ | ✅ (one-click `suggestion` blocks) |
+| PR summary / walkthrough | ✅ | ✅ |
+| `@bot review` / re-review command | ✅ | ✅ **+ dismisses stale reviews & busts cache** |
+| `@bot` chat / Q&A | ✅ | ✅ (`ask`) |
+| Pause/resume, resolve | ✅ | ✅ |
+| Incremental reviews (no duplicate comments) | ✅ | ✅ |
+| Repo config file | ✅ (`.coderabbit.yaml`) | ✅ (`.cavix.yaml`/`.json`) |
+| Path/file filters | ✅ | ✅ |
+| Status check / merge gate | ✅ | ✅ (Check Run + required-check) |
+| Multiple SCMs (GitLab/Bitbucket/Azure) | partial | ✅ (all four) |
+| Learns org preferences | ✅ | ✅ (accept/reject calibration) |
+| **Execution-grounded verification (repro in a sandbox)** | ❌ | ✅ **(the moat)** |
+| **PoC exploit generation for vulns** | ❌ | ✅ |
+| **Cross-repo impact (breaks in another service)** | ❌ | ✅ |
+| **CI/CD regression prediction** | ❌ | ✅ |
+| **Verified auto fix-PRs (draft, human-approved)** | partial | ✅ (only proven-green fixes) |
+| **Fully air-gapped / self-hosted open model** | ❌ | ✅ (zero egress, proven) |
+| **Zero-retention (no code persists), offline license** | ❌ | ✅ |
+| **Legacy languages (COBOL/PL-SQL) + verified modernization** | ❌ | ✅ |
+
+The parity items make Cavix a *credible* AI reviewer; the **bold** items are why a
+team switches to it.
+
+---
+
 ## 9. Measure quality (the eval harness)
 
 Cavix treats review **quality** as a number you can track, not a vibe.
@@ -359,8 +541,11 @@ Key env vars:
 | Variable | Used by | Meaning |
 |----------|---------|---------|
 | `CAVIX_WEBHOOK_SECRET` | edge | GitHub App webhook HMAC secret (required) |
+| `CAVIX_BOT_HANDLE` | edge | Mention handle: `@<handle> review` (e.g. `cavixcode`) |
+| `CAVIX_APP_ID` | orchestrator | GitHub App id (production auth) |
+| `CAVIX_APP_PRIVATE_KEY` | orchestrator | GitHub App `.pem` private key (production auth) |
 | `CAVIX_REDIS_ADDR` / `_HOST` / `_PORT` | edge / orchestrator | Redis queue location |
-| `CAVIX_GITHUB_TOKEN` | orchestrator | Token to read diffs + post reviews |
+| `CAVIX_GITHUB_TOKEN` | orchestrator | Dev-only personal token (alternative to the App) |
 | `ANTHROPIC_API_KEY` / `CAVIX_LLM_API_KEY` | gateway | BYOK model key |
 | `CAVIX_LLM_MODEL` | gateway | Model id |
 | `CAVIX_SANDBOX_BACKEND` | orchestrator | `local` \| `docker` \| `cloudflare` |
@@ -565,7 +750,11 @@ self-host/air-gapped with a signed offline license.
 
 So you can speak accurately to technical buyers:
 
-- **Real and live:** the Go edge service, the code graph, cross-repo graph,
+- **Real and live:** the `@cavix` command parsing + authorization (Go edge,
+  `issue_comment`), the GitHub App JWT→installation-token minting, Check Runs and
+  stale-review dismissal, the fresh-vs-incremental review session, the
+  `.cavix.yaml` config loader — all unit-tested. The Go edge service, the code
+  graph, cross-repo graph,
   deterministic scanners, adjudication, the **sandbox + verification (it really
   runs `node` and checks exit codes)**, the fix-PR gate, telemetry math,
   calibration, governance crypto (SAML/Ed25519/audit), zero-retention purge, the
@@ -610,6 +799,15 @@ console.log") — the policy engine compiles it into a deterministic check. Or s
 
 **How do I prove quality to my team?** Run `npm run eval` — it prints
 precision/recall/F1 against labeled bugs and compares Cavix to a plain linter.
+
+**How does `@cavix review` work / get a fresh review?** Comment `@cavix review`
+(use your App's handle, e.g. `@cavixcode review`) on the PR. Cavix dismisses its
+previous reviews, deletes its stale inline comments, clears the cache, and posts a
+brand-new full review. It's never deduplicated, so you can re-run it any time.
+Only users with write access can trigger it. See §8B.
+
+**How do I install it on my whole org?** Create the GitHub App once, then install
+it on the org and choose "All repositories." Full step-by-step in §8B.
 
 ---
 
