@@ -120,6 +120,34 @@ test("settings: require auth and reject other orgs; BYOK stores fingerprint only
   });
 });
 
+test("settings: pre-merge checks + tone + path filters persist", async () => {
+  await withServer(async (base) => {
+    const signup = await post(base, "/api/auth/signup", { email: "cfg@acme.co", password: "password123", org: "acme" });
+    const cookie = cookieFrom(signup);
+
+    // defaults: pre-merge off, no rules
+    let s = await (await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } })).json();
+    assert.equal(s.preMergeChecks.enabled, false);
+    assert.deepEqual(s.preMergeChecks.rules, []);
+
+    // owner turns it on with English rules + educational tone + path filters
+    const put = await fetch(base + "/api/orgs/acme/settings", {
+      method: "PUT", headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        tone: "educational",
+        preMergeChecks: { enabled: true, rules: ["Every new endpoint has an auth check", "Public API changes need a changelog entry"] },
+        pathFilters: { include: ["src/**"], exclude: ["**/*.min.js"] },
+      }),
+    });
+    assert.equal(put.status, 200);
+    s = await put.json();
+    assert.equal(s.tone, "educational");
+    assert.equal(s.preMergeChecks.enabled, true);
+    assert.equal(s.preMergeChecks.rules.length, 2);
+    assert.deepEqual(s.pathFilters.include, ["src/**"]);
+  });
+});
+
 test("stats: aggregates reviews/findings/decisions for the dashboard", async () => {
   await withServer(async (base, store) => {
     store.createOrg("acme");

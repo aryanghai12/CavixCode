@@ -1,40 +1,42 @@
-// Landing page: interactive pricing toggles (billing cycle + model sourcing).
+// Landing page: pricing (from the shared source) + toggles + review showcase tabs.
 (function () {
-  let cycle = "monthly"; // monthly | annual
-  let source = "byok";   // byok | managed
+  const state = { cycle: "monthly", source: "byok" };
 
-  function render() {
-    document.querySelectorAll(".plan .amount").forEach((el) => {
-      const base = Number(el.dataset[source] ?? el.dataset.byok);
-      if (!base) return;
-      const monthly = cycle === "annual" ? Math.round(base * 0.8) : base;
-      el.textContent = `$${monthly}`;
-    });
-    document.querySelectorAll("[data-cycle-note]").forEach((el) => {
-      el.textContent = cycle === "annual" ? "billed annually · save 20%" : "billed monthly";
-    });
-    const srcnote = document.querySelector("[data-srcnote]");
-    if (srcnote) {
-      srcnote.textContent = source === "byok"
-        ? "Your key — you pay ~$2–8/seat model bill"
-        : "We buy the tokens — model usage bundled in";
-    }
+  function renderPricing() {
+    if (window.renderMarketingPricing) window.renderMarketingPricing("pricingCards", state);
+  }
+  renderPricing();
+
+  // set overage + smb labels from the single source
+  if (window.CAVIX_PRICING) {
+    const ov = document.getElementById("overageLabel"); if (ov) ov.textContent = window.CAVIX_PRICING.overage;
+    const smb = document.getElementById("smbLabel"); if (smb) smb.textContent = window.CAVIX_PRICING.smbNote;
   }
 
-  function wire(segId, attr, set) {
+  function wire(segId, attr, key) {
     const seg = document.getElementById(segId);
     if (!seg) return;
     seg.querySelectorAll("button").forEach((btn) => {
       btn.addEventListener("click", () => {
         seg.querySelectorAll("button").forEach((b) => b.classList.remove("on"));
         btn.classList.add("on");
-        set(btn.dataset[attr]);
-        render();
+        state[key] = btn.dataset[attr];
+        renderPricing();
       });
     });
   }
+  wire("cycleSeg", "cycle", "cycle");
+  wire("sourceSeg", "source", "source");
 
-  wire("cycleSeg", "cycle", (v) => { cycle = v; });
-  wire("sourceSeg", "source", (v) => { source = v; });
-  render();
+  // review showcase tabs
+  const tabs = document.getElementById("showcaseTabs");
+  if (tabs) {
+    tabs.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const which = btn.dataset.panel;
+        tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === btn));
+        document.querySelectorAll(".showcase-panel").forEach((p) => p.classList.toggle("on", p.dataset.panel === which));
+      });
+    });
+  }
 })();

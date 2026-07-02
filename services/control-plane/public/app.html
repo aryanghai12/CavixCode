@@ -5,11 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard · Cavix</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="/favicon.svg">
 </head>
 <body>
+<canvas id="codebg"></canvas>
 <div class="app">
   <aside class="sidebar" id="sidebar">
     <a href="/" class="logo"><span class="logo-mark">◆</span> Cavix</a>
@@ -18,10 +19,13 @@
       <div class="nav-item" data-view="overview"><span class="ni-ico">▚</span> Overview</div>
       <div class="nav-item" data-view="reviews"><span class="ni-ico">🔬</span> Reviews</div>
       <div class="nav-item" data-view="repos"><span class="ni-ico">📦</span> Repositories</div>
+      <div class="nav-item" data-view="reports"><span class="ni-ico">📊</span> Reports</div>
+      <div class="nav-item" data-view="learnings"><span class="ni-ico">🧠</span> Learnings</div>
       <div class="nav-item" data-view="feed"><span class="ni-ico">🏆</span> Proven catches</div>
       <div class="nav-group">Configure</div>
       <div class="nav-item" data-view="byok"><span class="ni-ico">🔑</span> AI &amp; BYOK</div>
       <div class="nav-item" data-view="settings"><span class="ni-ico">⚙️</span> Review settings</div>
+      <div class="nav-item" data-view="integrations"><span class="ni-ico">🔌</span> Integrations</div>
       <div class="nav-item" data-view="team"><span class="ni-ico">👥</span> Team</div>
       <div class="nav-item" data-view="billing"><span class="ni-ico">💳</span> Plan &amp; billing</div>
       <div class="nav-group admin-only hidden">Founder</div>
@@ -49,6 +53,8 @@
   </main>
 </div>
 <div class="toast" id="toast"></div>
+<script src="/pricing.js"></script>
 <script src="/app.js"></script>
+<script src="/fx.js"></script>
 </body>
 </html>

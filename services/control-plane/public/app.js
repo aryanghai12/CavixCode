@@ -26,10 +26,13 @@
   const VIEWS = {
     overview: { title: "Overview", crumb: "Your review activity at a glance", render: renderOverview },
     reviews: { title: "Reviews", crumb: "Findings from your pull requests — accept or reject to train Cavix", render: renderReviews },
-    repos: { title: "Repositories", crumb: "Repositories Cavix is watching", render: renderRepos },
+    repos: { title: "Repositories", crumb: "Connect GitHub and choose repos to review", render: renderRepos },
+    reports: { title: "Reports", crumb: "ROI and quality across your workspace", render: renderReports },
+    learnings: { title: "Learnings", crumb: "What Cavix has learned from your accept/reject decisions", render: renderLearnings },
     feed: { title: "Proven catches", crumb: "Publicly verified findings across the community", render: renderFeed },
     byok: { title: "AI & BYOK", crumb: "Bring your own AI key — Cavix never marks up tokens", render: renderByok },
     settings: { title: "Review settings", crumb: "How Cavix reviews your pull requests", render: renderSettings },
+    integrations: { title: "Integrations", crumb: "Source control, chat and issue trackers", render: renderIntegrations },
     team: { title: "Team", crumb: "People in your workspace and their roles", render: renderTeam },
     billing: { title: "Plan & billing", crumb: "Your subscription and usage", render: renderBilling },
     admin: { title: "Admin console", crumb: "Founder controls — every org's tier, trial, limits & status", render: renderAdmin },
@@ -297,6 +300,11 @@
     const sevChecks = ["critical", "high", "medium", "low"].map((sev) =>
       `<label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px"><input type="checkbox" class="failOn" value="${sev}"${s.failOn.includes(sev) ? " checked" : ""}> ${sevBadge(sev)}</label>`).join("");
 
+    const tones = [["concise", "Concise — short and to the point"], ["detailed", "Detailed — thorough explanations"], ["educational", "Educational — teaches the why"], ["assertive", "Assertive — direct and prescriptive"], ["chill", "Chill — friendly, nits downplayed"]];
+    const pm = s.preMergeChecks || { enabled: false, rules: [] };
+    const pf = s.pathFilters || { include: [], exclude: [] };
+    settingsRules = [...(pm.rules || [])];
+
     content.innerHTML = `
       <div class="panel">
         <div class="panel-head"><h2>Automation</h2><span class="sub">These mirror your <code>.cavix.yaml</code></span></div>
@@ -310,21 +318,60 @@
       <div class="panel">
         <div class="panel-head"><h2>Tone &amp; merge gate</h2></div>
         <div class="panel-body">
-          <div class="settings-row"><div><div class="sr-label">Comment tone</div><div class="sr-desc">How detailed Cavix's comments are.</div></div>
-            <select id="tone" style="width:160px"><option value="concise"${s.tone === "concise" ? " selected" : ""}>Concise</option><option value="detailed"${s.tone === "detailed" ? " selected" : ""}>Detailed</option></select></div>
+          <div class="settings-row"><div><div class="sr-label">Comment tone</div><div class="sr-desc">How Cavix writes its comments.</div></div>
+            <select id="tone" style="min-width:280px">${tones.map(([v, l]) => `<option value="${v}"${s.tone === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
           <div class="settings-row"><div><div class="sr-label">Fail the check on</div><div class="sr-desc">Severities that make the Cavix status check fail (and can block merge).</div></div>
             <div>${sevChecks}</div></div>
         </div>
       </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Path filters</h2></div><span class="sub">Which files are reviewed</span></div>
+        <div class="panel-body">
+          <div class="field" style="margin-bottom:14px"><label>Include (one glob per line — empty = everything)</label><textarea id="pfInclude" rows="3" style="width:100%;font-family:var(--mono);font-size:13px;background:var(--bg-elev);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:10px">${esc((pf.include || []).join("\n"))}</textarea></div>
+          <div class="field" style="margin:0"><label>Exclude (always skipped)</label><textarea id="pfExclude" rows="3" style="width:100%;font-family:var(--mono);font-size:13px;background:var(--bg-elev);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:10px">${esc((pf.exclude || []).join("\n"))}</textarea></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Pre-merge checks</h2><span class="sub">Optional gate · off by default</span></div>
+          <label class="switch"><input type="checkbox" id="pmEnabled"${pm.enabled ? " checked" : ""}><span class="slider"></span></label></div>
+        <div class="panel-body">
+          <p class="sr-desc" style="margin-bottom:14px">Write rules in plain English. When enabled, each compiles into a deterministic, non-bypassable check that runs before merge — a failing rule fails the Cavix status check.</p>
+          <div id="rulesList"></div>
+          <div class="rule-add"><input id="ruleInput" placeholder="e.g. Every new endpoint must have an authentication check"><button class="btn btn-soft" id="addRule">+ Add rule</button></div>
+        </div>
+      </div>
       <button class="btn btn-primary" id="saveSettings">Save settings</button>`;
 
+    paintRules();
+    $("addRule").addEventListener("click", () => {
+      const v = $("ruleInput").value.trim(); if (!v) return;
+      settingsRules.push(v); $("ruleInput").value = ""; paintRules();
+    });
+    $("ruleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("addRule").click(); } });
+
     $("saveSettings").addEventListener("click", async () => {
-      const patch = { tone: $("tone").value, failOn: [...document.querySelectorAll(".failOn:checked")].map((c) => c.value) };
+      const patch = {
+        tone: $("tone").value,
+        failOn: [...document.querySelectorAll(".failOn:checked")].map((c) => c.value),
+        pathFilters: {
+          include: $("pfInclude").value.split("\n").map((x) => x.trim()).filter(Boolean),
+          exclude: $("pfExclude").value.split("\n").map((x) => x.trim()).filter(Boolean),
+        },
+        preMergeChecks: { enabled: $("pmEnabled").checked, rules: settingsRules },
+      };
       document.querySelectorAll("[data-key]").forEach((el) => { patch[el.dataset.key] = el.checked; });
       try { await api(`/api/orgs/${org}/settings`, { method: "PUT", body: JSON.stringify(patch) }); toast("Settings saved"); }
       catch (e) { toast(e.message); }
     });
   }
+  let settingsRules = [];
+  function paintRules() {
+    const list = $("rulesList"); if (!list) return;
+    list.innerHTML = settingsRules.length
+      ? settingsRules.map((r, i) => `<div class="rule-row"><span class="pm-ico" style="width:22px;height:22px;border-radius:6px;background:var(--bg-elev);display:grid;place-items:center;font-size:11px">${i + 1}</span><span class="rule-txt">${esc(r)}</span><button class="btn btn-danger btn-sm" onclick="cavixRemoveRule(${i})">Remove</button></div>`).join("")
+      : `<div class="sr-desc" style="padding:6px 0">No rules yet. Add one below.</div>`;
+  }
+  window.cavixRemoveRule = function (i) { settingsRules.splice(i, 1); paintRules(); };
 
   // ---------- TEAM ----------
   async function renderTeam() {
@@ -359,51 +406,130 @@
     const orgs = await api(`/api/orgs`);
     const current = orgs.find((o) => o.name === org) || { tier: "free" };
     const tier = current.tier;
-    const plans = [
-      { id: "free", name: "Free / OSS", price: "$0", tierMatch: "free", features: ["Unlimited public repos", "~50 private reviews/mo", "Full verification engine", "BYOK only"] },
-      { id: "team", name: "Team", price: "$12–24/seat/mo", tierMatch: "paid", features: ["Unlimited private repos", "Cross-repo impact", "Standards learning", "BYOK or managed"] },
-      { id: "pro", name: "Pro", price: "$39/seat/mo", tierMatch: null, features: ["Verification every PR", "CI/CD regression prediction", "Verified fix PRs", "Higher caps"] },
-      { id: "enterprise", name: "Enterprise", price: "Custom", tierMatch: null, features: ["Self-host / air-gapped", "SSO/SAML + SCIM", "Audit & zero-retention", "Legacy + modernization"] },
-    ];
+    const P = window.CAVIX_PRICING;
+    const price = (t) => t.custom ? "Custom" : (t.byok === 0 ? "$0" : (t.byok === t.managed ? `$${t.byok}/seat/mo` : `$${t.byok}–${t.managed}/seat/mo`));
     content.innerHTML = `
       <div class="panel"><div class="panel-head"><h2>Current plan</h2></div>
-        <div class="panel-body"><div class="settings-row"><div><div class="sr-label" style="text-transform:capitalize">${tier === "free" ? "Open Source (Free)" : tier === "paid" ? "Team" : "Enterprise"}</div><div class="sr-desc">Billing is illustrative in this trial build — wire Stripe for production.</div></div><span class="badge badge-verified">active</span></div></div>
+        <div class="panel-body"><div class="settings-row"><div><div class="sr-label">${tier === "free" ? "Free / OSS" : tier === "paid" ? "Team / Pro" : "Enterprise"}</div><div class="sr-desc">Billing is illustrative in this trial build — connect Stripe for production charging.</div></div><span class="badge badge-verified">active</span></div></div>
       </div>
       <div class="pricing">
-        ${plans.map((p) => `<div class="plan${p.id === "team" ? " featured" : ""}"><h3>${p.name}</h3><div class="price">${p.price}</div><ul>${p.features.map((f) => `<li>${f}</li>`).join("")}</ul>
-          ${(p.tierMatch === tier) ? `<button class="btn btn-soft btn-block" disabled>Current plan</button>` : `<button class="btn ${p.id === "team" ? "btn-primary" : "btn-soft"} btn-block" onclick="cavixToast('Connect Stripe to enable upgrades')">${p.id === "enterprise" ? "Contact sales" : "Choose plan"}</button>`}
+        ${P.tiers.map((t) => `<div class="plan${t.featured ? " featured" : ""} spot"><h3>${esc(t.name)}</h3><div class="price">${price(t)}</div><div class="srcnote">${esc(t.source)}</div><ul>${t.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+          ${(t.tierMatch === tier) ? `<button class="btn btn-soft btn-block" disabled>Current plan</button>` : `<button class="btn ${t.featured ? "btn-primary" : "btn-soft"} btn-block" onclick="cavixToast('Connect Stripe to enable upgrades')">${t.id === "enterprise" ? "Contact sales" : "Choose plan"}</button>`}
         </div>`).join("")}
       </div>
-      <div class="overage" style="margin-top:22px">Verification overage billed at <code>$0.40 / agent-minute</code> beyond your included pool. Only active PR-authors count as seats · ~20% off annual.</div>`;
+      <div class="overage" style="margin-top:22px">Verification overage billed at <code>${esc(P.overage)}</code> beyond your included pool. ${esc(P.seatNote)}.</div>`;
   }
 
-  // ---------- ADMIN (founder / core team only) ----------
-  async function renderAdmin() {
-    const orgs = await api(`/api/admin/orgs`);
-    const rows = orgs.map((o) => {
-      const trial = o.trialActive ? `<span class="badge badge-verified">trial ${new Date(o.trialEndsAt).toLocaleDateString()}</span>` : "";
-      const susp = o.suspended ? `<span class="badge badge-critical">suspended</span>` : "";
-      const limit = o.effectiveReviewsPerDay >= 1000000 ? "∞" : o.effectiveReviewsPerDay;
-      return `<tr data-org="${esc(o.name)}">
-        <td><b>${esc(o.name)}</b><div style="color:var(--text-faint);font-size:12px">${o.members} member${o.members===1?"":"s"} · ${o.repos} repo${o.repos===1?"":"s"} · ${o.reviews} reviews</div></td>
-        <td><select onchange="cavixAdmin('${esc(o.name)}',{tier:this.value})"><option value="free"${o.tier==="free"?" selected":""}>free</option><option value="paid"${o.tier==="paid"?" selected":""}>paid</option></select></td>
-        <td>${trial} ${susp}</td>
-        <td><b>${limit}</b>/day</td>
-        <td style="text-align:right;white-space:nowrap">
-          <button class="btn btn-soft btn-sm" onclick="cavixAdmin('${esc(o.name)}',{trialDays:14})">Start 14-day trial</button>
-          <button class="btn btn-soft btn-sm" onclick="cavixAdminLimit('${esc(o.name)}')">Set limit</button>
-          <button class="btn ${o.suspended?"btn-soft":"btn-danger"} btn-sm" onclick="cavixAdmin('${esc(o.name)}',{suspended:${!o.suspended}})">${o.suspended?"Unsuspend":"Suspend"}</button>
-        </td>
-      </tr>`;
+  // ---------- REPORTS (ROI + quality) ----------
+  async function renderReports() {
+    const s = await api(`/api/orgs/${org}/stats`);
+    const total = s.accepted + s.rejected;
+    const bars = ["critical", "high", "medium", "low"].map((sev) => {
+      const n = s.bySeverity[sev] || 0; const max = Math.max(1, ...Object.values(s.bySeverity));
+      return `<div style="display:flex;align-items:center;gap:12px;margin:8px 0"><div style="width:70px">${sevBadge(sev)}</div><div style="flex:1;background:var(--bg-elev);border-radius:6px;height:10px;overflow:hidden"><div style="height:100%;width:${Math.round((n / max) * 100)}%;background:var(--brand-grad)"></div></div><b style="width:24px;text-align:right">${n}</b></div>`;
     }).join("");
     content.innerHTML = `
-      <div class="panel">
-        <div class="panel-head"><h2>All organizations</h2><span class="sub">${orgs.length} total · you are a platform admin</span></div>
-        <table class="table"><thead><tr><th>Organization</th><th>Tier</th><th>Status</th><th>Reviews / day</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="stat-grid">
+        <div class="stat"><div class="label">🔬 Reviews</div><div class="value">${s.reviews}</div></div>
+        <div class="stat"><div class="label">✅ Verified</div><div class="value grad">${s.verified}</div></div>
+        <div class="stat"><div class="label">🎯 Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div></div>
+        <div class="stat"><div class="label">⏱️ Hours saved</div><div class="value">${s.hoursSaved}</div></div>
       </div>
-      <div class="panel"><div class="panel-body">
-        <div class="sr-desc">🛡️ Only emails in <code>CAVIX_ADMIN_EMAILS</code> reach this console. Changing a tier, starting a trial, overriding the daily review limit, or suspending an org takes effect immediately for that org's reviews. See GUIDE.md §8E.</div>
-      </div></div>`;
+      <div class="grid grid-2">
+        <div class="panel"><div class="panel-head"><h2>Findings by severity</h2></div><div class="panel-body">${bars}</div></div>
+        <div class="panel"><div class="panel-head"><h2>Decisions</h2></div><div class="panel-body">
+          <div class="settings-row"><div class="sr-label">Accepted</div><b style="color:var(--green)">${s.accepted}</b></div>
+          <div class="settings-row"><div class="sr-label">Rejected</div><b style="color:var(--red)">${s.rejected}</b></div>
+          <div class="settings-row"><div class="sr-label">False-positive rate</div><b>${Math.round(s.falsePositiveRate * 100)}%</b></div>
+          <div class="settings-row"><div class="sr-label">Repositories</div><b>${s.reposConnected}</b></div>
+        </div></div>
+      </div>
+      <div class="panel"><div class="panel-body"><div class="sr-desc">📈 Reviewer-hours saved uses a per-severity model (minutes to find + author a fix − false-alarm overhead). Export and per-team rollups ship in the analytics package; wire it to your BI tool for board-ready ROI. ${total === 0 ? "Accept or reject some findings to populate action rate." : ""}</div></div></div>`;
+  }
+
+  // ---------- LEARNINGS ----------
+  async function renderLearnings() {
+    const decisions = await api(`/api/decisions`);
+    const mine = decisions.slice(0, 100);
+    content.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><div><h2>What Cavix has learned</h2><span class="sub">${mine.length} preference${mine.length === 1 ? "" : "s"} from your accept/reject history</span></div><span class="badge badge-verified">personalization lock-in</span></div>
+        <div class="panel-body">
+          <p class="sr-desc" style="margin-bottom:16px">Every accept/reject tunes Cavix to <b>your</b> team's bar — thresholds, which nits to suppress, what's worth proving. A competitor starts cold; Cavix starts tuned.</p>
+          ${mine.length ? `<table class="table"><thead><tr><th>Signal</th><th>Source</th><th>Decision</th><th>By</th></tr></thead><tbody>
+            ${mine.map((d) => `<tr><td class="mono" style="color:var(--text-faint)">${esc(d.findingId)}</td><td><span class="badge">${esc(d.source)}</span></td><td><span class="decided ${esc(d.state)}">${esc(d.state)}</span></td><td style="color:var(--text-dim)">${esc(d.user)}</td></tr>`).join("")}
+          </tbody></table>` : `<div class="empty" style="padding:40px">🧠 No learnings yet. Accept or reject findings on the Reviews page and they'll appear here.</div>`}
+        </div>
+      </div>`;
+  }
+
+  // ---------- INTEGRATIONS ----------
+  async function renderIntegrations() {
+    const gh = await api(`/api/github/status`).catch(() => ({ connected: false, demo: true }));
+    const row = (icon, name, desc, state, action) => `<div class="repo-row"><div class="r-ico">${icon}</div><div class="r-main"><div class="r-name">${esc(name)}</div><div class="r-desc">${esc(desc)}</div></div>${state}${action || ""}</div>`;
+    const connected = `<span class="badge badge-verified">connected</span>`;
+    const soon = `<span class="badge">soon</span>`;
+    content.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><h2>Source control</h2><span class="sub">Where Cavix reviews pull requests</span></div>
+        <div class="repo-list" style="border:none">
+          ${row("🐙", "GitHub", gh.connected ? "Connected — reviews & checks active" : "Sign in to connect your orgs and repos", gh.connected ? connected : soon, gh.connected ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`)}
+          ${row("🦊", "GitLab", "Merge-request reviews (adapter ready)", soon)}
+          ${row("🪣", "Bitbucket", "PR reviews incl. Server (adapter ready)", soon)}
+          ${row("🔷", "Azure DevOps", "PR reviews (adapter ready)", soon)}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Chat &amp; issues</h2><span class="sub">Notifications and ticket linking</span></div>
+        <div class="repo-list" style="border:none">
+          ${row("💬", "Slack", "Post review summaries to a channel", soon)}
+          ${row("📋", "Jira", "Link PRs to issues in the summary", soon)}
+          ${row("📐", "Linear", "Link PRs to Linear tickets", soon)}
+        </div>
+      </div>`;
+  }
+
+  // ---------- ADMIN (founder / core team only) — redesigned ----------
+  async function renderAdmin() {
+    const orgs = await api(`/api/admin/orgs`);
+    const totals = {
+      orgs: orgs.length,
+      trials: orgs.filter((o) => o.trialActive).length,
+      suspended: orgs.filter((o) => o.suspended).length,
+      reviews: orgs.reduce((a, o) => a + o.reviews, 0),
+    };
+    const rows = orgs.map((o) => {
+      const status = o.suspended ? `<span class="badge badge-critical">suspended</span>` : o.trialActive ? `<span class="badge badge-verified">trial → ${new Date(o.trialEndsAt).toLocaleDateString()}</span>` : `<span class="badge">active</span>`;
+      const limit = o.effectiveReviewsPerDay >= 1000000 ? "∞" : o.effectiveReviewsPerDay;
+      return `<div class="admin-org">
+        <div class="ao-name"><span class="ao-av">${esc(o.name[0].toUpperCase())}</span><div>${esc(o.name)}<div class="ao-meta">${o.members} member${o.members===1?"":"s"} · ${o.repos} repo${o.repos===1?"":"s"} · ${o.reviews} reviews</div></div></div>
+        <div><select onchange="cavixAdmin('${esc(o.name)}',{tier:this.value})"><option value="free"${o.tier==="free"?" selected":""}>Free</option><option value="paid"${o.tier==="paid"?" selected":""}>Paid</option></select></div>
+        <div>${status}</div>
+        <div><b>${limit}</b> <span style="color:var(--text-faint);font-size:12px">/day</span></div>
+        <div class="admin-actions">
+          <button class="btn btn-soft btn-sm" onclick="cavixAdmin('${esc(o.name)}',{trialDays:14})">Trial 14d</button>
+          <button class="btn btn-soft btn-sm" onclick="cavixAdminLimit('${esc(o.name)}')">Limit</button>
+          <button class="btn ${o.suspended?"btn-soft":"btn-danger"} btn-sm" onclick="cavixAdmin('${esc(o.name)}',{suspended:${!o.suspended}})">${o.suspended?"Unsuspend":"Suspend"}</button>
+        </div>
+      </div>`;
+    }).join("");
+    content.innerHTML = `
+      <div class="admin-tiles">
+        <div class="admin-tile accent"><div class="t-lbl">Organizations</div><div class="t-val">${totals.orgs}</div></div>
+        <div class="admin-tile"><div class="t-lbl">Active trials</div><div class="t-val">${totals.trials}</div></div>
+        <div class="admin-tile"><div class="t-lbl">Suspended</div><div class="t-val">${totals.suspended}</div></div>
+        <div class="admin-tile"><div class="t-lbl">Total reviews</div><div class="t-val">${totals.reviews}</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>All organizations</h2><span class="sub">you are a platform admin</span></div><input id="adminSearch" placeholder="Search orgs…" style="max-width:220px"></div>
+        <div id="adminRows">${rows}</div>
+      </div>
+      <div class="panel"><div class="panel-body"><div class="sr-desc">🛡️ Only emails in <code>CAVIX_ADMIN_EMAILS</code> reach this console. Tier, trial, limit and suspend changes take effect immediately for that org's reviews. See GUIDE.md §8E.</div></div></div>`;
+    const search = $("adminSearch");
+    if (search) search.addEventListener("input", (e) => {
+      const q = e.target.value.toLowerCase();
+      document.querySelectorAll(".admin-org").forEach((el) => { el.style.display = el.querySelector(".ao-name").textContent.toLowerCase().includes(q) ? "" : "none"; });
+    });
   }
   window.cavixAdmin = async function (org, patch) {
     try { await api(`/api/admin/orgs/${encodeURIComponent(org)}`, { method: "POST", body: JSON.stringify(patch) }); toast(`Updated ${org}`); go("admin"); }

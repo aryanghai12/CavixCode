@@ -648,11 +648,15 @@ brand‑new workspace — the first person to sign up for an organization become
 | **Overview** | Headline numbers (reviews run, verified findings, action rate, reviewer‑hours saved), a 7‑day activity sparkline, findings‑by‑severity, and a "getting started" checklist. |
 | **Reviews** | Every review with its findings. Each finding shows severity, file:line, whether it's **✅ verified** or a **🔒 policy** fact, and **Accept / Reject** buttons that feed the learning loop. |
 | **Repositories** | The **CodeRabbit‑style connect flow** — sign in with GitHub, browse **all your organizations**, see **every repo** in each, and flip a toggle to enable Cavix on the ones you want. Nothing done from the GitHub website except the one‑time App install. |
+| **Reports** | ROI + quality at a glance: reviews, verified findings, action rate, reviewer‑hours saved, findings‑by‑severity, and decision counts. |
+| **Learnings** | What Cavix has learned from your accept/reject history — the personalization that makes it fit *your* team (and hard to switch away from). |
 | **AI & BYOK** | The heart of "bring your own key": pick the provider (Anthropic / OpenAI / Google / self‑hosted) and model, and paste your API key. The key is **encrypted at rest** and only a **fingerprint** is ever shown again. |
-| **Review settings** | Toggles that mirror `.cavix.yaml`: auto‑review, review drafts, policy gate, air‑gapped mode, comment tone, and which severities fail the merge check. |
+| **Review settings** | Mirrors `.cavix.yaml`: auto‑review, review drafts, air‑gapped mode; **comment tone** (concise / detailed / educational / assertive / chill); **path filters** (include/exclude globs); severities that fail the check; and **Pre‑merge checks** — an optional gate, off by default, where an owner writes plain‑English rules that become non‑bypassable checks. |
+| **Integrations** | Source control (GitHub connected; GitLab/Bitbucket/Azure adapters) plus chat/issue trackers (Slack/Jira/Linear). |
 | **Team** | Members and their roles (owner / admin / reviewer / member). Owners/admins can change roles. |
-| **Plan & billing** | The current plan and upgrade options (wire Stripe for real charging — see §8D). |
+| **Plan & billing** | The current plan and upgrade options, driven by the **single pricing source** shared with the marketing site (wire Stripe for real charging — see §8D). |
 | **Proven catches** | The public feed of execution‑verified findings that opted‑in public repos chose to share. |
+| **Docs** (`/docs`) | Public documentation: getting started, `@cavix` commands, PR summaries, tone, `.cavix.yaml`, pre‑merge checks, BYOK, self‑host, security. |
 
 ### Connect GitHub from the site (like CodeRabbit)
 

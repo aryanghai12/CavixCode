@@ -448,6 +448,7 @@ async function serveStatic(res: http.ServerResponse, urlPath: string): Promise<v
   let rel = urlPath === "/" ? "/index.html" : urlPath;
   if (appRoutes.has(urlPath) || urlPath.startsWith("/app/")) rel = "/app.html";
   if (urlPath === "/login" || urlPath === "/signup") rel = "/login.html";
+  if (urlPath === "/docs" || urlPath.startsWith("/docs/")) rel = "/docs.html";
 
   // Resolve safely inside PUBLIC_DIR (block path traversal).
   const resolved = path.join(PUBLIC_DIR, path.normalize(rel));

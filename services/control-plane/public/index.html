@@ -4,13 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cavix — the AI code reviewer that proves its findings before it speaks</title>
-<meta name="description" content="Cavix reproduces every bug in a sandbox before it comments — verified findings, not guesses. Cross-repo impact, CI/CD regression prediction, BYOK on every tier, self-hostable and fully air-gapped.">
+<meta name="description" content="Cavix reproduces every bug in a sandbox before it comments — verified findings, not guesses. PR summaries, cross-repo impact, CI/CD regression prediction, optional pre-merge checks, BYOK on every tier, self-hostable and fully air-gapped.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="/favicon.svg">
 </head>
 <body class="has-orbs">
+<canvas id="codebg"></canvas>
 <div class="orb orb-1"></div><div class="orb orb-2"></div><div class="orb orb-3"></div>
 
 <nav class="nav">
@@ -18,9 +19,10 @@
     <a href="/" class="logo"><span class="logo-mark">◆</span> Cavix</a>
     <div class="nav-links">
       <a href="#pillars">Product</a>
-      <a href="#proof">The proof</a>
+      <a href="#review">Sample review</a>
       <a href="#compare">Compare</a>
       <a href="#pricing">Pricing</a>
+      <a href="/docs">Docs</a>
       <a href="#enterprise">Enterprise</a>
     </div>
     <div class="nav-cta">
@@ -32,16 +34,16 @@
 
 <header class="hero">
   <div class="container">
-    <div class="pill">🔬 <b>Proven, not guessed</b> · execution-grounded AI code review</div>
-    <h1>The AI reviewer that<br><span class="grad">proves it before it speaks</span></h1>
-    <p class="sub">Every other AI reviewer guesses — so developers mute it and churn. Cavix reproduces the bug in an isolated sandbox, applies the fix, and re-runs your tests. It comments only when it can <b>prove</b> the finding is real. The one reviewer your team won't turn off.</p>
-    <div class="hero-cta">
+    <div class="pill reveal">🔬 <b>Proven, not guessed</b> · execution-grounded AI code review</div>
+    <h1 class="reveal d1">The AI reviewer that<br><span class="shiny">proves it before it speaks</span></h1>
+    <p class="sub reveal d2">Every other AI reviewer guesses — so developers mute it and churn. Cavix reproduces the bug in an isolated sandbox, applies the fix, and re-runs your tests. It comments only when it can <b>prove</b> the finding is real. The one reviewer your team won't turn off.</p>
+    <div class="hero-cta reveal d3">
       <a href="/signup" class="btn btn-primary">Start free — BYOK →</a>
-      <a href="#proof" class="btn btn-ghost">Watch it prove a bug</a>
+      <a href="#review" class="btn btn-ghost">See a sample review</a>
     </div>
-    <div class="trust">Bring your own key (Claude · GPT · Gemini · your own model) · Self-hostable &amp; fully air-gapped · Zero-retention</div>
+    <div class="trust reveal d3">Bring your own key (Claude · GPT · Gemini · your own model) · Self-hostable &amp; fully air-gapped · Zero-retention</div>
 
-    <div class="terminal">
+    <div class="terminal reveal d4 spot">
       <div class="terminal-bar"><span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span><span>cavix — verification engine (Stage 10)</span></div>
 <pre><span class="t-dim"># Cavix suspects a bug — instead of guessing, it proves it in a sandbox</span>
 status: <span class="t-green">VERIFIED</span>  reproduced=true fixWorks=true suitePasses=true
@@ -55,76 +57,135 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
   </div>
 </header>
 
-<section class="section" style="padding-top:20px">
-  <div class="container">
-    <div class="stats-band">
-      <div class="stat-inline"><div class="n">7</div><div class="l">specialist review agents</div></div>
-      <div class="stat-inline"><div class="n">13</div><div class="l">stage verification pipeline</div></div>
-      <div class="stat-inline"><div class="n">4</div><div class="l">Git platforms (GitHub · GitLab · Bitbucket · Azure)</div></div>
-      <div class="stat-inline"><div class="n">0</div><div class="l">unproven findings posted</div></div>
+<section style="padding:24px 0 8px">
+  <div class="container marquee">
+    <div class="marquee-track">
+      <span class="marquee-item">TypeScript</span><span class="marquee-item">Python</span><span class="marquee-item">Go</span><span class="marquee-item">Rust</span><span class="marquee-item">Java</span><span class="marquee-item">Kotlin</span><span class="marquee-item">C/C++</span><span class="marquee-item">Ruby</span><span class="marquee-item">PHP</span><span class="marquee-item">C#/.NET</span><span class="marquee-item">COBOL</span><span class="marquee-item">PL/SQL</span><span class="marquee-item">GitHub</span><span class="marquee-item">GitLab</span><span class="marquee-item">Bitbucket</span><span class="marquee-item">Azure DevOps</span>
+      <span class="marquee-item">TypeScript</span><span class="marquee-item">Python</span><span class="marquee-item">Go</span><span class="marquee-item">Rust</span><span class="marquee-item">Java</span><span class="marquee-item">Kotlin</span><span class="marquee-item">C/C++</span><span class="marquee-item">Ruby</span><span class="marquee-item">PHP</span><span class="marquee-item">C#/.NET</span><span class="marquee-item">COBOL</span><span class="marquee-item">PL/SQL</span><span class="marquee-item">GitHub</span><span class="marquee-item">GitLab</span><span class="marquee-item">Bitbucket</span><span class="marquee-item">Azure DevOps</span>
     </div>
   </div>
 </section>
 
-<section class="section" id="proof">
+<section class="section" style="padding-top:40px">
   <div class="container">
-    <div class="section-head">
-      <div class="eyebrow">The moat</div>
-      <h2>A comment you can actually act on</h2>
-      <p>Cavix doesn't just flag a line — it attaches the failing test that proves the bug is real. That's the screenshot your team shares.</p>
+    <div class="stats-band reveal">
+      <div class="stat-inline"><div class="n"><span data-count="7">7</span></div><div class="l">specialist review agents</div></div>
+      <div class="stat-inline"><div class="n"><span data-count="13">13</span></div><div class="l">stage verification pipeline</div></div>
+      <div class="stat-inline"><div class="n"><span data-count="4">4</span></div><div class="l">Git platforms supported</div></div>
+      <div class="stat-inline"><div class="n"><span data-count="0">0</span></div><div class="l">unproven findings posted</div></div>
     </div>
-    <div class="cr-window">
-      <div class="cr-head">📄 <span class="fname">services/payments/refund.ts</span> <span class="pill-sm">✓ Cavix check passed with 1 verified finding</span></div>
-      <div class="cr-code">
+  </div>
+</section>
+
+<!-- SAMPLE REVIEW -->
+<section class="section" id="review">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">See it in action</div>
+      <h2>What a Cavix review looks like</h2>
+      <p>A summary posted to the PR, inline findings with attached proof, and an optional pre-merge gate — everything your team sees.</p>
+    </div>
+    <div style="text-align:center">
+      <div class="showcase-tabs reveal" id="showcaseTabs">
+        <button class="on" data-panel="summary">PR summary</button>
+        <button data-panel="inline">Inline finding</button>
+        <button data-panel="premerge">Pre-merge checks</button>
+      </div>
+    </div>
+
+    <!-- Panel: PR summary (posted as a comment, like CodeRabbit's walkthrough) -->
+    <div class="showcase-panel on" data-panel="summary">
+      <div class="summary-card spot">
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px">◆</span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">now</span></div>
+        <div class="sc-body">
+          <h4>📝 Summary</h4>
+          <p>This PR refactors the refund flow and adds retry handling to the payments service. It touches 3 files (+128 / −44). One high-severity correctness issue was <b>verified</b> (double-refund on webhook retry) and one nit was suppressed as unverifiable.</p>
+          <h4>🔎 Changes</h4>
+          <table class="changes-table">
+            <thead><tr><th>File</th><th>Summary</th></tr></thead>
+            <tbody>
+              <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td></tr>
+              <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td></tr>
+              <tr><td>test/refund.test.ts</td><td>New retry regression test</td></tr>
+            </tbody>
+          </table>
+          <div class="chip-row">
+            <span class="badge">🧭 sequence diagram generated</span>
+            <span class="badge">🏷️ labels: payments, needs-review</span>
+            <span class="badge">🔗 linked: JIRA PAY-142</span>
+            <span class="badge">Review effort <span class="effort" style="margin-left:6px"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> 3/5</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel: inline finding with proof -->
+    <div class="showcase-panel" data-panel="inline">
+      <div class="cr-window spot">
+        <div class="cr-head">📄 <span class="fname">services/payments/refund.ts</span> <span class="pill-sm">✓ Cavix check passed with 1 verified finding</span></div>
+        <div class="cr-code">
 <div class="cr-line"><span class="ln">86</span><span class="c">  // apply the refund to the original charge</span></div>
 <div class="cr-line del"><span class="ln">87</span><span class="k">  await</span> charge.<span class="f">refund</span>(amount)</div>
 <div class="cr-line add"><span class="ln">87</span><span class="k">  if</span> (!refund.<span class="f">isSettled</span>(id)) <span class="k">await</span> charge.<span class="f">refund</span>(amount)</div>
 <div class="cr-line"><span class="ln">88</span>  <span class="k">return</span> { <span class="f">ok</span>: <span class="n2">true</span> }</div>
-      </div>
-      <div class="cr-comment">
-        <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px">◆</span><span class="cc-bot">cavix</span><span class="badge badge-verified">✅ verified</span><span class="badge badge-high">high</span></div>
-        <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund. I reproduced it and confirmed the guard fixes it:</div>
-        <div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts → <span class="t-red">exit 1</span>  <span class="t-dim">double refund</span>
+        </div>
+        <div class="cr-comment">
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px">◆</span><span class="cc-bot">cavix</span><span class="badge badge-verified">✅ verified</span><span class="badge badge-high">high</span></div>
+          <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund. I reproduced it and confirmed the guard fixes it:</div>
+          <div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts → <span class="t-red">exit 1</span>  <span class="t-dim">double refund</span>
 <span class="t-purple">[after-fix]</span> refund.retry.test.ts → <span class="t-green">exit 0</span>  <span class="t-dim">single refund</span>
 <span class="t-purple">[suite]</span>     42 tests             → <span class="t-green">exit 0</span></div>
-        <div class="cc-actions"><span class="btn btn-primary btn-sm">Commit suggestion</span><span class="btn btn-soft btn-sm">View proof</span></div>
+          <div class="cc-actions"><span class="btn btn-primary btn-sm">Commit suggestion</span><span class="btn btn-soft btn-sm">View proof</span></div>
+        </div>
       </div>
+    </div>
+
+    <!-- Panel: pre-merge checks -->
+    <div class="showcase-panel" data-panel="premerge">
+      <div class="premerge spot">
+        <div class="pm-head"><div><b>Pre-merge checks</b> <span class="badge badge-policy">optional · org rules</span></div><span class="badge badge-high">1 failing</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">Every new endpoint has an authentication check<div class="pm-sub">2 endpoints scanned · pass</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">No secrets or credentials committed<div class="pm-sub">gitleaks + trufflehog · pass</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">PR title follows Conventional Commits<div class="pm-sub">"feat(payments): …" · pass</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-row fail"><span class="pm-ico">✕</span><div class="pm-rule">Public API changes require a changelog entry<div class="pm-sub">refund.ts changed a public signature · missing CHANGELOG.md</div></div><span class="badge badge-critical">fail</span></div>
+      </div>
+      <p style="text-align:center;color:var(--text-faint);font-size:13.5px;margin-top:16px">Pre-merge checks are <b>off by default</b>. An owner turns them on and writes rules in plain English — they compile into deterministic, non-bypassable gates.</p>
     </div>
   </div>
 </section>
 
 <section class="section" id="pillars">
   <div class="container">
-    <div class="section-head">
+    <div class="section-head reveal">
       <div class="eyebrow">Seven pillars</div>
       <h2>Everything a modern reviewer has — plus the lanes competitors structurally lack</h2>
       <p>Cavix matches the incumbents feature-for-feature, then wins on trust, reach, and deployment freedom.</p>
     </div>
     <div class="grid grid-3">
-      <div class="feature moat-ring">
+      <div class="feature moat-ring reveal spot">
         <span class="badge badge-verified moat">The moat</span>
         <div class="pillar-num">1</div>
         <h3>Execution-grounded verification</h3>
         <p>Reproduces the bug (or runs a PoC exploit) in a sealed sandbox, applies the fix, re-runs your tests. Only proven findings are posted — so it never gets muted.</p>
       </div>
-      <div class="feature"><div class="pillar-num">2</div><h3>Cross-repo impact graph</h3><p>Models your services, API contracts and shared libs. When a PR changes an interface, it flags the exact call sites that break in <em>other</em> repos — on every paid tier.</p></div>
-      <div class="feature"><div class="pillar-num">3</div><h3>Whole-repo semantic graph</h3><p>Symbols, call graph, data-flow and history give it the cross-file context to catch architectural bugs a diff-only tool can't see.</p></div>
-      <div class="feature"><div class="pillar-num">4</div><h3>Multi-agent ensemble</h3><p>Seven specialists — correctness, security, concurrency, performance, API/breaking, standards, tests — vote, then calibrate to your team's accept/reject bar.</p></div>
-      <div class="feature"><div class="pillar-num">5</div><h3>CI/CD regression prediction</h3><p>Ingests your build/test/perf history to warn about slow builds and p95 regressions <em>before</em> merge. A lane nobody else covers.</p></div>
-      <div class="feature"><div class="pillar-num">6</div><h3>BYOK, model-agnostic, air-gapped</h3><p>Run Claude, GPT, Gemini, or your own open model. Self-host with zero outbound calls and zero data retention — the enterprise wedge.</p></div>
+      <div class="feature reveal spot"><div class="pillar-num">2</div><h3>Cross-repo impact graph</h3><p>Models your services, API contracts and shared libs. When a PR changes an interface, it flags the exact call sites that break in <em>other</em> repos — on every paid tier.</p></div>
+      <div class="feature reveal spot"><div class="pillar-num">3</div><h3>Whole-repo semantic graph</h3><p>Symbols, call graph, data-flow and history give it the cross-file context to catch architectural bugs a diff-only tool can't see.</p></div>
+      <div class="feature reveal spot"><div class="pillar-num">4</div><h3>Multi-agent ensemble</h3><p>Seven specialists — correctness, security, concurrency, performance, API/breaking, standards, tests — vote, then calibrate to your team's accept/reject bar.</p></div>
+      <div class="feature reveal spot"><div class="pillar-num">5</div><h3>CI/CD regression prediction</h3><p>Ingests your build/test/perf history to warn about slow builds and p95 regressions <em>before</em> merge. A lane nobody else covers.</p></div>
+      <div class="feature reveal spot"><div class="pillar-num">6</div><h3>BYOK, model-agnostic, air-gapped</h3><p>Run Claude, GPT, Gemini, or your own open model. Self-host with zero outbound calls and zero data retention — the enterprise wedge.</p></div>
     </div>
     <div class="grid grid-3" style="margin-top:20px">
-      <div class="feature"><div class="pillar-num">7</div><h3>Learns &amp; modernizes</h3><p>An accept/reject learning loop tunes to your standards; legacy breadth (COBOL/PL-SQL/.NET) with <em>verified</em> migrations.</p></div>
-      <div class="feature"><div class="ico">🛠️</div><h3>Verified fix PRs</h3><p>Opens its own fix pull requests — but only fixes it proved green, always as a draft a human approves. Never auto-merges.</p></div>
-      <div class="feature"><div class="ico">💬</div><h3>@cavix commands &amp; chat</h3><p><code>@cavix review</code> for a fresh review (clears stale comments &amp; cache), ask questions, pause/resume, configure via <code>.cavix.yaml</code>.</p></div>
+      <div class="feature reveal spot"><div class="pillar-num">7</div><h3>Learns &amp; modernizes</h3><p>An accept/reject learning loop tunes to your standards; legacy breadth (COBOL/PL-SQL/.NET) with <em>verified</em> migrations.</p></div>
+      <div class="feature reveal spot"><div class="ico">🛠️</div><h3>Verified fix PRs</h3><p>Opens its own fix pull requests — but only fixes it proved green, always as a draft a human approves. Never auto-merges.</p></div>
+      <div class="feature reveal spot"><div class="ico">💬</div><h3>@cavix commands &amp; chat</h3><p><code>@cavix review</code> for a fresh review (clears stale comments &amp; cache), ask questions, pause/resume, configure via <code>.cavix.yaml</code>.</p></div>
     </div>
   </div>
 </section>
 
 <section class="section" style="padding-top:0">
   <div class="container">
-    <div class="section-head"><div class="eyebrow">How it works</div><h2>From pull request to proven review in one pass</h2></div>
-    <div class="pipeline">
+    <div class="section-head reveal"><div class="eyebrow">How it works</div><h2>From pull request to proven review in one pass</h2></div>
+    <div class="pipeline reveal">
       <span class="stage"><b>0</b> Edge ingest</span>
       <span class="stage"><b>2</b> Sandbox</span>
       <span class="stage"><b>3</b> Linters + secrets</span>
@@ -134,7 +195,7 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
       <span class="stage"><b>8</b> 7 agents</span>
       <span class="stage"><b>9</b> Adjudicate</span>
       <span class="stage moat"><b>10</b> 🔬 Verify (the moat)</span>
-      <span class="stage"><b>11</b> Post review</span>
+      <span class="stage"><b>11</b> Post review + summary</span>
       <span class="stage"><b>12</b> Learn</span>
       <span class="stage"><b>13</b> Zero-retention</span>
     </div>
@@ -143,12 +204,13 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
 
 <section class="section" id="compare">
   <div class="container">
-    <div class="section-head"><div class="eyebrow">Head to head</div><h2>Why teams switch to Cavix</h2><p>The plain rows make Cavix a credible reviewer. The <b>bold</b> rows are why a team keeps it.</p></div>
-    <table class="compare">
+    <div class="section-head reveal"><div class="eyebrow">Head to head</div><h2>Why teams switch to Cavix</h2><p>The plain rows make Cavix a credible reviewer. The <b>bold</b> rows are why a team keeps it.</p></div>
+    <table class="compare reveal">
       <thead><tr><th>Capability</th><th class="c">CodeRabbit</th><th class="c">Greptile</th><th class="c">Copilot / Claude&nbsp;CR</th><th class="c cavix-col">Cavix</th></tr></thead>
       <tbody>
         <tr><td>Auto review + inline suggestions</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c cavix-col yes">✓</td></tr>
         <tr><td>PR summary &amp; <code>@bot</code> chat</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c cavix-col yes">✓</td></tr>
+        <tr><td>Pre-merge checks (org rules)</td><td class="c yes">✓</td><td class="c no">✗</td><td class="c no">✗</td><td class="c cavix-col yes">✓</td></tr>
         <tr><td>All 4 Git platforms</td><td class="c yes">✓</td><td class="c no">2 only</td><td class="c no">GitHub</td><td class="c cavix-col yes">✓</td></tr>
         <tr><td><b>Reproduces the bug in a sandbox</b></td><td class="c no">✗</td><td class="c no">✗</td><td class="c no">✗</td><td class="c cavix-col yes">✓</td></tr>
         <tr><td><b>Cross-repo impact (every tier)</b></td><td class="c no">✗</td><td class="c no">✗</td><td class="c no">✗</td><td class="c cavix-col yes">✓</td></tr>
@@ -163,8 +225,8 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
 
 <section class="section">
   <div class="container">
-    <div class="quote">
-      <p>Only ~10% of teams run two reviewers. Standardization is winner-take-most — and the tool that wins the <span class="grad">trust slot</span> keeps the renewal by default.</p>
+    <div class="quote reveal">
+      <p>Only ~10% of teams run two reviewers. Standardization is winner-take-most — and the tool that wins the <span class="shiny">trust slot</span> keeps the renewal by default.</p>
       <div class="who">Cavix is engineered to be that one tool: it proves its findings, so it never gets muted.</div>
     </div>
   </div>
@@ -172,50 +234,19 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
 
 <section class="section" id="pricing">
   <div class="container">
-    <div class="section-head"><div class="eyebrow">Pricing</div><h2>Start free. BYOK on every tier.</h2><p>Only active PR-authors count as seats. We never mark up model tokens — with BYOK you pay your AI provider directly.</p></div>
-
-    <div class="pricing-toggles">
+    <div class="section-head reveal"><div class="eyebrow">Pricing</div><h2>Start free. BYOK on every tier.</h2><p>Only active PR-authors count as seats. We never mark up model tokens — with BYOK you pay your AI provider directly.</p></div>
+    <div class="pricing-toggles reveal">
       <div class="seg" id="cycleSeg"><button data-cycle="monthly" class="on">Monthly</button><button data-cycle="annual">Annual · save 20%</button></div>
       <div class="seg" id="sourceSeg"><button data-source="byok" class="on">BYOK (your key)</button><button data-source="managed">Managed (we buy tokens)</button></div>
     </div>
-
-    <div class="pricing">
-      <div class="plan">
-        <h3>Free / OSS</h3>
-        <div class="price">$0<span>/forever</span></div>
-        <div class="srcnote">BYOK only</div>
-        <ul><li>Unlimited public repos</li><li>~50 private reviews / mo</li><li>Full 13-stage verification engine</li><li>@cavix commands &amp; chat</li><li>Community support</li></ul>
-        <a href="/signup" class="btn btn-soft btn-block">Start free</a>
-      </div>
-      <div class="plan featured">
-        <h3>Team</h3>
-        <div class="price"><span class="amount" data-byok="12" data-managed="24">$12</span><span>/seat / mo</span><span class="save" data-cycle-note>billed monthly</span></div>
-        <div class="srcnote" data-srcnote>Your key — you pay ~$2–8/seat model bill</div>
-        <ul><li>Unlimited private repos</li><li>Cross-repo impact graph</li><li>Ensemble + standards learning</li><li>Committable one-click fixes</li><li>Email support</li></ul>
-        <a href="/signup" class="btn btn-primary btn-block">Start 14-day trial</a>
-      </div>
-      <div class="plan">
-        <h3>Pro</h3>
-        <div class="price"><span class="amount" data-byok="39" data-managed="39">$39</span><span>/seat / mo</span><span class="save" data-cycle-note>billed monthly</span></div>
-        <div class="srcnote">BYOK or managed</div>
-        <ul><li>Verification (gated) on every PR</li><li>CI/CD regression prediction</li><li>Test-gen &amp; custom policies</li><li>Verified fix PRs</li><li>Higher caps &amp; priority support</li></ul>
-        <a href="/signup" class="btn btn-soft btn-block">Start 14-day trial</a>
-      </div>
-      <div class="plan">
-        <h3>Enterprise</h3>
-        <div class="price">Custom</div>
-        <div class="srcnote">$30–60/seat or site license</div>
-        <ul><li>Self-host / VPC / air-gapped</li><li>SSO / SAML + SCIM + RBAC</li><li>Audit log &amp; zero-retention</li><li>Legacy languages + modernization</li><li>Dedicated support &amp; SLA</li></ul>
-        <a href="/signup" class="btn btn-soft btn-block">Contact sales</a>
-      </div>
-    </div>
-    <div class="overage">Need more verification? Metered overage at <code>$0.40 / agent-minute</code> — never marked below our true cost, so a power user never drags a seat underwater. India/SMB: flat small-team plan from <code>₹ / $15 / mo</code>.</div>
+    <div class="pricing" id="pricingCards"></div>
+    <div class="overage reveal">Need more verification? Metered overage at <code id="overageLabel">$0.40 / agent-minute</code> — never marked below our true cost. <span id="smbLabel"></span></div>
   </div>
 </section>
 
 <section class="section" id="enterprise">
   <div class="container">
-    <div class="grid grid-2" style="align-items:center;gap:40px">
+    <div class="grid grid-2 reveal" style="align-items:center;gap:40px">
       <div>
         <div class="eyebrow">Enterprise &amp; regulated</div>
         <h2 style="font-size:34px;margin:12px 0 16px">Runs anywhere — including where the platforms can't follow</h2>
@@ -224,7 +255,7 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
           <span class="badge">SSO / SAML 2.0</span><span class="badge">SCIM</span><span class="badge">RBAC</span><span class="badge">Tamper-evident audit</span><span class="badge">Zero-retention</span><span class="badge">Offline license</span><span class="badge badge-policy">Policy engine</span>
         </div>
       </div>
-      <div class="terminal">
+      <div class="terminal spot">
         <div class="terminal-bar"><span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span><span>prove zero egress</span></div>
 <pre><span class="t-dim"># air-gapped mode: reach only the in-cluster model</span>
 $ wget https://api.anthropic.com
@@ -240,7 +271,7 @@ $ cavix review ./pr
 
 <section class="section">
   <div class="container">
-    <div class="cta-band">
+    <div class="cta-band reveal">
       <h2>Stop shipping guesses to your developers.</h2>
       <p>Give your team the reviewer they won't turn off — because it proves every word. Free to start, BYOK, live in minutes.</p>
       <a href="/signup" class="btn btn-primary">Start free →</a>
@@ -255,10 +286,12 @@ $ cavix review ./pr
       <div style="color:var(--text-faint);margin-top:8px;font-size:13px">Proven, not guessed. · cavix.ai · @CavixCode</div>
     </div>
     <div style="display:flex;gap:28px;flex-wrap:wrap">
-      <a href="#pillars">Product</a><a href="#pricing">Pricing</a><a href="#enterprise">Enterprise</a><a href="/login">Log in</a><a href="/signup">Sign up</a>
+      <a href="#pillars">Product</a><a href="#pricing">Pricing</a><a href="/docs">Docs</a><a href="#enterprise">Enterprise</a><a href="/login">Log in</a><a href="/signup">Sign up</a>
     </div>
   </div>
 </footer>
+<script src="/pricing.js"></script>
 <script src="/landing.js"></script>
+<script src="/fx.js"></script>
 </body>
 </html>

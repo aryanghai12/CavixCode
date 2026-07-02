@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs · Cavix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.svg">
+</head>
+<body class="has-orbs">
+<canvas id="codebg"></canvas>
+<div class="orb orb-1"></div><div class="orb orb-3"></div>
+
+<nav class="nav">
+  <div class="container nav-inner">
+    <a href="/" class="logo"><span class="logo-mark">◆</span> Cavix</a>
+    <div class="nav-links">
+      <a href="/#pillars">Product</a><a href="/#pricing">Pricing</a><a href="/docs">Docs</a><a href="/#enterprise">Enterprise</a>
+    </div>
+    <div class="nav-cta">
+      <a href="/login" class="btn btn-ghost btn-sm">Log in</a>
+      <a href="/signup" class="btn btn-primary btn-sm">Start free</a>
+    </div>
+  </div>
+</nav>
+
+<div class="docs">
+  <aside class="docs-nav">
+    <div class="grp">Get started</div>
+    <a href="#intro">Introduction</a>
+    <a href="#signin">Sign in &amp; connect GitHub</a>
+    <a href="#firstreview">Your first review</a>
+    <div class="grp">Using Cavix</div>
+    <a href="#commands">@cavix commands</a>
+    <a href="#summary">PR summaries</a>
+    <a href="#tone">Review tone</a>
+    <a href="#config">.cavix.yaml config</a>
+    <a href="#premerge">Pre-merge checks</a>
+    <div class="grp">Platform</div>
+    <a href="#byok">BYOK &amp; models</a>
+    <a href="#selfhost">Self-host &amp; air-gap</a>
+    <a href="#security">Security</a>
+  </aside>
+
+  <main class="docs-body">
+    <h1 id="intro">Cavix documentation</h1>
+    <p>Cavix is the AI code reviewer that <b>proves its findings before it speaks</b>. It reproduces a suspected bug in an isolated sandbox, applies the fix, and re-runs your tests — so its comments are verified facts, not guesses. This guide covers everything you can do from the dashboard.</p>
+
+    <h2 id="signin">Sign in &amp; connect GitHub</h2>
+    <p>Click <b>Continue with GitHub</b> on the login page. Cavix asks GitHub to authorize it (the standard <code>read:org</code> + <code>user:email</code> consent), then brings you back. On the <b>Repositories</b> page you'll see every organization you belong to; pick one, and toggle Cavix on for any repo — all without leaving the site.</p>
+    <ul>
+      <li>The first person to sign up for an organization becomes its <b>owner</b>.</li>
+      <li>New GitHub sign-ups start a <b>14-day trial</b> so private repos work immediately.</li>
+      <li>The one-time GitHub App install is a single click via <b>Install GitHub App</b> (GitHub requires that consent screen).</li>
+    </ul>
+
+    <h2 id="firstreview">Your first review</h2>
+    <p>Once a repo is connected, open a pull request. Cavix runs its 13-stage pipeline and posts:</p>
+    <ul>
+      <li>A <b>PR summary</b> comment (walkthrough, changed-files table, sequence diagram, review-effort estimate).</li>
+      <li><b>Inline findings</b> with severity and — for verified bugs — the failing test that proves them.</li>
+      <li>A ✓/✗ <b>status check</b> that can gate merges.</li>
+    </ul>
+
+    <h2 id="commands">@cavix commands</h2>
+    <p>Comment on any PR (write access required):</p>
+    <pre><code>@cavix review     # fresh full review (clears stale comments &amp; cache)
+@cavix summary    # regenerate the PR summary
+@cavix resolve    # resolve Cavix's own threads
+@cavix pause      # stop auto-reviews on this PR
+@cavix resume     # re-enable auto-reviews
+@cavix help       # list commands
+@cavix &lt;question&gt; # free-text Q&amp;A about the PR</code></pre>
+
+    <h2 id="summary">PR summaries</h2>
+    <p>Every review posts a summary comment to the PR: a plain-English walkthrough, a table of changed files with one-line descriptions, auto-generated labels, linked issues/tickets, an optional sequence diagram, and a 1–5 <b>review-effort</b> estimate. Regenerate any time with <code>@cavix summary</code>.</p>
+
+    <h2 id="tone">Review tone</h2>
+    <p>Set how Cavix writes comments in <b>Review settings → Tone</b>:</p>
+    <ul>
+      <li><b>Concise</b> — short, to the point.</li>
+      <li><b>Detailed</b> — thorough explanations and context.</li>
+      <li><b>Educational</b> — teaches the "why" with references.</li>
+      <li><b>Assertive</b> — direct and prescriptive.</li>
+      <li><b>Chill</b> — friendly and low-pressure, nits downplayed.</li>
+    </ul>
+
+    <h2 id="config">.cavix.yaml config</h2>
+    <p>Commit a <code>.cavix.yaml</code> (or <code>.cavix.json</code>) to your repo root to configure Cavix in code:</p>
+    <pre><code>autoReview: true
+reviewDraftPRs: false
+tone: concise
+pathFilters:
+  include: ["src/**", "services/**"]
+  exclude: ["**/*.min.js", "**/generated/**"]
+agents:
+  disabled: [standards]
+preMergeChecks:
+  enabled: true
+  rules:
+    - "Every new endpoint has an auth check"
+    - "Public API changes require a changelog entry"
+failOn: [critical]</code></pre>
+
+    <h2 id="premerge">Pre-merge checks</h2>
+    <p>Pre-merge checks are an <b>optional gate, off by default</b>. An owner turns them on in <b>Review settings → Pre-merge checks</b> and writes rules in plain English. Each rule compiles into a deterministic, non-bypassable check that runs before merge; a failing rule fails the Cavix status check. Combine with branch protection to make it a hard gate — ideal for regulated teams.</p>
+
+    <h2 id="byok">BYOK &amp; models</h2>
+    <p>Bring your own key on <b>AI &amp; BYOK</b>: pick a provider (Anthropic / OpenAI / Google / self-hosted) and model, and paste your key. It's encrypted at rest (AES-256-GCM) and only a fingerprint is ever shown. Cavix never marks up tokens — you pay your provider directly.</p>
+
+    <h2 id="selfhost">Self-host &amp; air-gap</h2>
+    <p>Cavix ships a Helm chart and Terraform. In air-gapped mode a deny-all-egress NetworkPolicy plus an application egress guard guarantee zero outbound calls; the model runs in your cluster. See the deployment guide for the full runbook.</p>
+
+    <h2 id="security">Security</h2>
+    <ul>
+      <li><b>Zero-retention</b> — customer code is destroyed after each review; only metadata is kept.</li>
+      <li><b>Encrypted secrets</b> — BYOK keys and OAuth tokens are encrypted at rest.</li>
+      <li><b>SSO/SAML, SCIM, RBAC, tamper-evident audit log</b> on enterprise.</li>
+      <li><b>Sandbox isolation</b> — untrusted code runs network-less with strict caps; assume-breach, defense-in-depth.</li>
+    </ul>
+
+    <p style="margin-top:40px"><a href="/signup" class="btn btn-primary">Start free →</a> &nbsp; <a href="/" class="btn btn-soft">Back to home</a></p>
+  </main>
+</div>
+<script src="/fx.js"></script>
+</body>
+</html>

@@ -35,16 +35,22 @@ export interface PublicUser {
   githubLogin?: string;
 }
 
+export type Tone = "concise" | "detailed" | "educational" | "assertive" | "chill";
+
 /** Per-org BYOK + review configuration, editable from the dashboard Settings page. */
 export interface OrgSettings {
   llmProvider: string;   // anthropic | openai | google | selfhosted
   llmModel: string;
   autoReview: boolean;
   reviewDraftPRs: boolean;
-  tone: "concise" | "detailed";
+  tone: Tone;
   failOn: string[];      // severities that fail the check run
   policyEnabled: boolean;
   airgapped: boolean;
+  /** Optional path filters (like .cavix.yaml). Empty include = review everything. */
+  pathFilters: { include: string[]; exclude: string[] };
+  /** Optional pre-merge gate (OFF by default). Owner writes plain-English rules. */
+  preMergeChecks: { enabled: boolean; rules: string[] };
   /** Set once a BYOK key is stored. The raw key is AES-GCM encrypted and never returned. */
   apiKeyFingerprint?: string;
   apiKeySetAt?: string;
@@ -208,6 +214,8 @@ function defaultSettings(): OrgSettings {
     failOn: ["critical"],
     policyEnabled: false,
     airgapped: process.env.CAVIX_AIRGAPPED === "true",
+    pathFilters: { include: [], exclude: ["**/*.min.js", "**/generated/**", "**/vendor/**"] },
+    preMergeChecks: { enabled: false, rules: [] },
   };
 }
 
@@ -428,7 +436,7 @@ export class InMemoryStore implements Store {
   updateSettings(org: string, patch: Partial<OrgSettings>): OrgSettings {
     const s = this.getSettings(org);
     // Only allow known, safe fields to be patched (never the fingerprint directly).
-    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped"];
+    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped", "pathFilters", "preMergeChecks"];
     for (const k of allowed) {
       if (patch[k] !== undefined) (s as Record<string, unknown>)[k] = patch[k];
     }
