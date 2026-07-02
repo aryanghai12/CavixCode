@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in · Cavix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.svg">
+</head>
+<body class="has-orbs">
+<div class="orb orb-1"></div><div class="orb orb-2"></div>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <a href="/" class="logo"><span class="logo-mark">◆</span> Cavix</a>
+    <h1 id="title">Welcome back</h1>
+    <p class="muted" id="subtitle">Log in to your review dashboard</p>
+
+    <div class="alert alert-error" id="alert"></div>
+
+    <form id="form">
+      <div class="field" id="nameField" style="display:none">
+        <label for="name">Your name</label>
+        <input id="name" type="text" autocomplete="name" placeholder="Ada Lovelace">
+      </div>
+      <div class="field" id="orgField" style="display:none">
+        <label for="org">Organization</label>
+        <input id="org" type="text" autocomplete="organization" placeholder="acme-inc">
+        <div class="hint">Your workspace name. The first person to sign up becomes the owner.</div>
+      </div>
+      <div class="field">
+        <label for="email">Work email</label>
+        <input id="email" type="email" autocomplete="email" required placeholder="you@company.com">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required placeholder="••••••••">
+        <div class="hint" id="pwHint" style="display:none">At least 8 characters.</div>
+      </div>
+      <button class="btn btn-primary btn-block" type="submit" id="submit">Log in</button>
+    </form>
+
+    <p class="auth-alt" id="switch">New to Cavix? <a href="/signup" id="switchLink">Create an account</a></p>
+  </div>
+</div>
+<script src="/auth.js"></script>
+</body>
+</html>

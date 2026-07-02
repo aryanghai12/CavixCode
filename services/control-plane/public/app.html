@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard · Cavix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.svg">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a href="/" class="logo"><span class="logo-mark">◆</span> Cavix</a>
+    <nav id="nav">
+      <div class="nav-group">Workspace</div>
+      <div class="nav-item" data-view="overview"><span class="ni-ico">▚</span> Overview</div>
+      <div class="nav-item" data-view="reviews"><span class="ni-ico">🔬</span> Reviews</div>
+      <div class="nav-item" data-view="repos"><span class="ni-ico">📦</span> Repositories</div>
+      <div class="nav-item" data-view="feed"><span class="ni-ico">🏆</span> Proven catches</div>
+      <div class="nav-group">Configure</div>
+      <div class="nav-item" data-view="byok"><span class="ni-ico">🔑</span> AI &amp; BYOK</div>
+      <div class="nav-item" data-view="settings"><span class="ni-ico">⚙️</span> Review settings</div>
+      <div class="nav-item" data-view="team"><span class="ni-ico">👥</span> Team</div>
+      <div class="nav-item" data-view="billing"><span class="ni-ico">💳</span> Plan &amp; billing</div>
+      <div class="nav-group admin-only hidden">Founder</div>
+      <div class="nav-item admin-only hidden" data-view="admin"><span class="ni-ico">🛡️</span> Admin console</div>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="user-chip">
+        <div class="avatar" id="avatar">?</div>
+        <div><div class="u-name" id="userName">…</div><div class="u-org" id="userOrg">…</div></div>
+      </div>
+      <button class="btn btn-ghost btn-sm btn-block" id="logout" style="margin-top:10px">Log out</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <button class="btn btn-soft btn-sm mobile-menu" id="menuBtn">☰</button>
+        <h1 id="viewTitle">Overview</h1>
+        <div class="crumb" id="viewCrumb">Your review activity at a glance</div>
+      </div>
+      <a href="#" class="btn btn-primary btn-sm" id="topAction">+ Connect repository</a>
+    </div>
+    <div class="content" id="content"><div class="empty"><div class="big">⏳</div>Loading your workspace…</div></div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

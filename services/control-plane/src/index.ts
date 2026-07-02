@@ -1,3 +1,4 @@
 export * from "./store.ts";
+export * from "./auth.ts";
 export { createControlPlane } from "./server.ts";
 export { renderDashboardHtml } from "./ui.ts";
