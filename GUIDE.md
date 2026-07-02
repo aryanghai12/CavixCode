@@ -644,15 +644,57 @@ brand‑new workspace — the first person to sign up for an organization become
 | Page | What it does |
 |------|--------------|
 | **Landing page** (`/`) | The public marketing site: the pitch, feature grid, a live "verify" terminal, the CodeRabbit comparison table, pricing, and calls to action. This is what a prospect sees first. |
-| **Log in / Sign up** (`/login`, `/signup`) | Real accounts. Sign‑up creates the workspace + owner; login starts a secure session. |
+| **Log in / Sign up** (`/login`, `/signup`) | Real accounts — email/password **or "Continue with GitHub"** (OAuth). Sign‑up creates the workspace + owner; login starts a secure session. |
 | **Overview** | Headline numbers (reviews run, verified findings, action rate, reviewer‑hours saved), a 7‑day activity sparkline, findings‑by‑severity, and a "getting started" checklist. |
 | **Reviews** | Every review with its findings. Each finding shows severity, file:line, whether it's **✅ verified** or a **🔒 policy** fact, and **Accept / Reject** buttons that feed the learning loop. |
-| **Repositories** | Connect / remove repos Cavix watches. (In production this is driven by the GitHub App install; the manual add is here for trials and testing.) |
+| **Repositories** | The **CodeRabbit‑style connect flow** — sign in with GitHub, browse **all your organizations**, see **every repo** in each, and flip a toggle to enable Cavix on the ones you want. Nothing done from the GitHub website except the one‑time App install. |
 | **AI & BYOK** | The heart of "bring your own key": pick the provider (Anthropic / OpenAI / Google / self‑hosted) and model, and paste your API key. The key is **encrypted at rest** and only a **fingerprint** is ever shown again. |
 | **Review settings** | Toggles that mirror `.cavix.yaml`: auto‑review, review drafts, policy gate, air‑gapped mode, comment tone, and which severities fail the merge check. |
 | **Team** | Members and their roles (owner / admin / reviewer / member). Owners/admins can change roles. |
 | **Plan & billing** | The current plan and upgrade options (wire Stripe for real charging — see §8D). |
 | **Proven catches** | The public feed of execution‑verified findings that opted‑in public repos chose to share. |
+
+### Connect GitHub from the site (like CodeRabbit)
+
+Org owners never have to fiddle on the GitHub website. From the **Repositories** page:
+
+1. Click **Continue with GitHub** → GitHub asks them to authorize Cavix (the same
+   `read:org` + `user:email` consent screen CodeRabbit uses) → they're back on your site.
+2. Cavix lists **every organization they belong to** (plus their personal account) as
+   selectable chips.
+3. Pick an org → Cavix lists **all its repositories** with language, description, and
+   public/private. A search box filters them.
+4. Flip the **toggle** on any repo to enable Cavix reviews on it (or off to disable).
+   That's the whole setup — done from your site.
+
+> **The one unavoidable GitHub step:** installing the **GitHub App** itself shows a
+> one‑time GitHub consent screen (GitHub *requires* this — no tool, including
+> CodeRabbit, can bypass it). The dashboard gives owners an **"Install GitHub App ↗"**
+> button that deep‑links straight to it, so it's still one click from your site.
+
+**Two modes, automatic:**
+- **Demo mode (zero setup):** if you haven't configured OAuth, "Continue with GitHub"
+  logs in a demo GitHub user and shows realistic sample orgs/repos — so you can *see*
+  the entire flow working immediately (great for trials and screenshots).
+- **Live mode:** set the four env vars below and it uses **real GitHub** — real login,
+  real orgs, real repos.
+
+**To turn on real GitHub sign‑in** (one‑time), create a GitHub **OAuth App** at
+**github.com → Settings → Developer settings → OAuth Apps → New OAuth App** with the
+callback URL `https://<your-site>/api/auth/github/callback`, then set:
+```powershell
+$env:CAVIX_GITHUB_OAUTH_CLIENT_ID = "Iv1...."       # from the OAuth App
+$env:CAVIX_GITHUB_OAUTH_CLIENT_SECRET = "...."       # from the OAuth App
+$env:CAVIX_PUBLIC_URL = "https://app.yourdomain.com" # your site's public URL
+$env:CAVIX_GITHUB_APP_SLUG = "cavix"                 # your GitHub App's name (for the Install button)
+```
+GitLab / Bitbucket / Azure appear in the connect UI as "soon" — the same repo‑browser
+pattern extends to each once you add that provider's OAuth (the code is structured for it).
+
+> **GitLab, Bitbucket, Azure:** the review engine and platform adapters already support
+> all four ([section 8B](#8b-go-live-on-github-production-github-app--cavix-commands)
+> comparison). Only the *self‑serve web connect UI* currently ships for GitHub; the
+> others connect via the same adapters at the service level today.
 
 ### How the site works (plain English)
 
@@ -1139,7 +1181,11 @@ Key slots at a glance:
 | `CAVIX_PAID_REVIEWS_PER_DAY` | control‑plane | Daily review limit for the paid tier |
 | `CAVIX_ADMIN_EMAILS` | control‑plane | Comma‑separated founder/core‑team emails who get the Admin console (see §8E) |
 | `CAVIX_SESSION_SECRET` | control‑plane | Signs dashboard login cookies — **set in production** |
-| `CAVIX_SECRET_KEY` | control‑plane | Encrypts stored BYOK keys at rest — **set in production** |
+| `CAVIX_SECRET_KEY` | control‑plane | Encrypts stored BYOK keys + OAuth tokens at rest — **set in production** |
+| `CAVIX_GITHUB_OAUTH_CLIENT_ID` | control‑plane | "Sign in with GitHub" OAuth App client id (unset = demo mode) |
+| `CAVIX_GITHUB_OAUTH_CLIENT_SECRET` | control‑plane | GitHub OAuth App client secret |
+| `CAVIX_PUBLIC_URL` | control‑plane | Public site URL, for the OAuth callback (e.g. `https://app.yourdomain.com`) |
+| `CAVIX_GITHUB_APP_SLUG` | control‑plane | Your GitHub App's name, for the dashboard "Install App" link |
 
 ---
 

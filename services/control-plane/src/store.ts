@@ -19,6 +19,8 @@ export interface User {
   role: Role;
   passwordHash: string;
   createdAt: string;
+  provider?: "password" | "github" | "gitlab";
+  githubLogin?: string;
 }
 
 /** What the API returns for a user — never the password hash. */
@@ -29,6 +31,8 @@ export interface PublicUser {
   org: string;
   role: Role;
   createdAt: string;
+  provider?: "password" | "github" | "gitlab";
+  githubLogin?: string;
 }
 
 /** Per-org BYOK + review configuration, editable from the dashboard Settings page. */
@@ -167,6 +171,10 @@ export interface Store {
   verifyLogin(email: string, password: string): PublicUser | null;
   listTeam(org: string): PublicUser[];
   setRole(org: string, userId: string, role: Role): PublicUser;
+  /** Create or update a user signed in via an OAuth provider (GitHub/GitLab). */
+  upsertOAuthUser(input: { email: string; name: string; org: string; provider: "github" | "gitlab"; login: string }): PublicUser;
+  setOAuthToken(userId: string, token: string): void;
+  getOAuthToken(userId: string): string | null;
 
   // --- BYOK / settings ---
   getSettings(org: string): OrgSettings;
@@ -213,6 +221,7 @@ export class InMemoryStore implements Store {
   private usersByEmail = new Map<string, User>();
   private settings = new Map<string, OrgSettings>();
   private apiKeys = new Map<string, string>();  // org → encrypted key blob
+  private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
 
   createOrg(name: string, opts: { tier?: OrgTier; provenFeedOptIn?: boolean } = {}): Org {
     const org: Org = { id: id8("org"), name, tier: opts.tier ?? "paid", provenFeedOptIn: opts.provenFeedOptIn ?? false, createdAt: new Date().toISOString() };
@@ -231,9 +240,10 @@ export class InMemoryStore implements Store {
   createRepo(org: string, name: string, opts: { visibility?: "public" | "private" } = {}): Repo {
     const visibility = opts.visibility ?? "private";
     const o = this.orgs.get(org);
-    // Free tier onboards PUBLIC repos only — paid unlocks private.
-    if (o?.tier === "free" && visibility !== "public") {
-      throw new Error("free tier supports public repositories only; upgrade for private repos");
+    // Free tier onboards PUBLIC repos only — paid (or an active trial) unlocks private.
+    const onTrial = !!o?.trialEndsAt && Date.parse(o.trialEndsAt) > Date.now();
+    if (o?.tier === "free" && !onTrial && visibility !== "public") {
+      throw new Error("free tier supports public repositories only; upgrade or start a trial for private repos");
     }
     const repo: Repo = { id: id8("repo"), org, name, visibility };
     this.repos.set(`${org}/${name}`, repo);
@@ -370,6 +380,39 @@ export class InMemoryStore implements Store {
     if (!u || u.org !== org) throw new Error("no such user in this org");
     u.role = role;
     return toPublic(u);
+  }
+  upsertOAuthUser(input: { email: string; name: string; org: string; provider: "github" | "gitlab"; login: string }): PublicUser {
+    const email = input.email.trim().toLowerCase();
+    const existing = this.usersByEmail.get(email);
+    if (existing) {
+      existing.provider = input.provider;
+      existing.githubLogin = input.login;
+      if (input.name) existing.name = input.name;
+      return toPublic(existing);
+    }
+    if (!this.orgs.has(input.org)) this.createOrg(input.org, { tier: "free" });
+    const isFirst = this.listTeam(input.org).length === 0;
+    const user: User = {
+      id: id8("usr"),
+      email,
+      name: input.name || input.login,
+      org: input.org,
+      role: isFirst ? "owner" : "member",
+      passwordHash: hashPassword(randomUUID()), // unusable password; login is via OAuth
+      createdAt: new Date().toISOString(),
+      provider: input.provider,
+      githubLogin: input.login,
+    };
+    this.users.set(user.id, user);
+    this.usersByEmail.set(email, user);
+    return toPublic(user);
+  }
+  setOAuthToken(userId: string, token: string): void {
+    this.oauthTokens.set(userId, encryptSecret(token));
+  }
+  getOAuthToken(userId: string): string | null {
+    const blob = this.oauthTokens.get(userId);
+    return blob ? decryptSecret(blob) : null;
   }
 
   // ---------- BYOK / settings ----------
@@ -508,7 +551,7 @@ export class InMemoryStore implements Store {
 }
 
 function toPublic(u: User): PublicUser {
-  return { id: u.id, email: u.email, name: u.name, org: u.org, role: u.role, createdAt: u.createdAt };
+  return { id: u.id, email: u.email, name: u.name, org: u.org, role: u.role, createdAt: u.createdAt, provider: u.provider, githubLogin: u.githubLogin };
 }
 
 function id8(prefix: string): string {

@@ -153,46 +153,84 @@
     } catch (e) { toast(e.message); }
   };
 
-  // ---------- REPOS ----------
-  async function renderRepos() {
-    const repos = await api(`/api/orgs/${org}/repos`);
-    const rows = repos.length ? repos.map((r) => `
-      <tr>
-        <td><b>${esc(r.name)}</b></td>
-        <td><span class="badge">${esc(r.visibility)}</span></td>
-        <td class="mono" style="color:var(--text-faint)">${esc(r.id)}</td>
-        <td style="text-align:right"><button class="btn btn-danger btn-sm" onclick="cavixRemoveRepo('${esc(r.name)}')">Remove</button></td>
-      </tr>`).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--text-faint);padding:30px">No repositories connected yet.</td></tr>`;
+  // ---------- REPOS / CONNECT (CodeRabbit-style: providers → orgs → repos) ----------
+  const GH_SVG = '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+  let repoState = { org: null, repos: [] };
 
-    content.innerHTML = `
-      <div class="panel">
-        <div class="panel-head"><h2>Connect a repository</h2><span class="sub">In production this happens via the GitHub App install — here you can add one manually.</span></div>
-        <div class="panel-body">
-          <div class="grid" style="grid-template-columns:2fr 1fr auto;align-items:end;gap:12px">
-            <div class="field" style="margin:0"><label>Repository name</label><input id="repoName" placeholder="my-service"></div>
-            <div class="field" style="margin:0"><label>Visibility</label><select id="repoVis"><option value="private">Private</option><option value="public">Public</option></select></div>
-            <button class="btn btn-primary" id="addRepo">Connect</button>
-          </div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><h2>Connected repositories</h2><span class="sub">${repos.length} total</span></div>
-        <table class="table"><thead><tr><th>Repository</th><th>Visibility</th><th>ID</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+  async function renderRepos() {
+    const status = await api(`/api/github/status`);
+    const providerTabs = `
+      <div class="provider-tabs">
+        <div class="provider-tab active">${GH_SVG} GitHub</div>
+        <div class="provider-tab soon">GitLab <span class="tag">soon</span></div>
+        <div class="provider-tab soon">Bitbucket <span class="tag">soon</span></div>
+        <div class="provider-tab soon">Azure DevOps <span class="tag">soon</span></div>
       </div>`;
 
-    $("addRepo").addEventListener("click", async () => {
-      const name = $("repoName").value.trim();
-      if (!name) return toast("Enter a repository name");
-      try {
-        await api(`/api/orgs/${org}/repos`, { method: "POST", body: JSON.stringify({ name, visibility: $("repoVis").value }) });
-        toast(`Connected ${name}`); go("repos");
-      } catch (e) { toast(e.message); }
-    });
+    // Real mode but not connected → show the connect CTA.
+    if (status.configured && !status.connected) {
+      content.innerHTML = providerTabs + `
+        <div class="panel"><div class="connect-hero">
+          <div class="gh-badge">${GH_SVG}</div>
+          <h2>Connect your GitHub account</h2>
+          <p>Authorize Cavix to see your organizations and repositories, then enable reviews on the ones you choose — all from here.</p>
+          <a class="btn btn-github" href="/api/auth/github/start">${GH_SVG} Continue with GitHub</a>
+        </div></div>`;
+      return;
+    }
+
+    const demoNote = status.demo ? `<span class="badge">demo data</span>` : `<span class="badge badge-verified">connected as ${esc(status.login || me.githubLogin || "you")}</span>`;
+    const orgs = await api(`/api/github/orgs`);
+    if (!repoState.org || !orgs.find((o) => o.login === repoState.org)) repoState.org = orgs[0] ? orgs[0].login : null;
+
+    content.innerHTML = providerTabs + `
+      <div class="panel">
+        <div class="panel-head">
+          <div><h2>Add repositories</h2><span class="sub">Pick an organization, then toggle the repos Cavix should review.</span></div>
+          <div style="display:flex;gap:10px;align-items:center">${demoNote}<a class="btn btn-soft btn-sm" href="${esc(status.installUrl)}" target="_blank">Install GitHub App ↗</a></div>
+        </div>
+        <div class="panel-body">
+          <div class="org-picker"><span class="sr-desc" style="margin:0">Organization:</span>
+            <div class="org-select">${orgs.map((o) => `<button class="org-chip${o.login === repoState.org ? " active" : ""}" data-org="${esc(o.login)}"><span class="oa">${esc(o.login[0].toUpperCase())}</span>${esc(o.login)}${o.isUser ? " (you)" : ""}</button>`).join("")}</div>
+          </div>
+          <input class="field repo-search" id="repoSearch" placeholder="Search repositories…" style="padding:10px 13px;background:var(--bg-elev);border:1px solid var(--border);border-radius:9px;color:var(--text)">
+          <div id="repoList" class="repo-list"><div class="empty" style="padding:30px">Loading repositories…</div></div>
+        </div>
+      </div>`;
+
+    document.querySelectorAll(".org-chip").forEach((el) => el.addEventListener("click", () => { repoState.org = el.dataset.org; loadRepos(); paintOrgChips(); }));
+    $("repoSearch").addEventListener("input", (e) => paintRepos(e.target.value));
+    await loadRepos();
   }
-  window.cavixRemoveRepo = async function (name) {
-    if (!confirm(`Remove ${name} from Cavix?`)) return;
-    try { await api(`/api/orgs/${org}/repos/${encodeURIComponent(name)}`, { method: "DELETE" }); toast(`Removed ${name}`); go("repos"); }
-    catch (e) { toast(e.message); }
+  function paintOrgChips() {
+    document.querySelectorAll(".org-chip").forEach((el) => el.classList.toggle("active", el.dataset.org === repoState.org));
+  }
+  async function loadRepos() {
+    try { repoState.repos = await api(`/api/github/repos?org=${encodeURIComponent(repoState.org)}`); paintRepos(""); }
+    catch (e) { $("repoList").innerHTML = `<div class="empty" style="padding:30px">⚠️ ${esc(e.message)}</div>`; }
+  }
+  function paintRepos(filter) {
+    const q = (filter || "").toLowerCase();
+    const repos = repoState.repos.filter((r) => r.name.toLowerCase().includes(q));
+    const list = $("repoList");
+    if (!repos.length) { list.innerHTML = `<div class="empty" style="padding:30px">No repositories match.</div>`; return; }
+    list.innerHTML = repos.map((r) => `
+      <div class="repo-row" data-full="${esc(r.fullName)}">
+        <div class="r-ico">${r.private ? "🔒" : "📖"}</div>
+        <div class="r-main">
+          <div class="r-name">${esc(r.name)} <span class="badge">${r.private ? "private" : "public"}</span></div>
+          <div class="r-desc">${esc(r.description || "No description")}</div>
+        </div>
+        ${r.language ? `<span class="r-lang">${esc(r.language)}</span>` : ""}
+        <label class="switch"><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="cavixToggleRepo('${esc(r.fullName)}', ${!r.private}, this)"><span class="slider"></span></label>
+      </div>`).join("");
+  }
+  window.cavixToggleRepo = async function (fullName, isPublic, el) {
+    try {
+      if (el.checked) { await api(`/api/github/repos`, { method: "POST", body: JSON.stringify({ fullName, private: !isPublic }) }); toast(`Enabled ${fullName}`); }
+      else { await api(`/api/github/repos?fullName=${encodeURIComponent(fullName)}`, { method: "DELETE" }); toast(`Disabled ${fullName}`); }
+      const r = repoState.repos.find((x) => x.fullName === fullName); if (r) r.enabled = el.checked;
+    } catch (e) { el.checked = !el.checked; toast(e.message); }
   };
 
   // ---------- PROVEN FEED ----------

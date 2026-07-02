@@ -21,6 +21,10 @@
     alertBox.className = "alert alert-error show";
   }
 
+  // Surface an error returned from the GitHub OAuth callback (?error=...).
+  const errParam = new URLSearchParams(location.search).get("error");
+  if (errParam) showError(errParam === "github_state" ? "GitHub sign-in expired — please try again." : "GitHub sign-in failed: " + errParam);
+
   $("form").addEventListener("submit", async (e) => {
     e.preventDefault();
     alertBox.className = "alert alert-error";

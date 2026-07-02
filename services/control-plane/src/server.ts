@@ -6,12 +6,14 @@ import type { DecisionState, Role, Store } from "./store.ts";
 import {
   clearCookie,
   isPlatformAdmin,
+  parseCookies,
   sessionCookie,
   sessionFromRequest,
   signSession,
   type SessionPayload,
 } from "./auth.ts";
 import type { OrgTier } from "./store.ts";
+import * as gh from "./github.ts";
 
 // A dependency-free HTTP API + static site server for the Cavix control plane.
 // node:http (no framework) keeps it buildable in air-gapped / minimal images.
@@ -103,12 +105,121 @@ async function apiRoute(
     return void sendJson(res, 200, { ok: true });
   }
 
+  // ----- Sign in with GitHub (OAuth) -----
+  if (m === "GET" && p === "/api/auth/github/start") {
+    const state = gh.newState();
+    const redirectUri = `${baseUrl(req)}/api/auth/github/callback`;
+    res.setHeader("Set-Cookie", `gh_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`);
+    // Real OAuth when configured; otherwise a demo callback so the flow works with no setup.
+    const dest = gh.githubConfigured() ? gh.authorizeUrl(state, redirectUri) : `/api/auth/github/callback?demo=1&state=${state}`;
+    res.writeHead(302, { location: dest });
+    return void res.end();
+  }
+
+  if (m === "GET" && p === "/api/auth/github/callback") {
+    const cookies = parseCookies(req.headers.cookie);
+    const state = url.searchParams.get("state");
+    if (!state || state !== cookies.gh_state) {
+      res.writeHead(302, { location: "/login?error=github_state" });
+      return void res.end();
+    }
+    try {
+      let profile: { email: string; name: string; login: string };
+      let token: string | null = null;
+      if (gh.githubConfigured() && url.searchParams.get("code")) {
+        const redirectUri = `${baseUrl(req)}/api/auth/github/callback`;
+        token = await gh.exchangeCode(url.searchParams.get("code")!, redirectUri);
+        const ghUser = await gh.getUser(token);
+        const email = (await gh.getPrimaryEmail(token)) ?? `${ghUser.login}@users.noreply.github.com`;
+        profile = { email, name: ghUser.name ?? ghUser.login, login: ghUser.login };
+      } else {
+        // demo mode
+        profile = { email: gh.DEMO_USER.email!, name: gh.DEMO_USER.name!, login: gh.DEMO_USER.login };
+      }
+      const orgName = profile.login.toLowerCase();
+      const isNew = !store.getUserByEmail(profile.email);
+      const user = store.upsertOAuthUser({ email: profile.email, name: profile.name, org: orgName, provider: "github", login: profile.login });
+      if (token) store.setOAuthToken(user.id, token);
+      if (isNew) store.startTrial(orgName, 14); // new GitHub signups get a 14-day trial (can connect private repos)
+      const session = signSession({ uid: user.id, email: user.email, org: user.org, role: user.role });
+      res.writeHead(302, { location: "/app", "set-cookie": sessionCookie(session) });
+      return void res.end();
+    } catch (err) {
+      res.writeHead(302, { location: `/login?error=${encodeURIComponent((err as Error).message)}` });
+      return void res.end();
+    }
+  }
+
   if (m === "GET" && p === "/api/auth/me") {
     const s = sessionFromRequest(req);
     if (!s) return void sendJson(res, 401, { error: "not authenticated" });
     const u = store.getUser(s.uid);
     if (!u) return void sendJson(res, 401, { error: "not authenticated" });
-    return void sendJson(res, 200, { user: { id: u.id, email: u.email, name: u.name, org: u.org, role: u.role, createdAt: u.createdAt, platformAdmin: isPlatformAdmin(u.email) } });
+    return void sendJson(res, 200, { user: { id: u.id, email: u.email, name: u.name, org: u.org, role: u.role, createdAt: u.createdAt, provider: u.provider, githubLogin: u.githubLogin, platformAdmin: isPlatformAdmin(u.email) } });
+  }
+
+  // ----- GitHub connect (list orgs/repos & enable from the site) -----
+  if (p.startsWith("/api/github/")) {
+    const s = sessionFromRequest(req);
+    if (!s) return void sendJson(res, 401, { error: "authentication required" });
+    const user = store.getUser(s.uid);
+    if (!user) return void sendJson(res, 401, { error: "authentication required" });
+    const token = store.getOAuthToken(user.id);
+    const live = gh.githubConfigured() && !!token;
+
+    if (m === "GET" && p === "/api/github/status") {
+      return void sendJson(res, 200, {
+        configured: gh.githubConfigured(),
+        connected: user.provider === "github" || !!token,
+        login: user.githubLogin ?? null,
+        demo: !live,
+        installUrl: gh.installUrl(),
+      });
+    }
+
+    if (m === "GET" && p === "/api/github/orgs") {
+      try {
+        const orgs = live ? await gh.getOrgs(token!, await gh.getUser(token!)) : gh.demoOrgs();
+        return void sendJson(res, 200, orgs.map((o) => ({ login: o.login, description: o.description ?? "", isUser: (o.type ?? "Organization") === "User" })));
+      } catch (err) {
+        return void sendJson(res, 502, { error: `GitHub: ${(err as Error).message}` });
+      }
+    }
+
+    if (m === "GET" && p === "/api/github/repos") {
+      const owner = url.searchParams.get("org") ?? user.githubLogin ?? "";
+      const isUser = owner.toLowerCase() === (user.githubLogin ?? "").toLowerCase();
+      try {
+        const repos = live ? await gh.getRepos(token!, owner, isUser) : gh.demoRepos(owner);
+        const enabled = new Set(store.listRepos(user.org).map((r) => r.name));
+        return void sendJson(res, 200, repos.map((r) => ({
+          name: r.name, fullName: r.full_name, private: r.private, description: r.description ?? "", language: r.language ?? "",
+          enabled: enabled.has(r.full_name),
+        })));
+      } catch (err) {
+        return void sendJson(res, 502, { error: `GitHub: ${(err as Error).message}` });
+      }
+    }
+
+    if (m === "POST" && p === "/api/github/repos") {
+      const body = await readJson(req);
+      const fullName = String(body.fullName ?? "");
+      if (!fullName.includes("/")) return void sendJson(res, 400, { error: "fullName (owner/repo) required" });
+      try {
+        const repo = store.createRepo(user.org, fullName, { visibility: body.private === false ? "public" : "private" });
+        return void sendJson(res, 201, { enabled: true, repo });
+      } catch (err) {
+        return void sendJson(res, 403, { error: (err as Error).message });
+      }
+    }
+
+    if (m === "DELETE" && p === "/api/github/repos") {
+      const fullName = url.searchParams.get("fullName") ?? "";
+      const ok = store.removeRepo(user.org, fullName);
+      return void sendJson(res, ok ? 200 : 404, ok ? { enabled: false } : { error: "not connected" });
+    }
+
+    return void sendJson(res, 404, { error: `no github route for ${m} ${p}` });
   }
 
   // ----- founder / platform admin (core team only) -----
@@ -392,4 +503,13 @@ function sendJson(res: http.ServerResponse, code: number, obj: unknown): void {
 function sendText(res: http.ServerResponse, code: number, text: string): void {
   res.writeHead(code, { "content-type": "text/plain; charset=utf-8" });
   res.end(text);
+}
+
+/** Public base URL for OAuth redirects — CAVIX_PUBLIC_URL, else inferred from the request. */
+function baseUrl(req: http.IncomingMessage): string {
+  const configured = gh.githubConfig().publicUrl;
+  if (configured) return configured;
+  const proto = (req.headers["x-forwarded-proto"] as string)?.split(",")[0]?.trim() || "http";
+  const host = req.headers.host || "127.0.0.1:8088";
+  return `${proto}://${host}`;
 }
