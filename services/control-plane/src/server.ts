@@ -458,7 +458,9 @@ async function serveStatic(res: http.ServerResponse, urlPath: string): Promise<v
   try {
     const data = await readFile(resolved);
     const ext = path.extname(resolved);
-    res.writeHead(200, { "content-type": MIME[ext] ?? "application/octet-stream", "cache-control": ext === ".html" ? "no-cache" : "public, max-age=3600" });
+    // Always revalidate: during active development a cached stylesheet/script makes
+    // it look like "nothing changed". no-store guarantees the browser fetches fresh.
+    res.writeHead(200, { "content-type": MIME[ext] ?? "application/octet-stream", "cache-control": "no-store, must-revalidate" });
     res.end(data);
   } catch {
     // SPA fallback: unknown non-file path → serve the marketing index.
