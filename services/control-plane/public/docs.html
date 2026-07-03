@@ -6,7 +6,7 @@
 <title>Docs · Cavix</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=3">
+<link rel="stylesheet" href="/styles.css?v=4">
 <link rel="icon" href="/favicon.svg">
 </head>
 <body class="has-orbs">
@@ -46,10 +46,10 @@
 
   <main class="docs-body">
     <h1 id="intro">Cavix documentation</h1>
-    <p>Cavix is the AI code reviewer that <b>proves its findings before it speaks</b>. It reproduces a suspected bug in an isolated sandbox, applies the fix, and re-runs your tests — so its comments are verified facts, not guesses. This guide covers everything you can do from the dashboard.</p>
+    <p>Cavix is the AI code reviewer that <b>proves its findings before it speaks</b>. It reproduces a suspected bug in an isolated sandbox, applies the fix, and re-runs your tests, so its comments are verified facts, not guesses. This guide covers everything you can do from the dashboard.</p>
 
     <h2 id="signin">Sign in &amp; connect GitHub</h2>
-    <p>Click <b>Continue with GitHub</b> on the login page. Cavix asks GitHub to authorize it (the standard <code>read:org</code> + <code>user:email</code> consent), then brings you back. On the <b>Repositories</b> page you'll see every organization you belong to; pick one, and toggle Cavix on for any repo — all without leaving the site.</p>
+    <p>Click <b>Continue with GitHub</b> on the login page. Cavix asks GitHub to authorize it (the standard <code>read:org</code> + <code>user:email</code> consent), then brings you back. On the <b>Repositories</b> page you'll see every organization you belong to; pick one, and toggle Cavix on for any repo, all without leaving the site.</p>
     <ul>
       <li>The first person to sign up for an organization becomes its <b>owner</b>.</li>
       <li>New GitHub sign-ups start a <b>14-day trial</b> so private repos work immediately.</li>
@@ -60,7 +60,7 @@
     <p>Once a repo is connected, open a pull request. Cavix runs its 13-stage pipeline and posts:</p>
     <ul>
       <li>A <b>PR summary</b> comment (walkthrough, changed-files table, sequence diagram, review-effort estimate).</li>
-      <li><b>Inline findings</b> with severity and — for verified bugs — the failing test that proves them.</li>
+      <li><b>Inline findings</b> with severity and, for verified bugs, the failing test that proves them.</li>
       <li>A ✓/✗ <b>status check</b> that can gate merges.</li>
     </ul>
 
@@ -80,11 +80,11 @@
     <h2 id="tone">Review tone</h2>
     <p>Set how Cavix writes comments in <b>Review settings → Tone</b>:</p>
     <ul>
-      <li><b>Concise</b> — short, to the point.</li>
-      <li><b>Detailed</b> — thorough explanations and context.</li>
-      <li><b>Educational</b> — teaches the "why" with references.</li>
-      <li><b>Assertive</b> — direct and prescriptive.</li>
-      <li><b>Chill</b> — friendly and low-pressure, nits downplayed.</li>
+      <li><b>Concise</b>, short, to the point.</li>
+      <li><b>Detailed</b>, thorough explanations and context.</li>
+      <li><b>Educational</b>, teaches the "why" with references.</li>
+      <li><b>Assertive</b>, direct and prescriptive.</li>
+      <li><b>Chill</b>, friendly and low-pressure, nits downplayed.</li>
     </ul>
 
     <h2 id="config">.cavix.yaml config</h2>
@@ -105,26 +105,26 @@ preMergeChecks:
 failOn: [critical]</code></pre>
 
     <h2 id="premerge">Pre-merge checks</h2>
-    <p>Pre-merge checks are an <b>optional gate, off by default</b>. An owner turns them on in <b>Review settings → Pre-merge checks</b> and writes rules in plain English. Each rule compiles into a deterministic, non-bypassable check that runs before merge; a failing rule fails the Cavix status check. Combine with branch protection to make it a hard gate — ideal for regulated teams.</p>
+    <p>Pre-merge checks are an <b>optional gate, off by default</b>. An owner turns them on in <b>Review settings → Pre-merge checks</b> and writes rules in plain English. Each rule compiles into a deterministic, non-bypassable check that runs before merge; a failing rule fails the Cavix status check. Combine with branch protection to make it a hard gate, ideal for regulated teams.</p>
 
     <h2 id="byok">BYOK &amp; models</h2>
-    <p>Bring your own key on <b>AI &amp; BYOK</b>: pick a provider (Anthropic / OpenAI / Google / self-hosted) and model, and paste your key. It's encrypted at rest (AES-256-GCM) and only a fingerprint is ever shown. Cavix never marks up tokens — you pay your provider directly.</p>
+    <p>Bring your own key on <b>AI &amp; BYOK</b>: pick a provider (Anthropic / OpenAI / Google / self-hosted) and model, and paste your key. It's encrypted at rest (AES-256-GCM) and only a fingerprint is ever shown. Cavix never marks up tokens, you pay your provider directly.</p>
 
     <h2 id="selfhost">Self-host &amp; air-gap</h2>
     <p>Cavix ships a Helm chart and Terraform. In air-gapped mode a deny-all-egress NetworkPolicy plus an application egress guard guarantee zero outbound calls; the model runs in your cluster. See the deployment guide for the full runbook.</p>
 
     <h2 id="security">Security</h2>
     <ul>
-      <li><b>Zero-retention</b> — customer code is destroyed after each review; only metadata is kept.</li>
-      <li><b>Encrypted secrets</b> — BYOK keys and OAuth tokens are encrypted at rest.</li>
+      <li><b>Zero-retention</b>, customer code is destroyed after each review; only metadata is kept.</li>
+      <li><b>Encrypted secrets</b>, BYOK keys and OAuth tokens are encrypted at rest.</li>
       <li><b>SSO/SAML, SCIM, RBAC, tamper-evident audit log</b> on enterprise.</li>
-      <li><b>Sandbox isolation</b> — untrusted code runs network-less with strict caps; assume-breach, defense-in-depth.</li>
+      <li><b>Sandbox isolation</b>, untrusted code runs network-less with strict caps; assume-breach, defense-in-depth.</li>
     </ul>
 
     <p style="margin-top:40px"><a href="/signup" class="btn btn-primary">Start free →</a> &nbsp; <a href="/" class="btn btn-soft">Back to home</a></p>
   </main>
 </div>
-<script src="/icons.js?v=3"></script>
-<script src="/fx.js?v=3"></script>
+<script src="/icons.js?v=4"></script>
+<script src="/fx.js?v=4"></script>
 </body>
 </html>

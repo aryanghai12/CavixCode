@@ -1,4 +1,4 @@
-// Login / signup logic. The same page serves both /login and /signup — we detect
+// Login / signup logic. The same page serves both /login and /signup, we detect
 // which from the URL and toggle the extra fields.
 (function () {
   const isSignup = location.pathname === "/signup";
@@ -7,7 +7,7 @@
 
   if (isSignup) {
     $("title").textContent = "Create your account";
-    $("subtitle").textContent = "Start your free trial — no credit card required";
+    $("subtitle").textContent = "Start your free trial, no credit card required";
     $("nameField").style.display = "";
     $("orgField").style.display = "";
     $("pwHint").style.display = "";
@@ -23,7 +23,7 @@
 
   // Surface an error returned from the GitHub OAuth callback (?error=...).
   const errParam = new URLSearchParams(location.search).get("error");
-  if (errParam) showError(errParam === "github_state" ? "GitHub sign-in expired — please try again." : "GitHub sign-in failed: " + errParam);
+  if (errParam) showError(errParam === "github_state" ? "GitHub sign-in expired, please try again." : "GitHub sign-in failed: " + errParam);
 
   $("form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -54,7 +54,7 @@
       if (!res.ok) { showError(data.error || "Something went wrong."); btn.disabled = false; btn.textContent = original; return; }
       location.href = "/app";
     } catch (err) {
-      showError("Network error — is the server running?");
+      showError("Network error, is the server running?");
       btn.disabled = false;
       btn.textContent = original;
     }

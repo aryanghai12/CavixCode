@@ -1,4 +1,4 @@
-// Cavix — one consistent line-icon set (replaces mismatched emoji everywhere).
+// Cavix, one consistent line-icon set (replaces mismatched emoji everywhere).
 (function () {
   const P = {
     overview: '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
@@ -26,6 +26,7 @@
     tag: '<path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8" cy="8" r="1.4"/>',
     link: '<path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M13 18l-1 1a4 4 0 0 1-6-6l1-1"/>',
     doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
+    sample: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 13l2 2 4-4"/>',
     arrow: '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
   };
   window.CAVIX_ICONS = P;

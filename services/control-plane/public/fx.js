@@ -1,4 +1,4 @@
-// Cavix — lightweight, dependency-free motion (reactbits-inspired, adapted to vanilla).
+// Cavix, lightweight, dependency-free motion (reactbits-inspired, adapted to vanilla).
 // Effects: code-rain background, scroll reveal, cursor spotlight, count-up.
 (function () {
   const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;

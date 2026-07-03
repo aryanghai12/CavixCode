@@ -148,6 +148,25 @@ test("settings: pre-merge checks + tone + path filters persist", async () => {
   });
 });
 
+test("settings: review-comment structure sections persist", async () => {
+  await withServer(async (base) => {
+    const cookie = cookieFrom(await post(base, "/api/auth/signup", { email: "rs@acme.co", password: "password123", org: "acme" }));
+    // defaults on
+    let s = await (await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } })).json();
+    assert.equal(s.reviewSections.summary, true);
+    assert.equal(s.reviewSections.sequenceDiagram, true);
+    // turn a couple off
+    const put = await fetch(base + "/api/orgs/acme/settings", {
+      method: "PUT", headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ reviewSections: { summary: true, changedFiles: true, sequenceDiagram: false, reviewEffort: false, relatedIssues: true, inlineFindings: true, proof: true } }),
+    });
+    s = await put.json();
+    assert.equal(s.reviewSections.sequenceDiagram, false);
+    assert.equal(s.reviewSections.reviewEffort, false);
+    assert.equal(s.reviewSections.inlineFindings, true);
+  });
+});
+
 test("stats: aggregates reviews/findings/decisions for the dashboard", async () => {
   await withServer(async (base, store) => {
     store.createOrg("acme");

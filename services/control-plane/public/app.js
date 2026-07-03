@@ -1,4 +1,4 @@
-// Cavix dashboard — a dependency-free single-page app over the control-plane API.
+// Cavix dashboard, a dependency-free single-page app over the control-plane API.
 (function () {
   const $ = (id) => document.getElementById(id);
   const content = $("content");
@@ -26,17 +26,18 @@
 
   const VIEWS = {
     overview: { title: "Overview", crumb: "Your review activity at a glance", render: renderOverview },
-    reviews: { title: "Reviews", crumb: "Findings from your pull requests — accept or reject to train Cavix", render: renderReviews },
+    reviews: { title: "Reviews", crumb: "Findings from your pull requests, accept or reject to train Cavix", render: renderReviews },
+    sample: { title: "Sample review", crumb: "Preview the review comment your settings produce", render: renderSample },
     repos: { title: "Repositories", crumb: "Connect GitHub and choose repos to review", render: renderRepos },
     reports: { title: "Reports", crumb: "ROI and quality across your workspace", render: renderReports },
     learnings: { title: "Learnings", crumb: "What Cavix has learned from your accept/reject decisions", render: renderLearnings },
     feed: { title: "Proven catches", crumb: "Publicly verified findings across the community", render: renderFeed },
-    byok: { title: "AI & BYOK", crumb: "Bring your own AI key — Cavix never marks up tokens", render: renderByok },
+    byok: { title: "AI & BYOK", crumb: "Bring your own AI key, Cavix never marks up tokens", render: renderByok },
     settings: { title: "Review settings", crumb: "How Cavix reviews your pull requests", render: renderSettings },
     integrations: { title: "Integrations", crumb: "Source control, chat and issue trackers", render: renderIntegrations },
     team: { title: "Team", crumb: "People in your workspace and their roles", render: renderTeam },
     billing: { title: "Plan & billing", crumb: "Your subscription and usage", render: renderBilling },
-    admin: { title: "Admin console", crumb: "Founder controls — every org's tier, trial, limits & status", render: renderAdmin },
+    admin: { title: "Admin console", crumb: "Founder controls, every org's tier, trial, limits & status", render: renderAdmin },
   };
 
   // ---------- boot ----------
@@ -94,7 +95,7 @@
       </div>
       <div class="grid grid-2">
         <div class="panel">
-          <div class="panel-head"><h2>Reviews — last 7 days</h2></div>
+          <div class="panel-head"><h2>Reviews, last 7 days</h2></div>
           <div class="panel-body"><div class="spark">${bars}</div>
             <div style="display:flex;justify-content:space-between;color:var(--text-faint);font-size:12px;margin-top:10px"><span>7d ago</span><span>today</span></div>
           </div>
@@ -118,7 +119,7 @@
   async function renderReviews() {
     const reviews = await api(`/api/reviews?org=${org}`);
     if (!reviews.length) {
-      content.innerHTML = `<div class="empty">No reviews yet. Connect a repository and open a pull request — findings will appear here.</div>`;
+      content.innerHTML = `<div class="empty">No reviews yet. Connect a repository and open a pull request, findings will appear here.</div>`;
       return;
     }
     content.innerHTML = reviews.map((r) => {
@@ -141,7 +142,7 @@
       }).join("");
       return `<div class="review">
         <div class="review-head">
-          <div><div class="r-title">${esc(r.repo)} #${r.pr} — ${esc(r.title)}</div>
+          <div><div class="r-title">${esc(r.repo)} #${r.pr}, ${esc(r.title)}</div>
           <div class="r-meta">${esc(r.org)} · ${r.findings.length} finding${r.findings.length === 1 ? "" : "s"} · ${new Date(r.createdAt).toLocaleString()}</div></div>
           <span class="badge">${new Date(r.createdAt).toLocaleDateString()}</span>
         </div>${findings}
@@ -155,9 +156,66 @@
       await api(`/api/findings/${id}/decision`, { method: "POST", body: JSON.stringify({ state, user: me.email }) });
       const row = btn.closest(".finding").querySelector(".f-actions");
       row.innerHTML = `<span class="decided ${state}">${state} by ${esc(me.email)}</span>`;
-      toast(`Finding ${state} — Cavix will learn from this`);
+      toast(`Finding ${state}, Cavix will learn from this`);
     } catch (e) { toast(e.message); }
   };
+
+  // ---------- SAMPLE REVIEW (live preview of the configured comment) ----------
+  async function renderSample() {
+    const s = await api(`/api/orgs/${org}/settings`);
+    const rs = s.reviewSections || {};
+    const toneBlurb = {
+      concise: "Refund flow refactor. One verified high-severity issue; one nit suppressed.",
+      detailed: "This PR refactors the refund flow and adds retry handling to the payments service. It touches 3 files (+128 / −44). One high-severity correctness issue was verified (double-refund on webhook retry) and one nit was suppressed as unverifiable.",
+      educational: "This PR refactors the refund flow. Idempotency matters here because payment webhooks can be delivered more than once, so a non-guarded refund path can charge twice. One verified high-severity issue was found and one nit suppressed.",
+      assertive: "Refactors the refund flow. There is a verified double-refund on webhook retry that must be fixed before merge. One nit was suppressed.",
+      chill: "Nice refund flow cleanup! One thing worth a look: a double-refund on retries (verified). Skipped a tiny nit, nothing blocking.",
+    };
+    const chips = [];
+    if (rs.sequenceDiagram) chips.push("sequence diagram generated");
+    if (rs.relatedIssues) chips.push("labels: payments, needs-review");
+    if (rs.relatedIssues) chips.push("linked: JIRA PAY-142");
+    const effort = rs.reviewEffort ? `<span class="badge">Review effort <span class="effort" style="margin-left:6px"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> 3/5</span>` : "";
+
+    const summaryCard = rs.summary ? `
+      <div class="summary-card" style="margin-bottom:18px">
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px">◆</span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">preview</span></div>
+        <div class="sc-body">
+          <h4>Summary</h4>
+          <p>${esc((toneBlurb[s.tone] || toneBlurb.concise))}</p>
+          ${rs.changedFiles ? `<h4>Changes</h4><table class="changes-table"><thead><tr><th>File</th><th>Summary</th></tr></thead><tbody>
+            <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td></tr>
+            <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td></tr>
+            <tr><td>test/refund.test.ts</td><td>New retry regression test</td></tr></tbody></table>` : ""}
+          ${(chips.length || effort) ? `<div class="chip-row">${chips.map((c) => `<span class="badge">${esc(c)}</span>`).join("")}${effort}</div>` : ""}
+        </div>
+      </div>` : "";
+
+    const inlineCard = rs.inlineFindings ? `
+      <div class="cr-window">
+        <div class="cr-head"><span class="fname">services/payments/refund.ts</span> <span class="pill-sm">✓ Cavix check passed with 1 verified finding</span></div>
+        <div class="cr-code">
+<div class="cr-line del"><span class="ln">87</span><span class="k">  await</span> charge.<span class="f">refund</span>(amount)</div>
+<div class="cr-line add"><span class="ln">87</span><span class="k">  if</span> (!refund.<span class="f">isSettled</span>(id)) <span class="k">await</span> charge.<span class="f">refund</span>(amount)</div>
+        </div>
+        <div class="cr-comment">
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px">◆</span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
+          <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund.</div>
+          ${rs.proof ? `<div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts, <span class="t-red">exit 1</span>
+<span class="t-purple">[after-fix]</span> refund.retry.test.ts, <span class="t-green">exit 0</span>
+<span class="t-purple">[suite]</span>     42 tests, <span class="t-green">exit 0</span></div>` : ""}
+        </div>
+      </div>` : "";
+
+    const empty = (!summaryCard && !inlineCard) ? `<div class="empty" style="padding:40px">Nothing enabled. Turn on sections in Review settings to see them here.</div>` : "";
+
+    content.innerHTML = `
+      <div class="panel"><div class="panel-body" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div><div class="sr-label">This is exactly what Cavix posts on a pull request</div><div class="sr-desc">Built live from your Review settings. Tone: <b>${esc(s.tone)}</b>.</div></div>
+        <a class="btn btn-soft btn-sm" onclick="location.hash='settings'">Edit structure &amp; tone</a>
+      </div></div>
+      <div style="max-width:860px">${summaryCard}${inlineCard}${empty}</div>`;
+  }
 
   // ---------- REPOS / CONNECT (CodeRabbit-style: providers → orgs → repos) ----------
   const GH_SVG = '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
@@ -179,7 +237,7 @@
         <div class="panel"><div class="connect-hero">
           <div class="gh-badge">${GH_SVG}</div>
           <h2>Connect your GitHub account</h2>
-          <p>Authorize Cavix to see your organizations and repositories, then enable reviews on the ones you choose — all from here.</p>
+          <p>Authorize Cavix to see your organizations and repositories, then enable reviews on the ones you choose, all from here.</p>
           <a class="btn btn-github" href="/api/auth/github/start">${GH_SVG} Continue with GitHub</a>
         </div></div>`;
       return;
@@ -253,22 +311,36 @@
   }
 
   // ---------- BYOK ----------
+  const PROVIDERS = { anthropic: "Anthropic (Claude)", openai: "OpenAI (GPT)", google: "Google (Gemini)", selfhosted: "Self-hosted / open model" };
+  const MODELS = {
+    anthropic: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-7"],
+    openai: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o", "o4-mini"],
+    google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
+    selfhosted: ["llama-3.1-70b-instruct", "qwen2.5-coder-32b", "deepseek-coder-v2", "mistral-large"],
+  };
+  function modelOptions(provider, selected) {
+    const list = MODELS[provider] || [];
+    const known = list.map((m) => `<option value="${esc(m)}"${m === selected ? " selected" : ""}>${esc(m)}</option>`).join("");
+    const isCustom = selected && !list.includes(selected);
+    return known + `<option value="__custom__"${isCustom ? " selected" : ""}>Custom…</option>`;
+  }
   async function renderByok() {
     const s = await api(`/api/orgs/${org}/settings`);
-    const providers = ["anthropic", "openai", "google", "selfhosted"];
     const status = s.apiKeyFingerprint
       ? `<div class="key-box"><code>${esc(s.apiKeyFingerprint)}</code><span class="badge badge-verified">active</span></div>
          <div class="sr-desc" style="margin-top:8px">Set ${s.apiKeySetAt ? new Date(s.apiKeySetAt).toLocaleString() : ""}. Your key is encrypted at rest (AES-256-GCM) and never shown again.</div>`
       : `<div class="sr-desc">No key yet. Add one so Cavix can run reviews with your own AI account.</div>`;
+    const customModel = !(MODELS[s.llmProvider] || []).includes(s.llmModel);
 
     content.innerHTML = `
       <div class="panel">
-        <div class="panel-head"><h2>AI provider &amp; model</h2><span class="sub">Model-agnostic — switch anytime</span></div>
+        <div class="panel-head"><h2>AI provider &amp; model</h2><span class="sub">Model-agnostic, switch anytime</span></div>
         <div class="panel-body">
           <div class="grid grid-2" style="gap:16px">
-            <div class="field" style="margin:0"><label>Provider</label><select id="provider">${providers.map((p) => `<option value="${p}"${p === s.llmProvider ? " selected" : ""}>${p}</option>`).join("")}</select></div>
-            <div class="field" style="margin:0"><label>Model</label><input id="model" value="${esc(s.llmModel)}" placeholder="claude-opus-4-8"></div>
+            <div class="field" style="margin:0"><label>Provider</label><select id="provider">${Object.entries(PROVIDERS).map(([v, l]) => `<option value="${v}"${v === s.llmProvider ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+            <div class="field" style="margin:0"><label>Model</label><select id="model">${modelOptions(s.llmProvider, s.llmModel)}</select></div>
           </div>
+          <div class="field" id="customWrap" style="margin:14px 0 0;${customModel ? "" : "display:none"}"><label>Custom model id</label><input id="customModel" value="${customModel ? esc(s.llmModel) : ""}" placeholder="your-model-id"></div>
           <button class="btn btn-primary btn-sm" id="saveModel" style="margin-top:16px">Save provider &amp; model</button>
         </div>
       </div>
@@ -278,12 +350,19 @@
           <div style="margin-bottom:16px">${status}</div>
           <div class="field" style="margin:0"><label>Paste a new key</label><input id="apiKey" type="password" placeholder="sk-ant-… / sk-… / your model token"></div>
           <button class="btn btn-primary btn-sm" id="saveKey" style="margin-top:14px">Save key securely</button>
-          <p class="sr-desc" style="margin-top:14px">Cavix never logs your key and never marks up tokens — you pay your AI provider directly. For air-gapped installs, choose <b>selfhosted</b> and your in-cluster model is used with zero outbound calls.</p>
+          <p class="sr-desc" style="margin-top:14px">Cavix never logs your key and never marks up tokens, you pay your AI provider directly. For air-gapped installs, choose <b>Self-hosted</b> and your in-cluster model is used with zero outbound calls.</p>
         </div>
       </div>`;
 
+    const providerSel = $("provider"), modelSel = $("model");
+    providerSel.addEventListener("change", () => { modelSel.innerHTML = modelOptions(providerSel.value, MODELS[providerSel.value][0]); toggleCustom(); });
+    modelSel.addEventListener("change", toggleCustom);
+    function toggleCustom() { $("customWrap").style.display = modelSel.value === "__custom__" ? "" : "none"; }
+
     $("saveModel").addEventListener("click", async () => {
-      try { await api(`/api/orgs/${org}/settings`, { method: "PUT", body: JSON.stringify({ llmProvider: $("provider").value, llmModel: $("model").value.trim() }) }); toast("Provider & model saved"); }
+      const model = modelSel.value === "__custom__" ? $("customModel").value.trim() : modelSel.value;
+      if (!model) return toast("Enter a model id");
+      try { await api(`/api/orgs/${org}/settings`, { method: "PUT", body: JSON.stringify({ llmProvider: providerSel.value, llmModel: model }) }); toast("Provider & model saved"); }
       catch (e) { toast(e.message); }
     });
     $("saveKey").addEventListener("click", async () => {
@@ -303,10 +382,14 @@
     const sevChecks = ["critical", "high", "medium", "low"].map((sev) =>
       `<label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px"><input type="checkbox" class="failOn" value="${sev}"${s.failOn.includes(sev) ? " checked" : ""}> ${sevBadge(sev)}</label>`).join("");
 
-    const tones = [["concise", "Concise — short and to the point"], ["detailed", "Detailed — thorough explanations"], ["educational", "Educational — teaches the why"], ["assertive", "Assertive — direct and prescriptive"], ["chill", "Chill — friendly, nits downplayed"]];
+    const tones = [["concise", "Concise, short and to the point"], ["detailed", "Detailed, thorough explanations"], ["educational", "Educational, teaches the why"], ["assertive", "Assertive, direct and prescriptive"], ["chill", "Chill, friendly, nits downplayed"]];
     const pm = s.preMergeChecks || { enabled: false, rules: [] };
     const pf = s.pathFilters || { include: [], exclude: [] };
+    const rs = s.reviewSections || {};
     settingsRules = [...(pm.rules || [])];
+    const rsToggle = (key, label, desc) => `
+      <div class="settings-row"><div><div class="sr-label">${label}</div><div class="sr-desc">${desc}</div></div>
+      <label class="switch"><input type="checkbox" data-rs="${key}"${rs[key] ? " checked" : ""}><span class="slider"></span></label></div>`;
 
     content.innerHTML = `
       <div class="panel">
@@ -315,7 +398,7 @@
           ${toggle("autoReview", "Auto-review pull requests", "Review automatically on open and every push.", s.autoReview)}
           ${toggle("reviewDraftPRs", "Review draft PRs", "Also review pull requests still marked as draft.", s.reviewDraftPRs)}
           ${toggle("policyEnabled", "Policy gate", "Enforce your plain-English org rules as non-bypassable checks.", s.policyEnabled)}
-          ${toggle("airgapped", "Air-gapped mode", "Only reach the in-cluster model — zero outbound calls.", s.airgapped)}
+          ${toggle("airgapped", "Air-gapped mode", "Only reach the in-cluster model, zero outbound calls.", s.airgapped)}
         </div>
       </div>
       <div class="panel">
@@ -325,6 +408,18 @@
             <select id="tone" style="min-width:280px">${tones.map(([v, l]) => `<option value="${v}"${s.tone === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
           <div class="settings-row"><div><div class="sr-label">Fail the check on</div><div class="sr-desc">Severities that make the Cavix status check fail (and can block merge).</div></div>
             <div>${sevChecks}</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Review comment structure</h2><span class="sub">What the posted PR review includes</span></div><a class="btn btn-soft btn-sm" onclick="location.hash='sample'">Preview</a></div>
+        <div class="panel-body" style="padding-top:6px">
+          ${rsToggle("summary", "Summary", "A plain-English walkthrough of the change.")}
+          ${rsToggle("changedFiles", "Changed-files table", "A table of files with one-line descriptions.")}
+          ${rsToggle("sequenceDiagram", "Sequence diagram", "A diagram of the new flow when relevant.")}
+          ${rsToggle("reviewEffort", "Review-effort estimate", "A 1 to 5 estimate of how much review this needs.")}
+          ${rsToggle("relatedIssues", "Labels &amp; linked issues", "Auto labels and linked tickets (Jira / Linear).")}
+          ${rsToggle("inlineFindings", "Inline findings", "Line-level comments with severity and suggestions.")}
+          ${rsToggle("proof", "Verification proof", "The failing test that proves a verified bug.")}
         </div>
       </div>
       <div class="panel">
@@ -346,7 +441,7 @@
         <div class="panel-head"><div><h2>Pre-merge checks</h2><span class="sub">Optional gate · off by default</span></div>
           <label class="switch"><input type="checkbox" id="pmEnabled"${pm.enabled ? " checked" : ""}><span class="slider"></span></label></div>
         <div class="panel-body">
-          <p class="sr-desc" style="margin-bottom:16px">Write rules in plain English. When enabled, each becomes a deterministic, non-bypassable check that runs before merge — a failing rule fails the Cavix status check.</p>
+          <p class="sr-desc" style="margin-bottom:16px">Write rules in plain English. When enabled, each becomes a deterministic, non-bypassable check that runs before merge, a failing rule fails the Cavix status check.</p>
           <div id="rulesList"></div>
           <div class="chip-input"><input id="ruleInput" placeholder="e.g. Every new endpoint must have an authentication check"><button class="btn btn-primary" id="addRule">Add rule</button></div>
         </div>
@@ -363,11 +458,14 @@
       $(inp).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $(btn).click(); } }));
 
     $("saveSettings").addEventListener("click", async () => {
+      const reviewSections = {};
+      document.querySelectorAll("[data-rs]").forEach((el) => { reviewSections[el.dataset.rs] = el.checked; });
       const patch = {
         tone: $("tone").value,
         failOn: [...document.querySelectorAll(".failOn:checked")].map((c) => c.value),
         pathFilters: { include: pfInc, exclude: pfExc },
         preMergeChecks: { enabled: $("pmEnabled").checked, rules: settingsRules },
+        reviewSections,
       };
       document.querySelectorAll("[data-key]").forEach((el) => { patch[el.dataset.key] = el.checked; });
       try { await api(`/api/orgs/${org}/settings`, { method: "PUT", body: JSON.stringify(patch) }); toast("Settings saved"); }
@@ -384,7 +482,7 @@
     const rl = $("rulesList");
     if (rl) rl.innerHTML = settingsRules.length
       ? settingsRules.map((r, i) => `<div class="rule-row"><span class="mono-badge" style="width:24px;height:24px;font-size:11px">${i + 1}</span><span class="rule-txt">${esc(r)}</span><button class="btn btn-danger btn-sm" onclick="cavixChipDel('rule',${i})">Remove</button></div>`).join("")
-      : `<div class="chips-empty" style="padding:6px 0">No rules yet — add one below.</div>`;
+      : `<div class="chips-empty" style="padding:6px 0">No rules yet, add one below.</div>`;
   }
   window.cavixChipDel = function (kind, i) { const a = kind === "inc" ? pfInc : kind === "exc" ? pfExc : settingsRules; a.splice(i, 1); repaintSettings(); };
 
@@ -406,7 +504,7 @@
         <table class="table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Joined</th></tr></thead><tbody>${rows}</tbody></table>
       </div>
       <div class="panel"><div class="panel-body">
-        <div class="settings-row"><div><div class="sr-label">Invite teammates</div><div class="sr-desc">Share your organization name <b>${esc(org)}</b> — teammates sign up and join automatically. Production connects this to SSO/SCIM.</div></div>
+        <div class="settings-row"><div><div class="sr-label">Invite teammates</div><div class="sr-desc">Share your organization name <b>${esc(org)}</b>, teammates sign up and join automatically. Production connects this to SSO/SCIM.</div></div>
         <button class="btn btn-soft btn-sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(org)}');cavixToast('Org name copied')">Copy org name</button></div>
       </div></div>`;
   }
@@ -425,7 +523,7 @@
     const price = (t) => t.custom ? "Custom" : (t.byok === 0 ? "$0" : (t.byok === t.managed ? `$${t.byok}/seat/mo` : `$${t.byok}–${t.managed}/seat/mo`));
     content.innerHTML = `
       <div class="panel"><div class="panel-head"><h2>Current plan</h2></div>
-        <div class="panel-body"><div class="settings-row"><div><div class="sr-label">${tier === "free" ? "Free / OSS" : tier === "paid" ? "Team / Pro" : "Enterprise"}</div><div class="sr-desc">Billing is illustrative in this trial build — connect Stripe for production charging.</div></div><span class="badge badge-verified">active</span></div></div>
+        <div class="panel-body"><div class="settings-row"><div><div class="sr-label">${tier === "free" ? "Free / OSS" : tier === "paid" ? "Team / Pro" : "Enterprise"}</div><div class="sr-desc">Billing is illustrative in this trial build, connect Stripe for production charging.</div></div><span class="badge badge-verified">active</span></div></div>
       </div>
       <div class="pricing">
         ${P.tiers.map((t) => `<div class="plan${t.featured ? " featured" : ""}"><h3>${esc(t.name)}</h3><div class="price">${price(t)}</div><div class="srcnote">${esc(t.source)}</div><ul>${t.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
@@ -470,7 +568,7 @@
       <div class="panel">
         <div class="panel-head"><div><h2>What Cavix has learned</h2><span class="sub">${mine.length} preference${mine.length === 1 ? "" : "s"} from your accept/reject history</span></div><span class="badge badge-verified">personalization lock-in</span></div>
         <div class="panel-body">
-          <p class="sr-desc" style="margin-bottom:16px">Every accept/reject tunes Cavix to <b>your</b> team's bar — thresholds, which nits to suppress, what's worth proving. A competitor starts cold; Cavix starts tuned.</p>
+          <p class="sr-desc" style="margin-bottom:16px">Every accept/reject tunes Cavix to <b>your</b> team's bar, thresholds, which nits to suppress, what's worth proving. A competitor starts cold; Cavix starts tuned.</p>
           ${mine.length ? `<table class="table"><thead><tr><th>Signal</th><th>Source</th><th>Decision</th><th>By</th></tr></thead><tbody>
             ${mine.map((d) => `<tr><td class="mono" style="color:var(--text-faint)">${esc(d.findingId)}</td><td><span class="badge">${esc(d.source)}</span></td><td><span class="decided ${esc(d.state)}">${esc(d.state)}</span></td><td style="color:var(--text-dim)">${esc(d.user)}</td></tr>`).join("")}
           </tbody></table>` : `<div class="empty" style="padding:40px">No learnings yet. Accept or reject findings on the Reviews page and they'll appear here.</div>`}
@@ -488,7 +586,7 @@
       <div class="panel">
         <div class="panel-head"><h2>Source control</h2><span class="sub">Where Cavix reviews pull requests</span></div>
         <div class="repo-list" style="border:none">
-          ${row("GH", "GitHub", gh.connected ? "Connected — reviews & checks active" : "Sign in to connect your orgs and repos", gh.connected ? connected : soon, gh.connected ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`)}
+          ${row("GH", "GitHub", gh.connected ? "Connected, reviews & checks active" : "Sign in to connect your orgs and repos", gh.connected ? connected : soon, gh.connected ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`)}
           ${row("GL", "GitLab", "Merge-request reviews (adapter ready)", soon)}
           ${row("BB", "Bitbucket", "PR reviews incl. Server (adapter ready)", soon)}
           ${row("AZ", "Azure DevOps", "PR reviews (adapter ready)", soon)}
@@ -504,7 +602,7 @@
       </div>`;
   }
 
-  // ---------- ADMIN (founder / core team only) — redesigned ----------
+  // ---------- ADMIN (founder / core team only), redesigned ----------
   async function renderAdmin() {
     const orgs = await api(`/api/admin/orgs`);
     const totals = {

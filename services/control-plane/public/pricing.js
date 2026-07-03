@@ -1,4 +1,4 @@
-// Cavix pricing — ONE source of truth for the whole site (landing + dashboard billing).
+// Cavix pricing, ONE source of truth for the whole site (landing + dashboard billing).
 // Prices from PRODUCT_AND_BUSINESS_ROADMAP §9. Edit here; both pages update together.
 window.CAVIX_PRICING = {
   annualDiscount: 0.2,

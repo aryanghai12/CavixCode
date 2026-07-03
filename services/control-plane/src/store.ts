@@ -51,6 +51,16 @@ export interface OrgSettings {
   pathFilters: { include: string[]; exclude: string[] };
   /** Optional pre-merge gate (OFF by default). Owner writes plain-English rules. */
   preMergeChecks: { enabled: boolean; rules: string[] };
+  /** Which sections the posted PR review comment includes (structure control). */
+  reviewSections: {
+    summary: boolean;
+    changedFiles: boolean;
+    sequenceDiagram: boolean;
+    reviewEffort: boolean;
+    relatedIssues: boolean;
+    inlineFindings: boolean;
+    proof: boolean;
+  };
   /** Set once a BYOK key is stored. The raw key is AES-GCM encrypted and never returned. */
   apiKeyFingerprint?: string;
   apiKeySetAt?: string;
@@ -216,6 +226,7 @@ function defaultSettings(): OrgSettings {
     airgapped: process.env.CAVIX_AIRGAPPED === "true",
     pathFilters: { include: [], exclude: ["**/*.min.js", "**/generated/**", "**/vendor/**"] },
     preMergeChecks: { enabled: false, rules: [] },
+    reviewSections: { summary: true, changedFiles: true, sequenceDiagram: true, reviewEffort: true, relatedIssues: true, inlineFindings: true, proof: true },
   };
 }
 
@@ -436,7 +447,7 @@ export class InMemoryStore implements Store {
   updateSettings(org: string, patch: Partial<OrgSettings>): OrgSettings {
     const s = this.getSettings(org);
     // Only allow known, safe fields to be patched (never the fingerprint directly).
-    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped", "pathFilters", "preMergeChecks"];
+    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped", "pathFilters", "preMergeChecks", "reviewSections"];
     for (const k of allowed) {
       if (patch[k] !== undefined) (s as Record<string, unknown>)[k] = patch[k];
     }
