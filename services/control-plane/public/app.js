@@ -7,6 +7,7 @@
 
   // ---------- tiny helpers ----------
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const ic = (n, c) => (window.icon ? window.icon(n, c) : "");
   async function api(path, opts) {
     const res = await fetch(path, Object.assign({ headers: { "content-type": "application/json" } }, opts));
     if (res.status === 401) { location.href = "/login"; throw new Error("unauthorized"); }
@@ -50,6 +51,8 @@
     $("userOrg").textContent = `${me.org} · ${me.role}`;
     $("avatar").textContent = (me.name || me.email)[0].toUpperCase();
     if (me.platformAdmin) document.querySelectorAll(".admin-only").forEach((el) => el.classList.remove("hidden"));
+    // Consistent SVG nav icons (view name maps 1:1 to an icon).
+    if (window.icon) document.querySelectorAll(".nav-item").forEach((el) => { const s = el.querySelector(".ni-ico"); if (s) s.innerHTML = window.icon(el.dataset.view); });
     $("logout").addEventListener("click", async () => { await api("/api/auth/logout", { method: "POST" }); location.href = "/"; });
     $("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("open"));
     $("topAction").addEventListener("click", (e) => { e.preventDefault(); go("repos"); });
@@ -66,9 +69,9 @@
     $("viewTitle").textContent = VIEWS[view].title;
     $("viewCrumb").textContent = VIEWS[view].crumb;
     $("sidebar").classList.remove("open");
-    content.innerHTML = `<div class="empty"><div class="big">⏳</div>Loading…</div>`;
+    content.innerHTML = `<div class="empty">Loading…</div>`;
     VIEWS[view].render().catch((err) => {
-      content.innerHTML = `<div class="empty"><div class="big">⚠️</div>${esc(err.message)}</div>`;
+      content.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
     });
   }
 
@@ -84,10 +87,10 @@
 
     content.innerHTML = `
       <div class="stat-grid">
-        <div class="stat"><div class="label">🔬 Reviews run</div><div class="value">${s.reviews}</div><div class="delta">last 30 days</div></div>
-        <div class="stat"><div class="label">✅ Verified findings</div><div class="value grad">${s.verified}</div><div class="delta">proven in a sandbox</div></div>
-        <div class="stat"><div class="label">🎯 Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div><div class="delta">accepted of decided</div></div>
-        <div class="stat"><div class="label">⏱️ Reviewer-hours saved</div><div class="value">${s.hoursSaved}</div><div class="delta">est. this period</div></div>
+        <div class="stat"><div class="label">${ic("reviews")} Reviews run</div><div class="value">${s.reviews}</div><div class="delta">last 30 days</div></div>
+        <div class="stat"><div class="label">${ic("check")} Verified findings</div><div class="value grad">${s.verified}</div><div class="delta">proven in a sandbox</div></div>
+        <div class="stat"><div class="label">${ic("target")} Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div><div class="delta">accepted of decided</div></div>
+        <div class="stat"><div class="label">${ic("clock")} Reviewer-hours saved</div><div class="value">${s.hoursSaved}</div><div class="delta">est. this period</div></div>
       </div>
       <div class="grid grid-2">
         <div class="panel">
@@ -115,13 +118,13 @@
   async function renderReviews() {
     const reviews = await api(`/api/reviews?org=${org}`);
     if (!reviews.length) {
-      content.innerHTML = `<div class="empty"><div class="big">🔬</div>No reviews yet. Connect a repo and open a pull request — findings will appear here.</div>`;
+      content.innerHTML = `<div class="empty">No reviews yet. Connect a repository and open a pull request — findings will appear here.</div>`;
       return;
     }
     content.innerHTML = reviews.map((r) => {
       const findings = r.findings.map((f) => {
-        const source = f.immutable ? `<span class="badge badge-policy">🔒 policy</span>` : `<span class="badge">${esc(f.source)}</span>`;
-        const verified = f.verified ? `<span class="badge badge-verified">✅ verified</span>` : "";
+        const source = f.immutable ? `<span class="badge badge-policy">policy</span>` : `<span class="badge">${esc(f.source)}</span>`;
+        const verified = f.verified ? `<span class="badge badge-verified">verified</span>` : "";
         const decided = f.decision ? `<span class="decided ${esc(f.decision.state)}">${esc(f.decision.state)} by ${esc(f.decision.user)}</span>` : "";
         const actions = f.decision ? decided : `
           <button class="btn btn-soft btn-sm" onclick="cavixDecide('${f.id}','accepted',this)">Accept</button>
@@ -210,7 +213,7 @@
   }
   async function loadRepos() {
     try { repoState.repos = await api(`/api/github/repos?org=${encodeURIComponent(repoState.org)}`); paintRepos(""); }
-    catch (e) { $("repoList").innerHTML = `<div class="empty" style="padding:30px">⚠️ ${esc(e.message)}</div>`; }
+    catch (e) { $("repoList").innerHTML = `<div class="empty" style="padding:30px">${esc(e.message)}</div>`; }
   }
   function paintRepos(filter) {
     const q = (filter || "").toLowerCase();
@@ -219,7 +222,7 @@
     if (!repos.length) { list.innerHTML = `<div class="empty" style="padding:30px">No repositories match.</div>`; return; }
     list.innerHTML = repos.map((r) => `
       <div class="repo-row" data-full="${esc(r.fullName)}">
-        <div class="r-ico">${r.private ? "🔒" : "📖"}</div>
+        <div class="r-ico">${r.private ? ic("lock") : ic("repos")}</div>
         <div class="r-main">
           <div class="r-name">${esc(r.name)} <span class="badge">${r.private ? "private" : "public"}</span></div>
           <div class="r-desc">${esc(r.description || "No description")}</div>
@@ -240,7 +243,7 @@
   async function renderFeed() {
     const feed = await api(`/api/feed/proven`);
     if (!feed.length) {
-      content.innerHTML = `<div class="empty"><div class="big">🏆</div>No proven catches yet. Verified findings from opted-in public repos appear here.</div>`;
+      content.innerHTML = `<div class="empty">No proven catches yet. Verified findings from opted-in public repositories appear here.</div>`;
       return;
     }
     content.innerHTML = `<div class="panel"><div class="panel-head"><h2>Proven catches</h2><span class="sub">Execution-verified findings, opted in by their owners</span></div>
@@ -275,7 +278,7 @@
           <div style="margin-bottom:16px">${status}</div>
           <div class="field" style="margin:0"><label>Paste a new key</label><input id="apiKey" type="password" placeholder="sk-ant-… / sk-… / your model token"></div>
           <button class="btn btn-primary btn-sm" id="saveKey" style="margin-top:14px">Save key securely</button>
-          <p class="sr-desc" style="margin-top:14px">🔒 Cavix never logs your key and never marks up tokens — you pay your AI provider directly. For air-gapped installs, choose <b>selfhosted</b> and your in-cluster model is used with zero outbound calls.</p>
+          <p class="sr-desc" style="margin-top:14px">Cavix never logs your key and never marks up tokens — you pay your AI provider directly. For air-gapped installs, choose <b>selfhosted</b> and your in-cluster model is used with zero outbound calls.</p>
         </div>
       </div>`;
 
@@ -325,38 +328,45 @@
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><div><h2>Path filters</h2></div><span class="sub">Which files are reviewed</span></div>
+        <div class="panel-head"><div><h2>Path filters</h2><span class="sub">Which files Cavix reviews</span></div></div>
         <div class="panel-body">
-          <div class="field" style="margin-bottom:14px"><label>Include (one glob per line — empty = everything)</label><textarea id="pfInclude" rows="3" style="width:100%;font-family:var(--mono);font-size:13px;background:var(--bg-elev);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:10px">${esc((pf.include || []).join("\n"))}</textarea></div>
-          <div class="field" style="margin:0"><label>Exclude (always skipped)</label><textarea id="pfExclude" rows="3" style="width:100%;font-family:var(--mono);font-size:13px;background:var(--bg-elev);border:1px solid var(--border);border-radius:9px;color:var(--text);padding:10px">${esc((pf.exclude || []).join("\n"))}</textarea></div>
+          <div class="settings-row" style="align-items:flex-start"><div style="flex:1">
+            <div class="sr-label">Include</div><div class="sr-desc">If set, only these globs are reviewed. Leave empty to review everything.</div>
+            <div class="chips" id="pfIncList" style="margin-top:12px"></div>
+            <div class="chip-input"><input id="pfIncInput" placeholder="src/**"><button class="btn btn-soft" id="pfIncAdd">Add</button></div>
+          </div></div>
+          <div class="settings-row" style="align-items:flex-start;border-bottom:none"><div style="flex:1">
+            <div class="sr-label">Exclude</div><div class="sr-desc">These globs are always skipped.</div>
+            <div class="chips" id="pfExcList" style="margin-top:12px"></div>
+            <div class="chip-input"><input id="pfExcInput" placeholder="**/*.min.js"><button class="btn btn-soft" id="pfExcAdd">Add</button></div>
+          </div></div>
         </div>
       </div>
       <div class="panel">
         <div class="panel-head"><div><h2>Pre-merge checks</h2><span class="sub">Optional gate · off by default</span></div>
           <label class="switch"><input type="checkbox" id="pmEnabled"${pm.enabled ? " checked" : ""}><span class="slider"></span></label></div>
         <div class="panel-body">
-          <p class="sr-desc" style="margin-bottom:14px">Write rules in plain English. When enabled, each compiles into a deterministic, non-bypassable check that runs before merge — a failing rule fails the Cavix status check.</p>
+          <p class="sr-desc" style="margin-bottom:16px">Write rules in plain English. When enabled, each becomes a deterministic, non-bypassable check that runs before merge — a failing rule fails the Cavix status check.</p>
           <div id="rulesList"></div>
-          <div class="rule-add"><input id="ruleInput" placeholder="e.g. Every new endpoint must have an authentication check"><button class="btn btn-soft" id="addRule">+ Add rule</button></div>
+          <div class="chip-input"><input id="ruleInput" placeholder="e.g. Every new endpoint must have an authentication check"><button class="btn btn-primary" id="addRule">Add rule</button></div>
         </div>
       </div>
       <button class="btn btn-primary" id="saveSettings">Save settings</button>`;
 
-    paintRules();
-    $("addRule").addEventListener("click", () => {
-      const v = $("ruleInput").value.trim(); if (!v) return;
-      settingsRules.push(v); $("ruleInput").value = ""; paintRules();
-    });
-    $("ruleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("addRule").click(); } });
+    pfInc = [...(pf.include || [])]; pfExc = [...(pf.exclude || [])]; settingsRules = [...(pm.rules || [])];
+    repaintSettings();
+    const addFrom = (inputId, arr) => { const v = $(inputId).value.trim(); if (!v) return; arr.push(v); $(inputId).value = ""; repaintSettings(); };
+    $("pfIncAdd").addEventListener("click", () => addFrom("pfIncInput", pfInc));
+    $("pfExcAdd").addEventListener("click", () => addFrom("pfExcInput", pfExc));
+    $("addRule").addEventListener("click", () => addFrom("ruleInput", settingsRules));
+    [["pfIncInput", "pfIncAdd"], ["pfExcInput", "pfExcAdd"], ["ruleInput", "addRule"]].forEach(([inp, btn]) =>
+      $(inp).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $(btn).click(); } }));
 
     $("saveSettings").addEventListener("click", async () => {
       const patch = {
         tone: $("tone").value,
         failOn: [...document.querySelectorAll(".failOn:checked")].map((c) => c.value),
-        pathFilters: {
-          include: $("pfInclude").value.split("\n").map((x) => x.trim()).filter(Boolean),
-          exclude: $("pfExclude").value.split("\n").map((x) => x.trim()).filter(Boolean),
-        },
+        pathFilters: { include: pfInc, exclude: pfExc },
         preMergeChecks: { enabled: $("pmEnabled").checked, rules: settingsRules },
       };
       document.querySelectorAll("[data-key]").forEach((el) => { patch[el.dataset.key] = el.checked; });
@@ -364,14 +374,19 @@
       catch (e) { toast(e.message); }
     });
   }
-  let settingsRules = [];
-  function paintRules() {
-    const list = $("rulesList"); if (!list) return;
-    list.innerHTML = settingsRules.length
-      ? settingsRules.map((r, i) => `<div class="rule-row"><span class="pm-ico" style="width:22px;height:22px;border-radius:6px;background:var(--bg-elev);display:grid;place-items:center;font-size:11px">${i + 1}</span><span class="rule-txt">${esc(r)}</span><button class="btn btn-danger btn-sm" onclick="cavixRemoveRule(${i})">Remove</button></div>`).join("")
-      : `<div class="sr-desc" style="padding:6px 0">No rules yet. Add one below.</div>`;
+  let pfInc = [], pfExc = [], settingsRules = [];
+  function chipHtml(arr, kind, emptyMsg) {
+    return arr.length ? arr.map((v, i) => `<span class="chip"><code>${esc(v)}</code><span class="x" onclick="cavixChipDel('${kind}',${i})">×</span></span>`).join("") : `<span class="chips-empty">${emptyMsg}</span>`;
   }
-  window.cavixRemoveRule = function (i) { settingsRules.splice(i, 1); paintRules(); };
+  function repaintSettings() {
+    if ($("pfIncList")) $("pfIncList").innerHTML = chipHtml(pfInc, "inc", "Reviewing everything.");
+    if ($("pfExcList")) $("pfExcList").innerHTML = chipHtml(pfExc, "exc", "Nothing excluded.");
+    const rl = $("rulesList");
+    if (rl) rl.innerHTML = settingsRules.length
+      ? settingsRules.map((r, i) => `<div class="rule-row"><span class="mono-badge" style="width:24px;height:24px;font-size:11px">${i + 1}</span><span class="rule-txt">${esc(r)}</span><button class="btn btn-danger btn-sm" onclick="cavixChipDel('rule',${i})">Remove</button></div>`).join("")
+      : `<div class="chips-empty" style="padding:6px 0">No rules yet — add one below.</div>`;
+  }
+  window.cavixChipDel = function (kind, i) { const a = kind === "inc" ? pfInc : kind === "exc" ? pfExc : settingsRules; a.splice(i, 1); repaintSettings(); };
 
   // ---------- TEAM ----------
   async function renderTeam() {
@@ -413,7 +428,7 @@
         <div class="panel-body"><div class="settings-row"><div><div class="sr-label">${tier === "free" ? "Free / OSS" : tier === "paid" ? "Team / Pro" : "Enterprise"}</div><div class="sr-desc">Billing is illustrative in this trial build — connect Stripe for production charging.</div></div><span class="badge badge-verified">active</span></div></div>
       </div>
       <div class="pricing">
-        ${P.tiers.map((t) => `<div class="plan${t.featured ? " featured" : ""} spot"><h3>${esc(t.name)}</h3><div class="price">${price(t)}</div><div class="srcnote">${esc(t.source)}</div><ul>${t.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+        ${P.tiers.map((t) => `<div class="plan${t.featured ? " featured" : ""}"><h3>${esc(t.name)}</h3><div class="price">${price(t)}</div><div class="srcnote">${esc(t.source)}</div><ul>${t.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
           ${(t.tierMatch === tier) ? `<button class="btn btn-soft btn-block" disabled>Current plan</button>` : `<button class="btn ${t.featured ? "btn-primary" : "btn-soft"} btn-block" onclick="cavixToast('Connect Stripe to enable upgrades')">${t.id === "enterprise" ? "Contact sales" : "Choose plan"}</button>`}
         </div>`).join("")}
       </div>
@@ -430,10 +445,10 @@
     }).join("");
     content.innerHTML = `
       <div class="stat-grid">
-        <div class="stat"><div class="label">🔬 Reviews</div><div class="value">${s.reviews}</div></div>
-        <div class="stat"><div class="label">✅ Verified</div><div class="value grad">${s.verified}</div></div>
-        <div class="stat"><div class="label">🎯 Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div></div>
-        <div class="stat"><div class="label">⏱️ Hours saved</div><div class="value">${s.hoursSaved}</div></div>
+        <div class="stat"><div class="label">${ic("reviews")} Reviews</div><div class="value">${s.reviews}</div></div>
+        <div class="stat"><div class="label">${ic("check")} Verified</div><div class="value grad">${s.verified}</div></div>
+        <div class="stat"><div class="label">${ic("target")} Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div></div>
+        <div class="stat"><div class="label">${ic("clock")} Hours saved</div><div class="value">${s.hoursSaved}</div></div>
       </div>
       <div class="grid grid-2">
         <div class="panel"><div class="panel-head"><h2>Findings by severity</h2></div><div class="panel-body">${bars}</div></div>
@@ -444,7 +459,7 @@
           <div class="settings-row"><div class="sr-label">Repositories</div><b>${s.reposConnected}</b></div>
         </div></div>
       </div>
-      <div class="panel"><div class="panel-body"><div class="sr-desc">📈 Reviewer-hours saved uses a per-severity model (minutes to find + author a fix − false-alarm overhead). Export and per-team rollups ship in the analytics package; wire it to your BI tool for board-ready ROI. ${total === 0 ? "Accept or reject some findings to populate action rate." : ""}</div></div></div>`;
+      <div class="panel"><div class="panel-body"><div class="sr-desc">Reviewer-hours saved uses a per-severity model (minutes to find + author a fix − false-alarm overhead). Export and per-team rollups ship in the analytics package; wire it to your BI tool for board-ready ROI. ${total === 0 ? "Accept or reject some findings to populate action rate." : ""}</div></div></div>`;
   }
 
   // ---------- LEARNINGS ----------
@@ -458,7 +473,7 @@
           <p class="sr-desc" style="margin-bottom:16px">Every accept/reject tunes Cavix to <b>your</b> team's bar — thresholds, which nits to suppress, what's worth proving. A competitor starts cold; Cavix starts tuned.</p>
           ${mine.length ? `<table class="table"><thead><tr><th>Signal</th><th>Source</th><th>Decision</th><th>By</th></tr></thead><tbody>
             ${mine.map((d) => `<tr><td class="mono" style="color:var(--text-faint)">${esc(d.findingId)}</td><td><span class="badge">${esc(d.source)}</span></td><td><span class="decided ${esc(d.state)}">${esc(d.state)}</span></td><td style="color:var(--text-dim)">${esc(d.user)}</td></tr>`).join("")}
-          </tbody></table>` : `<div class="empty" style="padding:40px">🧠 No learnings yet. Accept or reject findings on the Reviews page and they'll appear here.</div>`}
+          </tbody></table>` : `<div class="empty" style="padding:40px">No learnings yet. Accept or reject findings on the Reviews page and they'll appear here.</div>`}
         </div>
       </div>`;
   }
@@ -466,25 +481,25 @@
   // ---------- INTEGRATIONS ----------
   async function renderIntegrations() {
     const gh = await api(`/api/github/status`).catch(() => ({ connected: false, demo: true }));
-    const row = (icon, name, desc, state, action) => `<div class="repo-row"><div class="r-ico">${icon}</div><div class="r-main"><div class="r-name">${esc(name)}</div><div class="r-desc">${esc(desc)}</div></div>${state}${action || ""}</div>`;
+    const row = (mono, name, desc, state, action) => `<div class="repo-row"><div class="mono-badge">${esc(mono)}</div><div class="r-main"><div class="r-name">${esc(name)}</div><div class="r-desc">${esc(desc)}</div></div>${state}${action || ""}</div>`;
     const connected = `<span class="badge badge-verified">connected</span>`;
     const soon = `<span class="badge">soon</span>`;
     content.innerHTML = `
       <div class="panel">
         <div class="panel-head"><h2>Source control</h2><span class="sub">Where Cavix reviews pull requests</span></div>
         <div class="repo-list" style="border:none">
-          ${row("🐙", "GitHub", gh.connected ? "Connected — reviews & checks active" : "Sign in to connect your orgs and repos", gh.connected ? connected : soon, gh.connected ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`)}
-          ${row("🦊", "GitLab", "Merge-request reviews (adapter ready)", soon)}
-          ${row("🪣", "Bitbucket", "PR reviews incl. Server (adapter ready)", soon)}
-          ${row("🔷", "Azure DevOps", "PR reviews (adapter ready)", soon)}
+          ${row("GH", "GitHub", gh.connected ? "Connected — reviews & checks active" : "Sign in to connect your orgs and repos", gh.connected ? connected : soon, gh.connected ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`)}
+          ${row("GL", "GitLab", "Merge-request reviews (adapter ready)", soon)}
+          ${row("BB", "Bitbucket", "PR reviews incl. Server (adapter ready)", soon)}
+          ${row("AZ", "Azure DevOps", "PR reviews (adapter ready)", soon)}
         </div>
       </div>
       <div class="panel">
         <div class="panel-head"><h2>Chat &amp; issues</h2><span class="sub">Notifications and ticket linking</span></div>
         <div class="repo-list" style="border:none">
-          ${row("💬", "Slack", "Post review summaries to a channel", soon)}
-          ${row("📋", "Jira", "Link PRs to issues in the summary", soon)}
-          ${row("📐", "Linear", "Link PRs to Linear tickets", soon)}
+          ${row("SL", "Slack", "Post review summaries to a channel", soon)}
+          ${row("JR", "Jira", "Link PRs to issues in the summary", soon)}
+          ${row("LN", "Linear", "Link PRs to Linear tickets", soon)}
         </div>
       </div>`;
   }
@@ -524,7 +539,7 @@
         <div class="panel-head"><div><h2>All organizations</h2><span class="sub">you are a platform admin</span></div><input id="adminSearch" placeholder="Search orgs…" style="max-width:220px"></div>
         <div id="adminRows">${rows}</div>
       </div>
-      <div class="panel"><div class="panel-body"><div class="sr-desc">🛡️ Only emails in <code>CAVIX_ADMIN_EMAILS</code> reach this console. Tier, trial, limit and suspend changes take effect immediately for that org's reviews. See GUIDE.md §8E.</div></div></div>`;
+      <div class="panel"><div class="panel-body"><div class="sr-desc">Only emails in <code>CAVIX_ADMIN_EMAILS</code> reach this console. Tier, trial, limit and suspend changes take effect immediately for that org's reviews. See GUIDE.md §8E.</div></div></div>`;
     const search = $("adminSearch");
     if (search) search.addEventListener("input", (e) => {
       const q = e.target.value.toLowerCase();
