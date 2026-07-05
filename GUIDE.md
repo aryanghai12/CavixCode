@@ -379,17 +379,35 @@ window open. To confirm it's alive, open a browser to `http://127.0.0.1:8080/hea
 — it should respond OK.
 
 ### 8c. The orchestrator (Stage 1 — the conductor that runs the review)
-Open a **second** PowerShell window, go to the project root, then:
+
+> **You do NOT need this for a trial.** The orchestrator is the *background engine*
+> that reviews real GitHub pull requests. It needs **Redis** (a job queue) running, or
+> it exits with `ECONNREFUSED …:6379`. If you just want the website org owners log into,
+> run **`npm run control-plane`** (§8d) — it needs no Redis, no orchestrator, and no
+> keys (owners add their AI key on the site). Only set this up when you want Cavix to
+> post reviews on real PRs.
+
+> **About the keys here:** the site is the source of truth for AI keys — each org adds
+> its own provider/model/key on the **AI & BYOK** page, encrypted at rest. The env vars
+> below are just an **optional single‑org dev shortcut** for running one review locally;
+> you don't feed keys for the trial site.
+
+If you do want the real PR pipeline locally, first start Redis, then run the orchestrator:
 ```powershell
+# 1) Redis is required (the queue between the edge and the orchestrator):
+docker run -p 6379:6379 redis           # needs Docker; leave it running
+
+# 2) In a second PowerShell window, from the project root:
 $env:CAVIX_GITHUB_TOKEN = "github_pat_..."     # a GitHub token that can read/post on the repo
-$env:CAVIX_LLM_API_KEY = "sk-ant-..."          # your AI key (see SETUP_KEYS.md)
-$env:CAVIX_LLM_MODEL = "claude-sonnet-4-6"
 $env:CAVIX_REDIS_HOST = "127.0.0.1"
-$env:CAVIX_SANDBOX_BACKEND = "docker"          # or "local" for simple dev
+$env:CAVIX_SANDBOX_BACKEND = "local"           # or "docker"
+# LLM key is OPTIONAL here — production reads each org's key from the site's BYOK store.
+# For a quick one-org local test only, you may set: $env:CAVIX_LLM_API_KEY = "sk-ant-..."
 npm run orchestrator
 ```
 **What you should see:** it starts up and waits for review jobs. When a PR arrives via
-the edge, it runs the review and posts the comments.
+the edge, it runs the review and posts the comments. If you see the Redis error, Redis
+isn't running — start it with the `docker run` line above.
 
 ### 8d. The web app / control‑plane (the full site: login, dashboard, BYOK)
 ```powershell
@@ -798,12 +816,18 @@ git init; git add -A; git commit -m "Cavix"
 **Step A3 — Set the environment variables** (Render: the **Environment** tab → Add).
 These are the "named slots" from [section 10](#10-configuration--keys-byok):
 ```
-CAVIX_SESSION_SECRET     = <long random string>
-CAVIX_SECRET_KEY         = <another long random string>
-CAVIX_LLM_PROVIDER       = anthropic
-CAVIX_LLM_MODEL          = claude-sonnet-4-6
-CAVIX_ADMIN_EMAILS       = you@yourdomain.com        # so you get the Admin console
+CAVIX_SESSION_SECRET     = <long random string>     # required: signs login cookies
+CAVIX_SECRET_KEY         = <another long random>     # required: encrypts stored BYOK keys
+CAVIX_ADMIN_EMAILS       = you@yourdomain.com         # so you get the Admin console
+CAVIX_LLM_PROVIDER       = anthropic                  # OPTIONAL: default shown to new orgs
+CAVIX_LLM_MODEL          = claude-sonnet-4-6          # OPTIONAL: default model for new orgs
 ```
+> **No AI key here.** You do **not** put any `..._API_KEY` on the website. Each org adds
+> its own key on the **AI & BYOK** page after signing up (that's the whole BYOK point) —
+> it's encrypted at rest. `CAVIX_LLM_PROVIDER` / `CAVIX_LLM_MODEL` are just the *default*
+> a brand‑new org sees; they can change both on the site. So the only **required** vars
+> are the two secrets.
+>
 > **Port:** you do **not** need to set a port. The control‑plane automatically listens
 > on Render's `$PORT` (and binds `0.0.0.0`), so it works out of the box. Locally it
 > still defaults to `8088`.

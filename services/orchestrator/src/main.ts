@@ -79,6 +79,16 @@ async function main() {
 }
 
 main().catch((err) => {
-  log("error", "fatal", { err: (err as Error).message });
+  const msg = (err as Error).message;
+  if (/ECONNREFUSED|:6379|redis/i.test(msg)) {
+    log("error", "cannot reach Redis, which the orchestrator needs as its job queue", {
+      err: msg,
+      why: "The orchestrator is the background engine that reviews real pull requests. It reads jobs from a Redis queue the edge fills.",
+      fix: "Start Redis first:  docker run -p 6379:6379 redis   (or set CAVIX_REDIS_HOST / CAVIX_REDIS_PORT to your Redis).",
+      note: "If you only want the website + dashboard for a trial, run `npm run control-plane` instead — it needs no Redis and no orchestrator. Org owners add their AI key on the site.",
+    });
+  } else {
+    log("error", "fatal", { err: msg });
+  }
   process.exit(1);
 });
