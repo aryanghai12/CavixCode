@@ -5,7 +5,9 @@
 import { createControlPlane } from "./server.ts";
 import { InMemoryStore } from "./store.ts";
 
-const port = Number(process.env.CAVIX_CONTROL_PLANE_PORT ?? "8088");
+// Honor $PORT so managed hosts (Render/Railway/Fly/Heroku) work with no extra config.
+const port = Number(process.env.CAVIX_CONTROL_PLANE_PORT ?? process.env.PORT ?? "8088");
+const host = process.env.CAVIX_CONTROL_PLANE_HOST ?? "0.0.0.0";
 const store = new InMemoryStore();
 
 // Seed a demo workspace so the dashboard isn't empty on first login.
@@ -33,6 +35,6 @@ store.saveReview({
   ],
 });
 
-createControlPlane(store).listen(port, () => {
-  console.log(JSON.stringify({ level: "info", service: "control-plane", msg: "listening", port, url: `http://127.0.0.1:${port}` }));
+createControlPlane(store).listen(port, host, () => {
+  console.log(JSON.stringify({ level: "info", service: "control-plane", msg: "listening", host, port, url: `http://127.0.0.1:${port}` }));
 });

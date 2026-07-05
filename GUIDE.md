@@ -790,21 +790,23 @@ git init; git add -A; git commit -m "Cavix"
 3. Fill in:
    - **Runtime:** Node
    - **Build Command:** `npm install`
-   - **Start Command:** `npm run control-plane`
+   - **Start Command:** `npm run control-plane`  ← **this is the website.** Do **not**
+     use `npm run orchestrator` here — that's the background review engine (it needs
+     Redis and will exit on a web host).
    - **Instance type:** the free or cheapest paid tier is fine to start.
 
 **Step A3 — Set the environment variables** (Render: the **Environment** tab → Add).
 These are the "named slots" from [section 10](#10-configuration--keys-byok):
 ```
-CAVIX_CONTROL_PLANE_PORT = 10000        # Render provides $PORT; set this to match, or use 8088 locally
 CAVIX_SESSION_SECRET     = <long random string>
 CAVIX_SECRET_KEY         = <another long random string>
 CAVIX_LLM_PROVIDER       = anthropic
 CAVIX_LLM_MODEL          = claude-sonnet-4-6
+CAVIX_ADMIN_EMAILS       = you@yourdomain.com        # so you get the Admin console
 ```
-> On Render the platform sets a `$PORT` for you; make sure the app listens on it. The
-> control‑plane reads `CAVIX_CONTROL_PLANE_PORT` — set that to the same value Render
-> expects (its docs show the port), or `10000` which is Render's default.
+> **Port:** you do **not** need to set a port. The control‑plane automatically listens
+> on Render's `$PORT` (and binds `0.0.0.0`), so it works out of the box. Locally it
+> still defaults to `8088`.
 
 **Step A4 — Deploy.** Click **Create Web Service**. Render installs and starts it. In a
 minute you'll get a public URL like `https://cavix.onrender.com`. Open it — the

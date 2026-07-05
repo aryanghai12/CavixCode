@@ -63,7 +63,8 @@ export class BullMqEngine implements WorkflowEngine {
   }
 
   private get queueName(): string {
-    return this.opts.queueName ?? "cavix:reviews";
+    // BullMQ forbids ':' in queue names (it uses ':' internally for Redis keys).
+    return (this.opts.queueName ?? process.env.CAVIX_QUEUE_NAME ?? "cavix-reviews").replace(/:/g, "-");
   }
 
   registerWorker(handler: ReviewHandler): void {
