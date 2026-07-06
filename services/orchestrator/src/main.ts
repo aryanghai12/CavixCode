@@ -45,10 +45,19 @@ async function main() {
     logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
   });
 
+  // ioredis (BullMQ) wants `tls` as an options object, not a boolean.
+  const bullConnection = {
+    host: cfg.redis.host,
+    port: cfg.redis.port,
+    username: cfg.redis.username,
+    password: cfg.redis.password,
+    ...(cfg.redis.tls ? { tls: {} } : {}),
+  };
+
   // Durable engine: BullMQ if available, else inline (dev). Same port either way.
   const useBull = (process.env.CAVIX_ENGINE ?? "bullmq") === "bullmq";
   const engine = useBull
-    ? new BullMqEngine({ connection: cfg.redis, logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) } })
+    ? new BullMqEngine({ connection: bullConnection, logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) } })
     : new InlineEngine({ logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) } });
   engine.registerWorker(handler);
   if (engine instanceof BullMqEngine) await engine.start();
@@ -56,6 +65,9 @@ async function main() {
   const source = await RedisStreamSource.create({
     host: cfg.redis.host,
     port: cfg.redis.port,
+    username: cfg.redis.username,
+    password: cfg.redis.password,
+    tls: cfg.redis.tls,
     stream: cfg.stream,
     group: cfg.group,
     consumer: cfg.consumer,

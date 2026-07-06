@@ -13,6 +13,9 @@ export interface RedisStreamSourceOptions {
   stream: string;
   group: string;
   consumer: string;
+  username?: string;
+  password?: string;
+  tls?: boolean;
 }
 
 export class RedisStreamSource implements StreamSource {
@@ -25,7 +28,7 @@ export class RedisStreamSource implements StreamSource {
   }
 
   static async create(opts: RedisStreamSourceOptions): Promise<RedisStreamSource> {
-    const client = await RespClient.connect(opts.host, opts.port);
+    const client = await RespClient.connect(opts.host, opts.port, { username: opts.username, password: opts.password, tls: opts.tls });
     const source = new RedisStreamSource(client, opts);
     await source.ensureGroup();
     return source;

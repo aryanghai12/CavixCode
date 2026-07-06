@@ -30,8 +30,8 @@ interface MinimalBullMq {
 }
 
 export interface BullMqEngineOptions {
-  /** Redis connection, e.g. { host: "localhost", port: 6379 }. */
-  connection: { host: string; port: number };
+  /** Redis connection (ioredis-shaped): host/port plus optional auth + TLS. */
+  connection: { host: string; port: number; username?: string; password?: string; tls?: unknown };
   queueName?: string;
   retries?: number;
   backoffMs?: number;

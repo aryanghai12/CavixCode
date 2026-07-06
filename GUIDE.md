@@ -409,6 +409,16 @@ npm run orchestrator
 the edge, it runs the review and posts the comments. If you see the Redis error, Redis
 isn't running — start it with the `docker run` line above.
 
+> **Deploying against a managed Redis** (Redis Cloud, Upstash, Render Key Value)?
+> Those require a **password and usually TLS** over the public internet. Don't use the
+> bare `CAVIX_REDIS_HOST`/`_PORT` (they drop the password). Instead paste the one
+> connection URL your provider gives you:
+> ```powershell
+> $env:CAVIX_REDIS_URL = "rediss://default:YOUR_PASSWORD@your-host.redis.cloud:6380"
+> ```
+> That single var sets host, port, username, password, and TLS. (Or set
+> `CAVIX_REDIS_PASSWORD` / `CAVIX_REDIS_USERNAME` / `CAVIX_REDIS_TLS=true` separately.)
+
 ### 8d. The web app / control‑plane (the full site: login, dashboard, BYOK)
 ```powershell
 npm run control-plane        # runs the whole website at http://127.0.0.1:8088
@@ -1201,6 +1211,8 @@ Key slots at a glance:
 | `CAVIX_APP_ID` | orchestrator | Your GitHub App's ID number (production login) |
 | `CAVIX_APP_PRIVATE_KEY` | orchestrator | Your GitHub App's private key file contents (production login) |
 | `CAVIX_REDIS_ADDR` / `_HOST` / `_PORT` | edge / orchestrator | Where the job queue lives (optional — omit for built‑in) |
+| `CAVIX_REDIS_URL` | orchestrator | **Managed Redis in one line**, e.g. `rediss://default:PASSWORD@host:6380`. Sets host, port, username, password, and TLS all at once (use this for Redis Cloud / Upstash / Render Key Value). |
+| `CAVIX_REDIS_PASSWORD` / `_USERNAME` / `_TLS` | orchestrator | Redis auth + TLS as separate vars (alternative to the URL). `_TLS=true` for `rediss`. |
 | `CAVIX_GITHUB_TOKEN` | orchestrator | A personal GitHub token — developer/testing only |
 | `ANTHROPIC_API_KEY` / `CAVIX_LLM_API_KEY` | gateway | Your AI key |
 | `CAVIX_LLM_MODEL` | gateway | Which AI model |

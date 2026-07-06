@@ -1,12 +1,26 @@
 import net from "node:net";
+import tls from "node:tls";
 
-// A minimal RESP (v2) client over node:net — same philosophy as the Go edge:
-// no third-party Redis dependency, so the orchestrator stays light and
-// air-gapped-friendly. It supports exactly what the stream bridge needs:
-// sending a command (array of bulk strings) and parsing one reply, including the
-// nested arrays that XREADGROUP returns.
+// A minimal RESP (v2) client over node:net / node:tls — same philosophy as the Go
+// edge: no third-party Redis dependency, so the orchestrator stays light and
+// air-gapped-friendly. It supports exactly what the stream bridge needs: sending a
+// command (array of bulk strings) and parsing one reply, including the nested arrays
+// that XREADGROUP returns. Managed Redis (Redis Cloud, Upstash, ElastiCache-in-transit)
+// needs a password and usually TLS — both are supported here.
 
 export type RespValue = string | number | null | RespValue[];
+
+export interface RespConnectOptions {
+  timeoutMs?: number;
+  /** ACL username (Redis 6+). Omit for the legacy/default user. */
+  username?: string;
+  /** AUTH password. Sent immediately after connect, before any other command. */
+  password?: string;
+  /** Use TLS (rediss://). Required by most managed Redis over the public internet. */
+  tls?: boolean;
+  /** TLS SNI/host to validate against (defaults to `host`). */
+  servername?: string;
+}
 
 export class RespError extends Error {}
 
@@ -25,19 +39,34 @@ export class RespClient {
     this.socket.on("close", () => this.failAll(new Error("redis connection closed")));
   }
 
-  static connect(host: string, port: number, timeoutMs = 5000): Promise<RespClient> {
+  static connect(host: string, port: number, opts: RespConnectOptions = {}): Promise<RespClient> {
+    const { timeoutMs = 5000, username, password, tls: useTls, servername } = opts;
     return new Promise((resolve, reject) => {
-      const socket = net.connect({ host, port });
+      const socket: net.Socket = useTls
+        ? tls.connect({ host, port, servername: servername ?? host })
+        : net.connect({ host, port });
+      const readyEvent = useTls ? "secureConnect" : "connect";
       const onError = (err: Error) => {
         socket.destroy();
         reject(err);
       };
       socket.setTimeout(timeoutMs, () => onError(new Error(`redis connect timeout ${host}:${port}`)));
       socket.once("error", onError);
-      socket.once("connect", () => {
+      socket.once(readyEvent, async () => {
         socket.setTimeout(0);
         socket.removeListener("error", onError);
-        resolve(new RespClient(socket));
+        const client = new RespClient(socket);
+        // Authenticate first if a password was supplied (managed Redis requires it).
+        if (password) {
+          try {
+            await client.command("AUTH", ...(username ? [username, password] : [password]));
+          } catch (err) {
+            client.close();
+            reject(new Error(`redis AUTH failed: ${(err as Error).message}`));
+            return;
+          }
+        }
+        resolve(client);
       });
     });
   }
