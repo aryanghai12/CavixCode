@@ -5,5 +5,8 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "types": "./src/index.ts",
-  "dependencies": { "@cavix/core": "*" }
+  "dependencies": {
+    "@cavix/core": "*",
+    "pg": "^8.13.1"
+  }
 }

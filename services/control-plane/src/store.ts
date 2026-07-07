@@ -230,6 +230,19 @@ function defaultSettings(): OrgSettings {
   };
 }
 
+/** A full serializable dump of the store, used to persist to Postgres and reload. */
+export interface StoreSnapshot {
+  v: 1;
+  orgs: Org[];
+  repos: Repo[];
+  reviews: ReviewRecord[];
+  feed: ProvenCatch[];
+  users: User[];
+  settings: Array<[string, OrgSettings]>;
+  apiKeys: Array<[string, string]>;
+  oauthTokens: Array<[string, string]>;
+}
+
 export class InMemoryStore implements Store {
   private orgs = new Map<string, Org>();
   private repos = new Map<string, Repo>();
@@ -566,6 +579,45 @@ export class InMemoryStore implements Store {
       effectiveReviewsPerDay: this.effectiveReviewsPerDay(o.name),
       trialActive: !!o.trialEndsAt && Date.parse(o.trialEndsAt) > Date.now(),
     }));
+  }
+
+  // ---------- persistence (snapshot / restore whole state) ----------
+
+  /** Serialize the entire store to a plain object (safe to JSON.stringify → Postgres). */
+  snapshot(): StoreSnapshot {
+    return {
+      v: 1,
+      orgs: [...this.orgs.values()],
+      repos: [...this.repos.values()],
+      reviews: this.reviews,       // findings are inline here
+      feed: this.feed,
+      users: [...this.users.values()],
+      settings: [...this.settings.entries()],
+      apiKeys: [...this.apiKeys.entries()],
+      oauthTokens: [...this.oauthTokens.entries()],
+    };
+  }
+
+  /** Replace all state from a snapshot (rebuilds derived indexes + shared refs). */
+  restore(s: StoreSnapshot): void {
+    this.orgs = new Map((s.orgs ?? []).map((o) => [o.name, o]));
+    this.repos = new Map((s.repos ?? []).map((r) => [`${r.org}/${r.name}`, r]));
+    this.reviews = s.reviews ?? [];
+    // Rebuild the findings index from the reviews so both point at the SAME object
+    // (decisions mutate the shared finding and must show in listReviews).
+    this.findings = new Map();
+    for (const rev of this.reviews) for (const f of rev.findings) this.findings.set(f.id, f);
+    this.feed = s.feed ?? [];
+    this.users = new Map((s.users ?? []).map((u) => [u.id, u]));
+    this.usersByEmail = new Map((s.users ?? []).map((u) => [u.email, u]));
+    this.settings = new Map(s.settings ?? []);
+    this.apiKeys = new Map(s.apiKeys ?? []);
+    this.oauthTokens = new Map(s.oauthTokens ?? []);
+  }
+
+  /** True when the store has no data yet (used to decide whether to seed). */
+  isEmpty(): boolean {
+    return this.orgs.size === 0 && this.users.size === 0;
   }
 }
 

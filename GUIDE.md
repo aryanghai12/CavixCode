@@ -821,8 +821,10 @@ owners bring their own AI key on the site (BYOK).
 > - A free web service **spins down after ~15 minutes idle** and **cold‑starts**
 >   (~30–60s) on the next visit. Perfectly fine for a trial; switch the plan to
 >   Starter to keep it always‑on.
-> - Data is **in‑memory**, so a redeploy/restart clears accounts. Fine for demos; for
->   a multi‑day trial add Postgres (see "a real database" in the checklist below).
+> - **Data now persists.** The blueprint also provisions a **free Postgres** and wires
+>   `DATABASE_URL`, so accounts, reviews, and settings **survive restarts and
+>   redeploys**. (Render's free Postgres is time‑limited — see "a real database" in the
+>   checklist; swap in Neon/Supabase free for an unlimited free DB.)
 > - The two secrets are generated once and persist; don't rotate `CAVIX_SECRET_KEY`
 >   or previously‑saved BYOK keys can't be decrypted.
 
@@ -990,8 +992,14 @@ Before you invite real org owners, tick these:
       strings (not the dev defaults). Never commit them; use the host's secret manager.
 - [ ] **HTTPS on** — the site is served over `https://` (managed hosts do this for you;
       on a VPS use Caddy/Nginx). Login cookies should only travel over HTTPS.
-- [ ] **A real database** — for anything beyond a short pilot, back the control‑plane and
-      orchestrator with **Postgres** + **Redis** so data survives restarts.
+- [ ] **A real database (so data survives restarts)** — set **`DATABASE_URL`** to a
+      Postgres and the control‑plane persists all accounts/reviews/settings to it
+      automatically (it snapshots state to a `cavix_state` table). The one‑click
+      blueprint (Path A0) wires a free Render Postgres for you. For an **unlimited free**
+      database, create one at **Neon** (neon.tech) or **Supabase** (supabase.com) and
+      paste its connection string as `DATABASE_URL` (use the `?sslmode=require` URL).
+      Without `DATABASE_URL` the store is in‑memory and clears on restart — fine for
+      demos only. (The orchestrator, if you run it, still uses Redis for its queue.)
 - [ ] **Change/disable the demo login** — remove the `demo@cavix.dev` seed in
       [services/control-plane/src/main.ts](services/control-plane/src/main.ts) for a real
       deployment (it's there for trials).
@@ -1269,6 +1277,8 @@ Key slots at a glance:
 | `CAVIX_ADMIN_EMAILS` | control‑plane | Comma‑separated founder/core‑team emails who get the Admin console (see §8E) |
 | `CAVIX_SESSION_SECRET` | control‑plane | Signs dashboard login cookies — **set in production** |
 | `CAVIX_SECRET_KEY` | control‑plane | Encrypts stored BYOK keys + OAuth tokens at rest — **set in production** |
+| `DATABASE_URL` (or `CAVIX_DATABASE_URL`) | control‑plane | Postgres connection string — set it and data **survives restarts** (Render/Neon/Supabase). Omit = in‑memory. |
+| `CAVIX_DATABASE_SSL` | control‑plane | `off` / `true` to override TLS auto‑detection for Postgres |
 | `CAVIX_GITHUB_OAUTH_CLIENT_ID` | control‑plane | "Sign in with GitHub" OAuth App client id (unset = demo mode) |
 | `CAVIX_GITHUB_OAUTH_CLIENT_SECRET` | control‑plane | GitHub OAuth App client secret |
 | `CAVIX_PUBLIC_URL` | control‑plane | Public site URL, for the OAuth callback (e.g. `https://app.yourdomain.com`) |

@@ -12,8 +12,14 @@
 #
 # Note (free tier): a free web service spins down after ~15 min of inactivity and
 # cold-starts (~30-60s) on the next visit. Fine for a trial; upgrade the plan to keep
-# it always-on. Data is in-memory, so a restart/redeploy clears accounts — see
-# GUIDE.md §8D "a real database" before a long-running production trial.
+# it always-on. This blueprint provisions a FREE Postgres and wires DATABASE_URL, so
+# accounts/reviews SURVIVE restarts and redeploys.
+
+databases:
+  - name: cavix-db
+    plan: free
+    databaseName: cavix
+    user: cavix
 
 services:
   - type: web
@@ -26,6 +32,10 @@ services:
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
+      - key: DATABASE_URL             # persistent storage (auto-wired to cavix-db)
+        fromDatabase:
+          name: cavix-db
+          property: connectionString
       - key: CAVIX_SESSION_SECRET      # signs login cookies (auto-generated)
         generateValue: true
       - key: CAVIX_SECRET_KEY          # encrypts stored BYOK keys (auto-generated)
