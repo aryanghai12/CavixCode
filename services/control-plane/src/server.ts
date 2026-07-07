@@ -187,8 +187,36 @@ async function apiRoute(
         connected: user.provider === "github" || !!token,
         login: user.githubLogin ?? null,
         demo: !live,
+        appSlug: gh.githubConfig().appSlug,
         installUrl: gh.installUrl(),
       });
+    }
+
+    // Which orgs have the Cavix GitHub App installed, their repos, and enabled state.
+    if (m === "GET" && p === "/api/github/installations") {
+      try {
+        const ghUser = live ? await gh.getUser(token!) : gh.DEMO_USER;
+        const orgs = live ? await gh.getOrgs(token!, ghUser) : gh.demoOrgs();
+        const installs = live ? await gh.getInstallations(token!) : gh.demoInstallations();
+        const installById = new Map(installs.map((i) => [i.account.login.toLowerCase(), i.id]));
+        const enabledSet = new Set(store.listRepos(user.org).filter((r) => r.enabled !== false).map((r) => r.name));
+
+        const out = [];
+        for (const o of orgs) {
+          const installed = installById.has(o.login.toLowerCase());
+          let repos: Array<{ name: string; fullName: string; private: boolean; description: string; language: string; enabled: boolean }> = [];
+          if (installed) {
+            try {
+              const list = live ? await gh.getInstallationRepos(token!, installById.get(o.login.toLowerCase())!) : gh.demoRepos(o.login);
+              repos = list.map((r) => ({ name: r.name, fullName: r.full_name, private: r.private, description: r.description ?? "", language: r.language ?? "", enabled: enabledSet.has(r.full_name) }));
+            } catch { repos = []; }
+          }
+          out.push({ login: o.login, isUser: (o.type ?? "Organization") === "User", installed, repos });
+        }
+        return void sendJson(res, 200, { demo: !live, appSlug: gh.githubConfig().appSlug, installUrl: gh.installUrl(), orgs: out });
+      } catch (err) {
+        return void sendJson(res, 502, { error: `GitHub: ${(err as Error).message}` });
+      }
     }
 
     if (m === "GET" && p === "/api/github/orgs") {
@@ -205,7 +233,7 @@ async function apiRoute(
       const isUser = owner.toLowerCase() === (user.githubLogin ?? "").toLowerCase();
       try {
         const repos = live ? await gh.getRepos(token!, owner, isUser) : gh.demoRepos(owner);
-        const enabled = new Set(store.listRepos(user.org).map((r) => r.name));
+        const enabled = new Set(store.listRepos(user.org).filter((r) => r.enabled !== false).map((r) => r.name));
         return void sendJson(res, 200, repos.map((r) => ({
           name: r.name, fullName: r.full_name, private: r.private, description: r.description ?? "", language: r.language ?? "",
           enabled: enabled.has(r.full_name),
@@ -215,22 +243,24 @@ async function apiRoute(
       }
     }
 
+    // Enable Cavix for a repo (toggle ON). Persisted to the store → Postgres.
     if (m === "POST" && p === "/api/github/repos") {
       const body = await readJson(req);
       const fullName = String(body.fullName ?? "");
       if (!fullName.includes("/")) return void sendJson(res, 400, { error: "fullName (owner/repo) required" });
       try {
-        const repo = store.createRepo(user.org, fullName, { visibility: body.private === false ? "public" : "private" });
+        const repo = store.setRepoEnabled(user.org, fullName, true, body.private === false ? "public" : "private");
         return void sendJson(res, 201, { enabled: true, repo });
       } catch (err) {
         return void sendJson(res, 403, { error: (err as Error).message });
       }
     }
 
+    // Disable Cavix for a repo (toggle OFF). Kept in the store as enabled:false.
     if (m === "DELETE" && p === "/api/github/repos") {
       const fullName = url.searchParams.get("fullName") ?? "";
-      const ok = store.removeRepo(user.org, fullName);
-      return void sendJson(res, ok ? 200 : 404, ok ? { enabled: false } : { error: "not connected" });
+      store.setRepoEnabled(user.org, fullName, false);
+      return void sendJson(res, 200, { enabled: false });
     }
 
     return void sendJson(res, 404, { error: `no github route for ${m} ${p}` });
@@ -276,6 +306,16 @@ async function apiRoute(
     const org = decodeURIComponent(im[1]);
     const s = store.getSettings(org);
     return void sendJson(res, 200, { provider: s.llmProvider, model: s.llmModel, apiKey: store.getApiKey(org) ?? "" });
+  }
+
+  // Execution gatekeeper: is this "owner/repo" enabled for review in the dashboard?
+  if (m === "GET" && p === "/api/internal/repos/enabled") {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const fullName = url.searchParams.get("fullName") ?? "";
+    return void sendJson(res, 200, { enabled: store.isRepoEnabled(fullName) });
   }
 
   // ----- orgs / onboarding (unauthenticated create kept for API/tests & GitHub App onboarding) -----

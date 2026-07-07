@@ -24,8 +24,10 @@ export interface GitHubConfig {
 
 export function githubConfig(): GitHubConfig {
   return {
-    clientId: process.env.CAVIX_GITHUB_OAUTH_CLIENT_ID ?? "",
-    clientSecret: process.env.CAVIX_GITHUB_OAUTH_CLIENT_SECRET ?? "",
+    // ONE GitHub App powers both sign-in (OAuth) and bot installs. Prefer the unified
+    // CAVIX_GITHUB_CLIENT_ID/SECRET; fall back to the older OAuth-specific names.
+    clientId: process.env.CAVIX_GITHUB_CLIENT_ID ?? process.env.CAVIX_GITHUB_OAUTH_CLIENT_ID ?? "",
+    clientSecret: process.env.CAVIX_GITHUB_CLIENT_SECRET ?? process.env.CAVIX_GITHUB_OAUTH_CLIENT_SECRET ?? "",
     scopes: process.env.CAVIX_GITHUB_OAUTH_SCOPES ?? "read:org,user:email,repo",
     // Auto-detect the public URL on managed hosts (Render sets RENDER_EXTERNAL_URL),
     // so the OAuth redirect_uri is correct with no manual config.
@@ -123,6 +125,36 @@ export async function getRepos(token: string, owner: string, isUser: boolean): P
   const path = isUser ? "/user/repos?per_page=100&sort=updated&affiliation=owner" : `/orgs/${owner}/repos?per_page=100&sort=updated`;
   const repos = await ghGet<GitHubRepo[]>(token, path);
   return isUser ? repos.filter((r) => r.owner.login === owner) : repos;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub App installations (which orgs have Cavix installed, and their repos)
+// ---------------------------------------------------------------------------
+
+export interface GitHubInstallation {
+  id: number;
+  account: { login: string; type?: string };
+}
+
+/** Installations of THIS GitHub App that the signed-in user can access. */
+export async function getInstallations(token: string): Promise<GitHubInstallation[]> {
+  const data = await ghGet<{ installations: GitHubInstallation[] }>(token, "/user/installations?per_page=100");
+  return data.installations ?? [];
+}
+
+/** Repositories the user can access within a given installation. */
+export async function getInstallationRepos(token: string, installationId: number): Promise<GitHubRepo[]> {
+  const data = await ghGet<{ repositories: GitHubRepo[] }>(token, `/user/installations/${installationId}/repositories?per_page=100`);
+  return data.repositories ?? [];
+}
+
+// In demo mode, pretend the app is installed on the personal account + cavix-labs,
+// but NOT on acme-inc (so the "Install Cavix" button is demonstrated).
+export function demoInstallations(): GitHubInstallation[] {
+  return [
+    { id: 101, account: { login: "aryanghai12", type: "User" } },
+    { id: 102, account: { login: "cavix-labs", type: "Organization" } },
+  ];
 }
 
 // ---------------------------------------------------------------------------

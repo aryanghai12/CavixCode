@@ -128,3 +128,19 @@ test("e2e: a clean diff posts a no-issues summary and no inline comments", async
   assert.equal(outcome.inlineCount, 0);
   assert.match(github.lastReview()!.body, /No issues found/);
 });
+
+test("gatekeeper: a repo toggled OFF is skipped — no review is posted", async () => {
+  const { github, reviewer } = wire();
+  const handler = makeReviewHandler({ github, reviewer, gate: async () => false });
+  await handler(makeJob());
+  assert.equal(github.submissions.length, 0, "disabled repo must not be reviewed");
+});
+
+test("gatekeeper: a repo toggled ON is reviewed and posted", async () => {
+  const { github, reviewer } = wire();
+  let gatedRepo = "";
+  const handler = makeReviewHandler({ github, reviewer, gate: async (full) => { gatedRepo = full; return true; } });
+  await handler(makeJob());
+  assert.equal(gatedRepo, "acme/widget", "gate is asked about the PR's repo");
+  assert.equal(github.submissions.length, 1);
+});

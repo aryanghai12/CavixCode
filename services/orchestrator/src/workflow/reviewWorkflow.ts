@@ -20,6 +20,8 @@ export interface ReviewWorkflowDeps {
   github: GitHubClient;
   reviewer: Reviewer;
   logger?: WorkflowLogger;
+  /** Execution gatekeeper: return false to skip the review (repo not enabled). */
+  gate?: (fullName: string) => Promise<boolean>;
 }
 
 export interface ReviewOutcome {
@@ -77,7 +79,16 @@ export async function runReview(job: ReviewJob, deps: ReviewWorkflowDeps): Promi
 
 /** Wrap runReview as a WorkflowEngine handler (fire-and-forget per job). */
 export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
+  const log = deps.logger ?? noopLogger;
   return async (job: ReviewJob) => {
+    // Execution gatekeeper: only review repos toggled ON in the dashboard.
+    if (deps.gate) {
+      const enabled = await deps.gate(job.repo);
+      if (!enabled) {
+        log.info("skipped: repository not enabled in the dashboard", { repo: job.repo, pr: job.pr_number });
+        return;
+      }
+    }
     await runReview(job, deps);
   };
 }

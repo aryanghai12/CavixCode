@@ -119,6 +119,8 @@ export interface Repo {
   org: string;
   name: string;
   visibility: "public" | "private";
+  /** Whether Cavix reviews this repo. The execution gatekeeper reviews only if true. */
+  enabled: boolean;
 }
 
 export interface ProvenCatch {
@@ -165,12 +167,16 @@ export interface OrgStats {
 
 export interface Store {
   createOrg(name: string, opts?: { tier?: OrgTier; provenFeedOptIn?: boolean }): Org;
-  createRepo(org: string, name: string, opts?: { visibility?: "public" | "private" }): Repo;
+  createRepo(org: string, name: string, opts?: { visibility?: "public" | "private"; enabled?: boolean }): Repo;
   getOrg(name: string): Org | undefined;
   setProvenFeedOptIn(org: string, optIn: boolean): void;
   listOrgs(): Org[];
   listRepos(org: string): Repo[];
   removeRepo(org: string, name: string): boolean;
+  /** Enable/disable Cavix for a repo (upserts on enable; no-op create on disable). */
+  setRepoEnabled(org: string, name: string, enabled: boolean, visibility?: "public" | "private"): Repo | null;
+  /** Gatekeeper: is this "owner/name" repo enabled in any workspace? */
+  isRepoEnabled(fullName: string): boolean;
   saveReview(input: SaveReviewInput): ReviewRecord;
   listReviews(org?: string, limit?: number): ReviewRecord[];
   getReview(id: string): ReviewRecord | undefined;
@@ -269,7 +275,7 @@ export class InMemoryStore implements Store {
     if (!o) throw new Error(`no such org: ${org}`);
     o.provenFeedOptIn = optIn;
   }
-  createRepo(org: string, name: string, opts: { visibility?: "public" | "private" } = {}): Repo {
+  createRepo(org: string, name: string, opts: { visibility?: "public" | "private"; enabled?: boolean } = {}): Repo {
     const visibility = opts.visibility ?? "private";
     const o = this.orgs.get(org);
     // Free tier onboards PUBLIC repos only — paid (or an active trial) unlocks private.
@@ -277,9 +283,24 @@ export class InMemoryStore implements Store {
     if (o?.tier === "free" && !onTrial && visibility !== "public") {
       throw new Error("free tier supports public repositories only; upgrade or start a trial for private repos");
     }
-    const repo: Repo = { id: id8("repo"), org, name, visibility };
+    const repo: Repo = { id: id8("repo"), org, name, visibility, enabled: opts.enabled ?? true };
     this.repos.set(`${org}/${name}`, repo);
     return repo;
+  }
+  setRepoEnabled(org: string, name: string, enabled: boolean, visibility: "public" | "private" = "private"): Repo | null {
+    const repo = this.repos.get(`${org}/${name}`);
+    if (!repo) {
+      // Disabling a repo we never tracked is a no-op; enabling creates the row.
+      return enabled ? this.createRepo(org, name, { visibility, enabled: true }) : null;
+    }
+    repo.enabled = enabled;
+    return repo;
+  }
+  isRepoEnabled(fullName: string): boolean {
+    for (const r of this.repos.values()) {
+      if (r.name === fullName && r.enabled !== false) return true;
+    }
+    return false;
   }
   listOrgs(): Org[] {
     return [...this.orgs.values()];

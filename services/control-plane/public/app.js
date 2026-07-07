@@ -60,6 +60,15 @@
 
     document.querySelectorAll(".nav-item").forEach((el) => el.addEventListener("click", () => go(el.dataset.view)));
     window.addEventListener("hashchange", () => go(location.hash.slice(1) || "overview", true));
+
+    // Returning from the GitHub App install flow (GitHub appends installation_id).
+    const q = new URLSearchParams(location.search);
+    if (q.has("installation_id") || q.get("setup_action") === "install") {
+      history.replaceState(null, "", "/app#repos");
+      setTimeout(() => toast("Cavix installed. Toggle the repositories you want reviewed."), 400);
+      go("repos", true);
+      return;
+    }
     go(location.hash.slice(1) || "overview", true);
   })();
 
@@ -217,83 +226,66 @@
       <div style="max-width:860px">${summaryCard}${inlineCard}${empty}</div>`;
   }
 
-  // ---------- REPOS / CONNECT (CodeRabbit-style: providers → orgs → repos) ----------
+  // ---------- REPOS (GitHub App installations → per-repo enable toggles) ----------
   const GH_SVG = '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
-  let repoState = { org: null, repos: [] };
 
   async function renderRepos() {
     const status = await api(`/api/github/status`);
-    const providerTabs = `
-      <div class="provider-tabs">
-        <div class="provider-tab active">${GH_SVG} GitHub</div>
-        <div class="provider-tab soon">GitLab <span class="tag">soon</span></div>
-        <div class="provider-tab soon">Bitbucket <span class="tag">soon</span></div>
-        <div class="provider-tab soon">Azure DevOps <span class="tag">soon</span></div>
-      </div>`;
 
-    // Real mode but not connected → show the connect CTA.
+    // Real mode but not signed in with GitHub → prompt to connect.
     if (status.configured && !status.connected) {
-      content.innerHTML = providerTabs + `
+      content.innerHTML = `
         <div class="panel"><div class="connect-hero">
           <div class="gh-badge">${GH_SVG}</div>
           <h2>Connect your GitHub account</h2>
-          <p>Authorize Cavix to see your organizations and repositories, then enable reviews on the ones you choose, all from here.</p>
+          <p>Sign in with GitHub to see your organizations and repositories, then enable reviews on the ones you choose, all from here.</p>
           <a class="btn btn-github" href="/api/auth/github/start">${GH_SVG} Continue with GitHub</a>
         </div></div>`;
       return;
     }
 
-    const demoNote = status.demo ? `<span class="badge">demo data</span>` : `<span class="badge badge-verified">connected as ${esc(status.login || me.githubLogin || "you")}</span>`;
-    const orgs = await api(`/api/github/orgs`);
-    if (!repoState.org || !orgs.find((o) => o.login === repoState.org)) repoState.org = orgs[0] ? orgs[0].login : null;
+    const data = await api(`/api/github/installations`);
+    const connectedNote = data.demo ? `<span class="badge">demo data</span>` : `<span class="badge badge-verified">connected as ${esc(status.login || "you")}</span>`;
 
-    content.innerHTML = providerTabs + `
-      <div class="panel">
-        <div class="panel-head">
-          <div><h2>Add repositories</h2><span class="sub">Pick an organization, then toggle the repos Cavix should review.</span></div>
-          <div style="display:flex;gap:10px;align-items:center">${demoNote}<a class="btn btn-soft btn-sm" href="${esc(status.installUrl)}" target="_blank">Install GitHub App ↗</a></div>
-        </div>
-        <div class="panel-body">
-          <div class="org-picker"><span class="sr-desc" style="margin:0">Organization:</span>
-            <div class="org-select">${orgs.map((o) => `<button class="org-chip${o.login === repoState.org ? " active" : ""}" data-org="${esc(o.login)}"><span class="oa">${esc(o.login[0].toUpperCase())}</span>${esc(o.login)}${o.isUser ? " (you)" : ""}</button>`).join("")}</div>
+    const orgCards = data.orgs.map((o) => {
+      if (!o.installed) {
+        return `<div class="panel">
+          <div class="panel-head">
+            <div class="ao-name"><span class="ao-av">${esc(o.login[0].toUpperCase())}</span><div>${esc(o.login)}${o.isUser ? " (you)" : ""}<div class="ao-meta">Cavix isn't installed here yet</div></div></div>
+            <a class="btn btn-primary btn-sm" href="${esc(data.installUrl)}" target="_blank" rel="noopener">${GH_SVG} Install Cavix</a>
           </div>
-          <input class="field repo-search" id="repoSearch" placeholder="Search repositories…" style="padding:10px 13px;background:var(--bg-elev);border:1px solid var(--border);border-radius:9px;color:var(--text)">
-          <div id="repoList" class="repo-list"><div class="empty" style="padding:30px">Loading repositories…</div></div>
+        </div>`;
+      }
+      const rows = o.repos.length ? o.repos.map((r) => `
+        <div class="repo-row">
+          <div class="r-ico">${r.private ? ic("lock") : ic("repos")}</div>
+          <div class="r-main">
+            <div class="r-name">${esc(r.name)} <span class="badge">${r.private ? "private" : "public"}</span></div>
+            <div class="r-desc">${esc(r.description || "No description")}</div>
+          </div>
+          ${r.language ? `<span class="r-lang">${esc(r.language)}</span>` : ""}
+          <label class="switch"><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="cavixToggleRepo('${esc(r.fullName)}', ${!r.private}, this)"><span class="slider"></span></label>
+        </div>`).join("") : `<div class="empty" style="padding:24px">No repositories granted to this installation. <a href="${esc(data.installUrl)}" target="_blank">Adjust repo access ↗</a></div>`;
+      return `<div class="panel">
+        <div class="panel-head">
+          <div class="ao-name"><span class="ao-av">${esc(o.login[0].toUpperCase())}</span><div>${esc(o.login)}${o.isUser ? " (you)" : ""}<div class="ao-meta">${o.repos.filter((r) => r.enabled).length} of ${o.repos.length} enabled</div></div></div>
+          <span class="badge badge-verified">installed</span>
         </div>
+        <div class="repo-list" style="border:none">${rows}</div>
       </div>`;
+    }).join("");
 
-    document.querySelectorAll(".org-chip").forEach((el) => el.addEventListener("click", () => { repoState.org = el.dataset.org; loadRepos(); paintOrgChips(); }));
-    $("repoSearch").addEventListener("input", (e) => paintRepos(e.target.value));
-    await loadRepos();
-  }
-  function paintOrgChips() {
-    document.querySelectorAll(".org-chip").forEach((el) => el.classList.toggle("active", el.dataset.org === repoState.org));
-  }
-  async function loadRepos() {
-    try { repoState.repos = await api(`/api/github/repos?org=${encodeURIComponent(repoState.org)}`); paintRepos(""); }
-    catch (e) { $("repoList").innerHTML = `<div class="empty" style="padding:30px">${esc(e.message)}</div>`; }
-  }
-  function paintRepos(filter) {
-    const q = (filter || "").toLowerCase();
-    const repos = repoState.repos.filter((r) => r.name.toLowerCase().includes(q));
-    const list = $("repoList");
-    if (!repos.length) { list.innerHTML = `<div class="empty" style="padding:30px">No repositories match.</div>`; return; }
-    list.innerHTML = repos.map((r) => `
-      <div class="repo-row" data-full="${esc(r.fullName)}">
-        <div class="r-ico">${r.private ? ic("lock") : ic("repos")}</div>
-        <div class="r-main">
-          <div class="r-name">${esc(r.name)} <span class="badge">${r.private ? "private" : "public"}</span></div>
-          <div class="r-desc">${esc(r.description || "No description")}</div>
-        </div>
-        ${r.language ? `<span class="r-lang">${esc(r.language)}</span>` : ""}
-        <label class="switch"><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="cavixToggleRepo('${esc(r.fullName)}', ${!r.private}, this)"><span class="slider"></span></label>
-      </div>`).join("");
+    content.innerHTML = `
+      <div class="panel"><div class="panel-body" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><div class="sr-label">${GH_SVG} Your GitHub organizations</div><div class="sr-desc">Install Cavix on an org, then toggle the repos it should review. Only enabled repos are reviewed.</div></div>
+        <div style="display:flex;gap:10px;align-items:center">${connectedNote}<a class="btn btn-soft btn-sm" href="${esc(data.installUrl)}" target="_blank" rel="noopener">Manage installation ↗</a></div>
+      </div></div>
+      ${orgCards || `<div class="empty" style="padding:40px">No organizations found.</div>`}`;
   }
   window.cavixToggleRepo = async function (fullName, isPublic, el) {
     try {
       if (el.checked) { await api(`/api/github/repos`, { method: "POST", body: JSON.stringify({ fullName, private: !isPublic }) }); toast(`Enabled ${fullName}`); }
       else { await api(`/api/github/repos?fullName=${encodeURIComponent(fullName)}`, { method: "DELETE" }); toast(`Disabled ${fullName}`); }
-      const r = repoState.repos.find((x) => x.fullName === fullName); if (r) r.enabled = el.checked;
     } catch (e) { el.checked = !el.checked; toast(e.message); }
   };
 

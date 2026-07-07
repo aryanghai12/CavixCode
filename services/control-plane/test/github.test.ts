@@ -152,3 +152,45 @@ test("login page hides the GitHub button by default (revealed by JS when availab
     assert.match(html, /id="githubBtn" class="[^"]*hidden|btn-github btn-block hidden/);
   });
 });
+
+test("installations: lists orgs with install status + repos + enabled state (demo)", async () => {
+  await withServer(async (base, store) => {
+    store.createOrg("acme");
+    store.createUser({ email: "u@acme.co", password: "password123", org: "acme", name: "U", role: "owner" });
+    const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "u@acme.co", password: "password123" }));
+
+    const data = await (await fetch(base + "/api/github/installations", { headers: { cookie } })).json();
+    assert.match(data.installUrl, /github\.com\/apps\//);
+    const byLogin = Object.fromEntries(data.orgs.map((o) => [o.login, o]));
+    // demo: cavix-labs installed, acme-inc NOT installed (Install button case)
+    assert.equal(byLogin["cavix-labs"].installed, true);
+    assert.ok(byLogin["cavix-labs"].repos.length >= 1);
+    assert.equal(byLogin["acme-inc"].installed, false);
+    assert.equal(byLogin["acme-inc"].repos.length, 0);
+    // nothing enabled yet
+    assert.ok(byLogin["cavix-labs"].repos.every((r) => r.enabled === false));
+  });
+});
+
+test("toggle + gatekeeper: enabling a repo makes the internal gate report enabled", async () => {
+  process.env.CAVIX_INTERNAL_TOKEN = "gate-tok";
+  await withServer(async (base, store) => {
+    store.createOrg("acme");
+    store.createUser({ email: "o@acme.co", password: "password123", org: "acme", name: "O", role: "owner" });
+    const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "o@acme.co", password: "password123" }));
+    const gate = (full) => fetch(base + `/api/internal/repos/enabled?fullName=${encodeURIComponent(full)}`, { headers: { authorization: "Bearer gate-tok" } }).then((r) => r.json());
+
+    // before: disabled
+    assert.equal((await gate("cavix-labs/payments-api")).enabled, false);
+
+    // enable via the dashboard toggle
+    assert.equal((await post(base, "/api/github/repos", { fullName: "cavix-labs/payments-api", private: true }, cookie)).status, 201);
+    assert.equal((await gate("cavix-labs/payments-api")).enabled, true);
+    assert.ok(store.isRepoEnabled("cavix-labs/payments-api"));
+
+    // disable again
+    await fetch(base + "/api/github/repos?fullName=cavix-labs%2Fpayments-api", { method: "DELETE", headers: { cookie } });
+    assert.equal((await gate("cavix-labs/payments-api")).enabled, false);
+  });
+  delete process.env.CAVIX_INTERNAL_TOKEN;
+});

@@ -62,14 +62,18 @@ services:
         generateValue: true
       - key: CAVIX_ADMIN_EMAILS        # YOUR email → founder Admin console
         sync: false
-      # "Sign in with GitHub" — create a GitHub OAuth App (or reuse your GitHub App's
-      # client id/secret). Callback URL = <this service URL>/api/auth/github/callback.
+      # ONE GitHub App powers sign-in AND bot installs. From your GitHub App:
+      #   • Client ID + a generated client secret  → the two vars below (sign-in)
+      #   • App name (slug)                          → CAVIX_GITHUB_APP_SLUG (install button)
+      # In the GitHub App settings set:
+      #   • Callback URL = <this service URL>/api/auth/github/callback
+      #   • Setup URL    = <this service URL>/app        (Redirect on update: on)
       # Leave blank to disable GitHub sign-in (email/password still works).
-      - key: CAVIX_GITHUB_OAUTH_CLIENT_ID
+      - key: CAVIX_GITHUB_CLIENT_ID
         sync: false
-      - key: CAVIX_GITHUB_OAUTH_CLIENT_SECRET
+      - key: CAVIX_GITHUB_CLIENT_SECRET
         sync: false
-      - key: CAVIX_GITHUB_APP_SLUG      # your GitHub App name (for the Install button)
+      - key: CAVIX_GITHUB_APP_SLUG
         sync: false
       - key: CAVIX_LLM_PROVIDER        # default provider a new org sees (optional)
         value: anthropic

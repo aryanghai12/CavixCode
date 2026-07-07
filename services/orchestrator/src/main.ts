@@ -17,6 +17,7 @@ import { BullMqEngine } from "./workflow/bullmq.ts";
 import { RedisStreamSource } from "./bridge/redisSource.ts";
 import { runBridge } from "./bridge/bridge.ts";
 import { makeControlPlaneResolver } from "./byok/resolver.ts";
+import { makeRepoGate } from "./byok/gate.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "orchestrator", msg, ...meta }));
@@ -72,9 +73,17 @@ async function main() {
     baseUrl: cfg.github.baseUrl,
   });
   const reviewer = new Reviewer({ gateway });
+
+  // Execution gatekeeper: only review repos toggled ON in the dashboard.
+  const gate = cpUrl && internalToken
+    ? makeRepoGate({ url: cpUrl, token: internalToken, failOpen: process.env.CAVIX_GATE_FAIL_OPEN === "true", logger: { warn: (m, meta) => log("warn", m, meta) } })
+    : undefined;
+  if (gate) log("info", "execution gatekeeper on: only dashboard-enabled repos are reviewed");
+
   const handler = makeReviewHandler({
     github,
     reviewer,
+    gate,
     logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
   });
 
