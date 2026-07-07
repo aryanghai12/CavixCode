@@ -8,6 +8,7 @@
 import { createControlPlane } from "./server.ts";
 import { InMemoryStore } from "./store.ts";
 import { PostgresPersistence, startAutosave, type Autosave } from "./persistence.ts";
+import { demoEnabled } from "./github.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "control-plane", msg, ...meta }));
@@ -65,9 +66,13 @@ async function main(): Promise<void> {
     log("info", "persistence: in-memory (set DATABASE_URL for a Postgres that survives restarts)");
   }
 
-  if (store.isEmpty()) {
+  // Demo data is for local dev only. In production (DATABASE_URL / RENDER) the site
+  // starts EMPTY and uses real sign-up + real GitHub OAuth. Force with CAVIX_DEMO.
+  if (store.isEmpty() && demoEnabled()) {
     seedDemo(store);
-    log("info", "seeded demo workspace (demo@cavix.dev / cavixdemo)");
+    log("info", "seeded demo workspace (demo@cavix.dev / cavixdemo) — set CAVIX_DEMO=false to disable");
+  } else if (store.isEmpty()) {
+    log("info", "production mode: empty store, real auth (set CAVIX_DEMO=true for sample data)");
   }
 
   const server = createControlPlane(store).listen(port, host, () => {

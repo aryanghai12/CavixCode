@@ -27,7 +27,9 @@ export function githubConfig(): GitHubConfig {
     clientId: process.env.CAVIX_GITHUB_OAUTH_CLIENT_ID ?? "",
     clientSecret: process.env.CAVIX_GITHUB_OAUTH_CLIENT_SECRET ?? "",
     scopes: process.env.CAVIX_GITHUB_OAUTH_SCOPES ?? "read:org,user:email,repo",
-    publicUrl: (process.env.CAVIX_PUBLIC_URL ?? "").replace(/\/$/, ""),
+    // Auto-detect the public URL on managed hosts (Render sets RENDER_EXTERNAL_URL),
+    // so the OAuth redirect_uri is correct with no manual config.
+    publicUrl: (process.env.CAVIX_PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? "").replace(/\/$/, ""),
     appSlug: process.env.CAVIX_GITHUB_APP_SLUG ?? "cavix",
   };
 }
@@ -35,6 +37,24 @@ export function githubConfig(): GitHubConfig {
 export function githubConfigured(): boolean {
   const c = githubConfig();
   return !!(c.clientId && c.clientSecret);
+}
+
+/**
+ * Whether demo mode (seeded workspace + fake "Sign in with GitHub") is on. OFF in
+ * production so a live site is empty and uses real auth. Defaults ON only for local
+ * dev (no DATABASE_URL, not on a managed host). Force with CAVIX_DEMO=true|false.
+ */
+export function demoEnabled(): boolean {
+  if (process.env.CAVIX_DEMO === "true") return true;
+  if (process.env.CAVIX_DEMO === "false") return false;
+  return !process.env.DATABASE_URL && !process.env.RENDER && !process.env.CAVIX_DATABASE_URL;
+}
+
+/** True when session cookies should carry the Secure flag (HTTPS site). */
+export function secureCookies(): boolean {
+  if (process.env.CAVIX_SECURE_COOKIES === "true") return true;
+  if (process.env.CAVIX_SECURE_COOKIES === "false") return false;
+  return (process.env.CAVIX_PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? "").startsWith("https");
 }
 
 export function newState(): string {

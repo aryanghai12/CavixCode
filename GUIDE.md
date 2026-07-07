@@ -843,6 +843,44 @@ The manual steps below (Path A) are the website done by hand, or for Railway/Fly
 
 ---
 
+### Making it real: no demo data + "Sign in with GitHub"
+
+Two things new founders trip on right after deploying — both handled now:
+
+**1. "It still shows sample/test data."** That's the built‑in demo workspace. It's now
+**off automatically in production** — as soon as `DATABASE_URL` is set (or you're on
+Render), the site starts **empty** and uses real sign‑up. If you ever want the sample
+data back (e.g. locally), set `CAVIX_DEMO=true`; to force it off anywhere, `CAVIX_DEMO=false`.
+
+**2. "Continue with GitHub" doesn't really sign me in.** Without a GitHub **OAuth App**,
+that button can't do real sign‑in — so in production it now shows a clear "not
+configured" message instead of a fake login, and the button is hidden until you set it
+up. To turn on real GitHub sign‑in (~3 minutes):
+
+1. Go to **GitHub → Settings → Developer settings → OAuth Apps → New OAuth App**
+   (or reuse your **GitHub App's** Client ID + a generated client secret).
+2. **Homepage URL:** your site (e.g. `https://cavix.onrender.com`).
+   **Authorization callback URL:** `https://<your-site>/api/auth/github/callback`
+   (exactly — the path matters).
+3. Copy the **Client ID** and generate a **Client secret**.
+4. On the **cavix** service, set:
+   - `CAVIX_GITHUB_OAUTH_CLIENT_ID` = the client id
+   - `CAVIX_GITHUB_OAUTH_CLIENT_SECRET` = the client secret
+   - (Optional) `CAVIX_GITHUB_APP_SLUG` = your GitHub App name (for the "Install" link)
+5. Save → redeploy. The public URL for the callback is **auto‑detected on Render**
+   (`RENDER_EXTERNAL_URL`); on other hosts set `CAVIX_PUBLIC_URL` to your site URL.
+
+Now "Continue with GitHub" does real OAuth, and the Repositories page lists the user's
+real orgs and repos. **Email/password sign‑up works with or without this** — GitHub
+OAuth is only for the one‑click GitHub login + real repo listing.
+
+> **Reviewing real PRs** is separate from sign‑in: that needs the **GitHub App** +
+> the edge/orchestrator (the full‑pipeline blueprint above and
+> [§8B](#8b-go-live-on-github-production-github-app--cavix-commands)). You can use the
+> same GitHub App's Client ID/secret for the sign‑in OAuth above, so it's one app.
+
+---
+
 ### Path A — Managed hosting by hand (Render/Railway/Fly)
 
 The goal: get the **website** live on a public URL in ~15 minutes. Good hosts for a
@@ -1310,6 +1348,8 @@ Key slots at a glance:
 | `CAVIX_GITHUB_OAUTH_CLIENT_SECRET` | control‑plane | GitHub OAuth App client secret |
 | `CAVIX_PUBLIC_URL` | control‑plane | Public site URL, for the OAuth callback (e.g. `https://app.yourdomain.com`) |
 | `CAVIX_GITHUB_APP_SLUG` | control‑plane | Your GitHub App's name, for the dashboard "Install App" link |
+| `CAVIX_DEMO` | control‑plane | `true` = seed sample data + demo GitHub login (local); `false` = force off. Auto‑off in production (when `DATABASE_URL`/Render is present). |
+| `RENDER_EXTERNAL_URL` | control‑plane | Auto‑set by Render; used as the OAuth callback base + to enable Secure cookies (you don't set this) |
 
 ---
 

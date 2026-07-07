@@ -70,15 +70,27 @@ export function verifySession(token: string | undefined): SessionPayload | null 
   }
 }
 
+/** ` Secure` when the site is served over HTTPS (production), else empty. */
+function secureFlag(): string {
+  if (process.env.CAVIX_SECURE_COOKIES === "true") return "; Secure";
+  if (process.env.CAVIX_SECURE_COOKIES === "false") return "";
+  return (process.env.CAVIX_PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? "").startsWith("https") ? "; Secure" : "";
+}
+
 /** The Set-Cookie header value that establishes a session. */
 export function sessionCookie(token: string): string {
   const maxAge = Math.floor(SESSION_TTL_MS / 1000);
-  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secureFlag()}`;
 }
 
 /** The Set-Cookie header value that clears the session (logout). */
 export function clearCookie(): string {
-  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureFlag()}`;
+}
+
+/** Secure attribute for other short-lived cookies (e.g. the OAuth state cookie). */
+export function cookieSecureAttr(): string {
+  return secureFlag();
 }
 
 /** Read + verify the session from an incoming request's Cookie header. */

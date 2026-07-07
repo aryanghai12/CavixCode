@@ -6,6 +6,7 @@ import type { DecisionState, Role, Store } from "./store.ts";
 import {
   clearCookie,
   constantTimeEqual,
+  cookieSecureAttr,
   isPlatformAdmin,
   parseCookies,
   sessionCookie,
@@ -108,10 +109,14 @@ async function apiRoute(
 
   // ----- Sign in with GitHub (OAuth) -----
   if (m === "GET" && p === "/api/auth/github/start") {
+    // Not configured and not in demo mode → tell the user how to enable it, don't fake it.
+    if (!gh.githubConfigured() && !gh.demoEnabled()) {
+      res.writeHead(302, { location: "/login?error=github_unconfigured" });
+      return void res.end();
+    }
     const state = gh.newState();
     const redirectUri = `${baseUrl(req)}/api/auth/github/callback`;
-    res.setHeader("Set-Cookie", `gh_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`);
-    // Real OAuth when configured; otherwise a demo callback so the flow works with no setup.
+    res.setHeader("Set-Cookie", `gh_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${cookieSecureAttr()}`);
     const dest = gh.githubConfigured() ? gh.authorizeUrl(state, redirectUri) : `/api/auth/github/callback?demo=1&state=${state}`;
     res.writeHead(302, { location: dest });
     return void res.end();
@@ -133,6 +138,9 @@ async function apiRoute(
         const ghUser = await gh.getUser(token);
         const email = (await gh.getPrimaryEmail(token)) ?? `${ghUser.login}@users.noreply.github.com`;
         profile = { email, name: ghUser.name ?? ghUser.login, login: ghUser.login };
+      } else if (!gh.githubConfigured() && !gh.demoEnabled()) {
+        res.writeHead(302, { location: "/login?error=github_unconfigured" });
+        return void res.end();
       } else {
         // demo mode
         profile = { email: gh.DEMO_USER.email!, name: gh.DEMO_USER.name!, login: gh.DEMO_USER.login };
@@ -149,6 +157,11 @@ async function apiRoute(
       res.writeHead(302, { location: `/login?error=${encodeURIComponent((err as Error).message)}` });
       return void res.end();
     }
+  }
+
+  // Public: what sign-in methods the login page should show.
+  if (m === "GET" && p === "/api/auth/providers") {
+    return void sendJson(res, 200, { github: gh.githubConfigured(), demo: gh.demoEnabled() });
   }
 
   if (m === "GET" && p === "/api/auth/me") {

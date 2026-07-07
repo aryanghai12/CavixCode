@@ -21,9 +21,24 @@
     alertBox.className = "alert alert-error show";
   }
 
+  // Show the GitHub button only when GitHub sign-in is actually available.
+  fetch("/api/auth/providers").then((r) => r.json()).then((p) => {
+    if (p.github || p.demo) {
+      $("githubBtn").classList.remove("hidden");
+      $("orDivider").classList.remove("hidden");
+      if (p.demo && !p.github) $("githubBtn").lastChild.textContent = " Continue with GitHub (demo)";
+    }
+  }).catch(() => {});
+
   // Surface an error returned from the GitHub OAuth callback (?error=...).
   const errParam = new URLSearchParams(location.search).get("error");
-  if (errParam) showError(errParam === "github_state" ? "GitHub sign-in expired, please try again." : "GitHub sign-in failed: " + errParam);
+  if (errParam) {
+    const messages = {
+      github_state: "GitHub sign-in expired, please try again.",
+      github_unconfigured: "GitHub sign-in isn't set up yet. Use email below, or ask the admin to configure GitHub OAuth.",
+    };
+    showError(messages[errParam] || "GitHub sign-in failed: " + errParam);
+  }
 
   $("form").addEventListener("submit", async (e) => {
     e.preventDefault();

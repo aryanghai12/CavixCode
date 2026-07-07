@@ -127,3 +127,28 @@ test("login page exposes Sign in with GitHub", async () => {
     assert.match(html, /Continue with GitHub/);
   });
 });
+
+test("auth providers endpoint reports availability (github off, demo boolean)", async () => {
+  await withServer(async (base) => {
+    const p = await (await fetch(base + "/api/auth/providers")).json();
+    assert.equal(p.github, false); // no OAuth env in tests
+    assert.equal(typeof p.demo, "boolean");
+  });
+});
+
+test("github start: demo disabled + no OAuth → clear error, never a fake login", async () => {
+  process.env.CAVIX_DEMO = "false";
+  await withServer(async (base) => {
+    const res = await fetch(base + "/api/auth/github/start", { redirect: "manual" });
+    assert.equal(res.status, 302);
+    assert.match(res.headers.get("location") ?? "", /\/login\?error=github_unconfigured/);
+  });
+  delete process.env.CAVIX_DEMO;
+});
+
+test("login page hides the GitHub button by default (revealed by JS when available)", async () => {
+  await withServer(async (base) => {
+    const html = await (await fetch(base + "/login")).text();
+    assert.match(html, /id="githubBtn" class="[^"]*hidden|btn-github btn-block hidden/);
+  });
+});
