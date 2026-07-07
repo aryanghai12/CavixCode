@@ -799,7 +799,38 @@ Four things run in production:
 
 ---
 
-### Path A — Managed hosting (easiest; recommended for trials)
+### Path A0 — FREE one‑click deploy (the fastest way to go live, $0)
+
+The repo ships a **`render.yaml` blueprint**, so you can put the website live on
+Render's **free** plan without configuring anything by hand.
+
+1. **Push the repo to GitHub** (see Step A1 below if it isn't there yet).
+2. Go to **https://render.com** → sign up (use your GitHub account) → **New + →
+   Blueprint** → pick your repo → **Apply**.
+3. Render reads `render.yaml`, creates the **`cavix`** web service on the **free**
+   plan, and **auto‑generates** the two required secrets for you.
+4. In the service's **Environment** tab, set **`CAVIX_ADMIN_EMAILS`** to your email
+   (so you get the founder Admin console). That's the only thing you type.
+5. Wait for the build, then open the URL Render gives you (e.g.
+   `https://cavix.onrender.com`). **Sign up, and share the link — anyone can test it.** 🎉
+
+**No AI key, no Redis, no orchestrator** — the website is fully self‑contained. Org
+owners bring their own AI key on the site (BYOK).
+
+> **Free‑tier facts (so nothing surprises you):**
+> - A free web service **spins down after ~15 minutes idle** and **cold‑starts**
+>   (~30–60s) on the next visit. Perfectly fine for a trial; switch the plan to
+>   Starter to keep it always‑on.
+> - Data is **in‑memory**, so a redeploy/restart clears accounts. Fine for demos; for
+>   a multi‑day trial add Postgres (see "a real database" in the checklist below).
+> - The two secrets are generated once and persist; don't rotate `CAVIX_SECRET_KEY`
+>   or previously‑saved BYOK keys can't be decrypted.
+
+The manual steps below (Path A) are the same thing done by hand, or for Railway/Fly.
+
+---
+
+### Path A — Managed hosting by hand (Render/Railway/Fly)
 
 The goal: get the **website** live on a public URL in ~15 minutes. Good hosts for a
 Node app with no build step: **Render**, **Railway**, or **Fly.io** (all have free/cheap
@@ -934,6 +965,20 @@ PRs**, connect the other two services (all deployed the same way as Path A/B):
 
 Now the loop is complete: **owner signs up on your site → adds their AI key → installs
 the GitHub App → opens a PR → Cavix reviews it → the result appears in their dashboard.**
+
+> **Running the orchestrator for FREE (Render/Railway/Fly).** Free plans only keep
+> **web services** alive (a background worker is paid). The orchestrator now opens a
+> small **health port** (on `$PORT`) precisely so it qualifies as a free web service —
+> deploy it with **Start Command `npm run orchestrator`**, and set the health check to
+> `/healthz`. It also **won't crash while Redis is missing**: it stays live and retries,
+> so the deploy reports healthy. For the Redis it needs, use a **free managed Redis**
+> (Render **Key Value** free plan, or **Upstash** free) and give the orchestrator the
+> one connection URL:
+> ```
+> CAVIX_REDIS_URL = rediss://default:PASSWORD@your-host:6380
+> ```
+> Same trick works for the Go **edge** (it's already an HTTP server, so it's a natural
+> free web service). That means the *entire* pipeline can run on free tiers.
 
 ---
 

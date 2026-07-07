@@ -1,0 +1,38 @@
+# Cavix — one-click FREE deploy of the website (control-plane) on Render.
+#
+# How to use:
+#   1. Push this repo to GitHub.
+#   2. In Render:  New +  →  Blueprint  →  connect this repo  →  Apply.
+#   3. When it's live, open the URL, click Sign up, and share it. Org owners bring
+#      their own AI key on the site (BYOK) — you set no API keys here.
+#
+# Everything below runs on Render's FREE plan. The two secrets are auto-generated
+# and persist across deploys. Set CAVIX_ADMIN_EMAILS to your email so you get the
+# founder Admin console.
+#
+# Note (free tier): a free web service spins down after ~15 min of inactivity and
+# cold-starts (~30-60s) on the next visit. Fine for a trial; upgrade the plan to keep
+# it always-on. Data is in-memory, so a restart/redeploy clears accounts — see
+# GUIDE.md §8D "a real database" before a long-running production trial.
+
+services:
+  - type: web
+    name: cavix
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm run control-plane
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: CAVIX_SESSION_SECRET      # signs login cookies (auto-generated)
+        generateValue: true
+      - key: CAVIX_SECRET_KEY          # encrypts stored BYOK keys (auto-generated)
+        generateValue: true
+      - key: CAVIX_ADMIN_EMAILS        # YOUR email → founder Admin console
+        sync: false
+      - key: CAVIX_LLM_PROVIDER        # default provider shown to a new org (optional)
+        value: anthropic
+      - key: CAVIX_LLM_MODEL           # default model shown to a new org (optional)
+        value: claude-sonnet-4-6

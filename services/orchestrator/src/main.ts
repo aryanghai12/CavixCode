@@ -6,6 +6,7 @@
 //
 //   CAVIX_GITHUB_TOKEN=... ANTHROPIC_API_KEY=... node services/orchestrator/src/main.ts
 
+import http from "node:http";
 import { AnthropicProvider, FakeProvider, Gateway, type LLMProvider } from "@cavix/gateway";
 import { loadConfig } from "./config.ts";
 import { RestGitHubClient, StaticTokenProvider } from "./github/rest.ts";
@@ -18,6 +19,27 @@ import { runBridge } from "./bridge/bridge.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "orchestrator", msg, ...meta }));
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// A tiny always-on HTTP server so the orchestrator can run on a free "web service"
+// host (Render/Railway/Fly), which requires an open port and kills processes that
+// don't bind one. Also gives you a real /healthz to watch. Binds $PORT when set.
+function startHealthServer(status: { redis: string }): void {
+  if (process.env.CAVIX_HEALTH_SERVER === "off") return;
+  const port = Number(process.env.PORT ?? process.env.CAVIX_HEALTH_PORT ?? "8080");
+  http
+    .createServer((req, res) => {
+      if (req.url === "/healthz" || req.url === "/") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", service: "orchestrator", redis: status.redis }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    })
+    .listen(port, "0.0.0.0", () => log("info", "health server listening", { port }));
 }
 
 async function main() {
@@ -54,6 +76,11 @@ async function main() {
     ...(cfg.redis.tls ? { tls: {} } : {}),
   };
 
+  // Health server first, so the port is open immediately (keeps free web hosts happy
+  // even while we wait for Redis to become reachable).
+  const health = { redis: "connecting" };
+  startHealthServer(health);
+
   // Durable engine: BullMQ if available, else inline (dev). Same port either way.
   const useBull = (process.env.CAVIX_ENGINE ?? "bullmq") === "bullmq";
   const engine = useBull
@@ -62,22 +89,12 @@ async function main() {
   engine.registerWorker(handler);
   if (engine instanceof BullMqEngine) await engine.start();
 
-  const source = await RedisStreamSource.create({
-    host: cfg.redis.host,
-    port: cfg.redis.port,
-    username: cfg.redis.username,
-    password: cfg.redis.password,
-    tls: cfg.redis.tls,
-    stream: cfg.stream,
-    group: cfg.group,
-    consumer: cfg.consumer,
-  });
-
   const controller = new AbortController();
+  let currentSource: RedisStreamSource | null = null;
   const shutdown = async () => {
     log("info", "shutting down");
     controller.abort();
-    await source.close();
+    await currentSource?.close();
     await engine.close();
     process.exit(0);
   };
@@ -85,22 +102,48 @@ async function main() {
   process.on("SIGTERM", shutdown);
 
   log("info", "orchestrator started", { stream: cfg.stream, group: cfg.group, engine: useBull ? "bullmq" : "inline" });
-  await runBridge(source, engine, controller.signal, {
-    logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
-  });
+
+  // Resilient connect loop: if Redis isn't reachable yet (managed Redis still
+  // provisioning, misconfigured URL, cold start), log and retry instead of exiting.
+  // The health server stays up throughout, so the deploy reports healthy and heals
+  // itself once Redis is available.
+  const retryMs = Number(process.env.CAVIX_REDIS_RETRY_MS ?? "10000");
+  while (!controller.signal.aborted) {
+    try {
+      const source = await RedisStreamSource.create({
+        host: cfg.redis.host,
+        port: cfg.redis.port,
+        username: cfg.redis.username,
+        password: cfg.redis.password,
+        tls: cfg.redis.tls,
+        stream: cfg.stream,
+        group: cfg.group,
+        consumer: cfg.consumer,
+      });
+      currentSource = source;
+      health.redis = "connected";
+      log("info", "connected to redis; consuming review jobs", { host: cfg.redis.host, tls: !!cfg.redis.tls });
+      await runBridge(source, engine, controller.signal, {
+        logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
+      });
+      return; // bridge returned (clean shutdown)
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (!/ECONNREFUSED|:6379|redis|AUTH|timeout|ENOTFOUND|ETIMEDOUT/i.test(msg)) throw err;
+      health.redis = "unreachable";
+      log("warn", "Redis not reachable yet; the service stays live and will retry", {
+        err: msg,
+        retryInMs: retryMs,
+        hint: "Set CAVIX_REDIS_URL to your managed Redis (e.g. rediss://default:PASSWORD@host:6380). Local: docker run -p 6379:6379 redis.",
+      });
+      await sleep(retryMs);
+    }
+  }
 }
 
 main().catch((err) => {
-  const msg = (err as Error).message;
-  if (/ECONNREFUSED|:6379|redis/i.test(msg)) {
-    log("error", "cannot reach Redis, which the orchestrator needs as its job queue", {
-      err: msg,
-      why: "The orchestrator is the background engine that reviews real pull requests. It reads jobs from a Redis queue the edge fills.",
-      fix: "Start Redis first:  docker run -p 6379:6379 redis   (or set CAVIX_REDIS_HOST / CAVIX_REDIS_PORT to your Redis).",
-      note: "If you only want the website + dashboard for a trial, run `npm run control-plane` instead — it needs no Redis and no orchestrator. Org owners add their AI key on the site.",
-    });
-  } else {
-    log("error", "fatal", { err: msg });
-  }
+  // Redis reachability is handled by the resilient loop above (it retries, never
+  // exits). Anything reaching here is a genuine fatal (bad config, code bug).
+  log("error", "fatal", { err: (err as Error).message });
   process.exit(1);
 });
