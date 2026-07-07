@@ -21,6 +21,14 @@ export interface GatewayConfigData {
   fallback?: OrgLLMConfig;
 }
 
+/**
+ * Resolve an org's BYOK config from an external source (e.g. the control-plane's
+ * secret store) at call time. Return null if the org isn't found there, so the
+ * gateway can fall through to static config / fallback. This is the "resolve from a
+ * secret store per request" path — the site is the source of truth for keys.
+ */
+export type OrgConfigResolver = (org: string) => Promise<OrgLLMConfig | null>;
+
 /** Resolve the BYOK config for an org, falling back if configured. */
 export function resolveOrgConfig(
   config: GatewayConfigData,

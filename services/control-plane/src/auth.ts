@@ -100,6 +100,13 @@ export function isPlatformAdmin(email: string | undefined): boolean {
   return admins.includes(email.trim().toLowerCase());
 }
 
+/** Constant-time string equality (for comparing shared secrets / bearer tokens). */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;

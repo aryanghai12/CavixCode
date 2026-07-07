@@ -16,6 +16,7 @@ import { InlineEngine } from "./workflow/inline.ts";
 import { BullMqEngine } from "./workflow/bullmq.ts";
 import { RedisStreamSource } from "./bridge/redisSource.ts";
 import { runBridge } from "./bridge/bridge.ts";
+import { makeControlPlaneResolver } from "./byok/resolver.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "orchestrator", msg, ...meta }));
@@ -50,9 +51,19 @@ async function main() {
     ["anthropic", new AnthropicProvider()],
     ["fake", new FakeProvider(() => '{"summary":"dry run","findings":[]}')],
   ]);
+  // BYOK from the site: if pointed at the control-plane, each review uses the org's
+  // own key/model chosen on the dashboard (falls back to env config otherwise).
+  const cpUrl = process.env.CAVIX_CONTROL_PLANE_URL;
+  const internalToken = process.env.CAVIX_INTERNAL_TOKEN;
+  const resolver = cpUrl && internalToken
+    ? makeControlPlaneResolver({ url: cpUrl, token: internalToken, logger: { warn: (m, meta) => log("warn", m, meta) } })
+    : undefined;
+  if (resolver) log("info", "BYOK: resolving org keys from the control-plane", { url: cpUrl });
+
   const gateway = new Gateway({
     providers,
     config: cfg.gateway,
+    resolver,
     logger: { info: (m, meta) => log("info", m, meta), warn: (m, meta) => log("warn", m, meta) },
   });
 

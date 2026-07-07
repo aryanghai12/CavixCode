@@ -965,6 +965,20 @@ PRs**, connect the other two services (all deployed the same way as Path A/B):
 4. **Org owners install the App** on their repos (or self‑serve from your Marketplace
    listing). From then on, every PR is reviewed and appears on their dashboard.
 
+> **Use the keys owners set on the site (no env keys).** So real reviews use each
+> org's own provider/model/key from the **AI & BYOK** page, connect the orchestrator to
+> the control‑plane with a shared secret:
+> - On **both** services set the same **`CAVIX_INTERNAL_TOKEN`** (any long random
+>   string). This turns on a token‑gated internal endpoint on the site.
+> - On the **orchestrator** also set **`CAVIX_CONTROL_PLANE_URL`** to your site URL
+>   (e.g. `https://cavix.onrender.com`).
+>
+> Now, for each review, the orchestrator fetches that org's key from the site
+> (cached ~60s) and uses it — no `CAVIX_LLM_API_KEY` env needed. If the site is
+> unreachable or the org hasn't set a key, it falls back to the env config, so a
+> review never hard‑fails. Keep the two services on the same private network in
+> production (the endpoint returns the decrypted key over the shared‑secret channel).
+
 Now the loop is complete: **owner signs up on your site → adds their AI key → installs
 the GitHub App → opens a PR → Cavix reviews it → the result appears in their dashboard.**
 
@@ -1279,6 +1293,8 @@ Key slots at a glance:
 | `CAVIX_SECRET_KEY` | control‑plane | Encrypts stored BYOK keys + OAuth tokens at rest — **set in production** |
 | `DATABASE_URL` (or `CAVIX_DATABASE_URL`) | control‑plane | Postgres connection string — set it and data **survives restarts** (Render/Neon/Supabase). Omit = in‑memory. |
 | `CAVIX_DATABASE_SSL` | control‑plane | `off` / `true` to override TLS auto‑detection for Postgres |
+| `CAVIX_INTERNAL_TOKEN` | control‑plane + orchestrator | Shared secret that lets the orchestrator read each org's BYOK key from the site. Set the **same** value on both. |
+| `CAVIX_CONTROL_PLANE_URL` | orchestrator | The site's URL, so the orchestrator fetches org keys from it (BYOK end‑to‑end) |
 | `CAVIX_GITHUB_OAUTH_CLIENT_ID` | control‑plane | "Sign in with GitHub" OAuth App client id (unset = demo mode) |
 | `CAVIX_GITHUB_OAUTH_CLIENT_SECRET` | control‑plane | GitHub OAuth App client secret |
 | `CAVIX_PUBLIC_URL` | control‑plane | Public site URL, for the OAuth callback (e.g. `https://app.yourdomain.com`) |

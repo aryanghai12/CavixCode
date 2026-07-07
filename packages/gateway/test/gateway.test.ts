@@ -112,3 +112,38 @@ test("gateway: unknown provider and missing key fail loudly", async () => {
     /BYOK key missing/,
   );
 });
+
+test("BYOK resolver: fetches the org's key at call time and caches it", async () => {
+  let calls = 0;
+  const resolver = async (org: string) => {
+    calls++;
+    return org === "site-org" ? { provider: "fake", apiKey: "SITE-KEY-123", model: "fake-model" } : null;
+  };
+  const fake = new FakeProvider((req) => `echo:${req.model}`);
+  const gw = new Gateway({
+    providers: new Map([["fake", fake]]),
+    config: { orgs: {}, fallback: { provider: "fake", apiKey: "FALLBACK", model: "fake-model" } },
+    resolver,
+  });
+
+  await gw.complete("site-org", { messages: [{ role: "user", content: "hi" }] });
+  await gw.complete("site-org", { messages: [{ role: "user", content: "hi" }] });
+  assert.deepEqual(fake.seenKeys, ["SITE-KEY-123", "SITE-KEY-123"], "resolver key is used for both calls");
+  assert.equal(calls, 1, "resolved config is cached within the TTL");
+
+  // An org the resolver doesn't know falls back to the static/env fallback config.
+  await gw.complete("unknown-org", { messages: [{ role: "user", content: "hi" }] });
+  assert.equal(fake.seenKeys[2], "FALLBACK");
+});
+
+test("BYOK resolver: a resolver error falls back to static config (never crashes the review)", async () => {
+  const resolver = async () => { throw new Error("control-plane down"); };
+  const fake = new FakeProvider((req) => `echo:${req.model}`);
+  const gw = new Gateway({
+    providers: new Map([["fake", fake]]),
+    config: { orgs: { acme: { provider: "fake", apiKey: "ENV-KEY", model: "fake-model" } } },
+    resolver,
+  });
+  await gw.complete("acme", { messages: [{ role: "user", content: "hi" }] });
+  assert.deepEqual(fake.seenKeys, ["ENV-KEY"]);
+});

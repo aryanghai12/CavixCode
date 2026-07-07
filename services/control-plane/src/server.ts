@@ -5,6 +5,7 @@ import path from "node:path";
 import type { DecisionState, Role, Store } from "./store.ts";
 import {
   clearCookie,
+  constantTimeEqual,
   isPlatformAdmin,
   parseCookies,
   sessionCookie,
@@ -248,6 +249,20 @@ async function apiRoute(
       }
     }
     return void sendJson(res, 404, { error: `no admin route for ${m} ${p}` });
+  }
+
+  // ----- internal service-to-service: the orchestrator fetches an org's BYOK -----
+  // Returns the DECRYPTED key, so it's gated by a shared bearer token and is disabled
+  // unless CAVIX_INTERNAL_TOKEN is set. Keep this on an internal network in production.
+  let im = /^\/api\/internal\/orgs\/([^/]+)\/llm$/.exec(p);
+  if (m === "GET" && im) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(im[1]);
+    const s = store.getSettings(org);
+    return void sendJson(res, 200, { provider: s.llmProvider, model: s.llmModel, apiKey: store.getApiKey(org) ?? "" });
   }
 
   // ----- orgs / onboarding (unauthenticated create kept for API/tests & GitHub App onboarding) -----

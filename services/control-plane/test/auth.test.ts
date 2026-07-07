@@ -167,6 +167,32 @@ test("settings: review-comment structure sections persist", async () => {
   });
 });
 
+test("internal BYOK endpoint: token-gated, returns the org's decrypted key for the orchestrator", async () => {
+  process.env.CAVIX_INTERNAL_TOKEN = "internal-shhh";
+  await withServer(async (base, store) => {
+    store.createOrg("acme");
+    store.updateSettings("acme", { llmProvider: "anthropic", llmModel: "claude-opus-4-8" });
+    store.setApiKey("acme", "sk-ant-real-key");
+
+    assert.equal((await fetch(base + "/api/internal/orgs/acme/llm")).status, 401, "no token → 401");
+    assert.equal((await fetch(base + "/api/internal/orgs/acme/llm", { headers: { authorization: "Bearer nope" } })).status, 401, "wrong token → 401");
+
+    const res = await fetch(base + "/api/internal/orgs/acme/llm", { headers: { authorization: "Bearer internal-shhh" } });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, "anthropic");
+    assert.equal(body.model, "claude-opus-4-8");
+    assert.equal(body.apiKey, "sk-ant-real-key", "returns the decrypted BYOK key over the internal channel");
+  });
+  delete process.env.CAVIX_INTERNAL_TOKEN;
+});
+
+test("internal BYOK endpoint: disabled (404) when CAVIX_INTERNAL_TOKEN is unset", async () => {
+  await withServer(async (base) => {
+    assert.equal((await fetch(base + "/api/internal/orgs/acme/llm", { headers: { authorization: "Bearer x" } })).status, 404);
+  });
+});
+
 test("stats: aggregates reviews/findings/decisions for the dashboard", async () => {
   await withServer(async (base, store) => {
     store.createOrg("acme");

@@ -3,6 +3,8 @@ import {
   resolveOrgConfig,
   keyFingerprint,
   type GatewayConfigData,
+  type OrgConfigResolver,
+  type OrgLLMConfig,
 } from "./config.ts";
 import { computeCostUsd, DEFAULT_PRICING, type ModelPrice } from "./cost.ts";
 
@@ -41,6 +43,10 @@ export interface GatewayOptions {
   config: GatewayConfigData;
   pricing?: Record<string, ModelPrice>;
   logger?: GatewayLogger;
+  /** Optional per-request BYOK resolver (e.g. fetch the org's key from the site). */
+  resolver?: OrgConfigResolver;
+  /** How long to cache a resolved org config (default 60s). */
+  resolverTtlMs?: number;
 }
 
 const noopLogger: GatewayLogger = { info() {}, warn() {} };
@@ -58,19 +64,45 @@ export class Gateway {
   private readonly pricing: Record<string, ModelPrice>;
   private readonly logger: GatewayLogger;
   private readonly ledger: CostRecord[] = [];
+  private readonly resolver?: OrgConfigResolver;
+  private readonly resolverTtlMs: number;
+  private readonly resolved = new Map<string, { cfg: OrgLLMConfig; exp: number }>();
 
   constructor(opts: GatewayOptions) {
     this.providers = opts.providers;
     this.config = opts.config;
     this.pricing = opts.pricing ?? DEFAULT_PRICING;
     this.logger = opts.logger ?? noopLogger;
+    this.resolver = opts.resolver;
+    this.resolverTtlMs = opts.resolverTtlMs ?? 60_000;
+  }
+
+  // Resolve BYOK for an org: the external resolver (the site's key store) wins, then
+  // static config, then fallback. Cached briefly so one review's many calls don't
+  // re-fetch, while site key changes still propagate within the TTL.
+  private async resolveConfig(org: string): Promise<OrgLLMConfig> {
+    const cached = this.resolved.get(org);
+    if (cached && cached.exp > Date.now()) return cached.cfg;
+
+    let cfg: OrgLLMConfig | null = null;
+    if (this.resolver) {
+      try {
+        cfg = await this.resolver(org);
+      } catch (err) {
+        this.logger.warn("gateway: BYOK resolver failed, falling back to static config", { org, err: (err as Error).message });
+      }
+    }
+    if (cfg && !cfg.apiKey) cfg = null; // resolver found the org but it has no key set yet
+    const finalCfg = cfg ?? resolveOrgConfig(this.config, org); // throws if none/no key
+    this.resolved.set(org, { cfg: finalCfg, exp: Date.now() + this.resolverTtlMs });
+    return finalCfg;
   }
 
   async complete(
     org: string,
     input: GatewayCompleteInput,
   ): Promise<{ response: LLMResponse; cost: CostRecord }> {
-    const orgCfg = resolveOrgConfig(this.config, org);
+    const orgCfg = await this.resolveConfig(org);
     const provider = this.providers.get(orgCfg.provider);
     if (!provider) {
       throw new Error(`gateway: unknown provider "${orgCfg.provider}" for org "${org}"`);
