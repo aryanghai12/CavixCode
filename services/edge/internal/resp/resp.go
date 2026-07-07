@@ -10,6 +10,7 @@ package resp
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -25,17 +26,61 @@ type Client struct {
 	w    *bufio.Writer
 }
 
-// Dial connects to addr ("host:port") with a timeout.
+// Options configures a connection. Managed Redis (Redis Cloud, Render Key Value,
+// Upstash) over the public internet requires a password and usually TLS.
+type Options struct {
+	Username string
+	Password string
+	TLS      bool
+	Timeout  time.Duration
+}
+
+// Dial connects to addr ("host:port") with a timeout (plain, no auth).
 func Dial(addr string, timeout time.Duration) (*Client, error) {
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	return DialWithOptions(addr, Options{Timeout: timeout})
+}
+
+// DialWithOptions connects with optional TLS + AUTH. AUTH is sent first, before any
+// other command, exactly as Redis requires.
+func DialWithOptions(addr string, opts Options) (*Client, error) {
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	var conn net.Conn
+	var err error
+	if opts.TLS {
+		host, _, splitErr := net.SplitHostPort(addr)
+		if splitErr != nil {
+			host = addr
+		}
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", addr, &tls.Config{ServerName: host})
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, timeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("resp dial %s: %w", addr, err)
 	}
-	return &Client{
+	c := &Client{
 		conn: conn,
 		r:    bufio.NewReader(conn),
 		w:    bufio.NewWriter(conn),
-	}, nil
+	}
+	if opts.Password != "" {
+		_ = c.SetDeadline(time.Now().Add(timeout))
+		var authErr error
+		if opts.Username != "" {
+			_, authErr = c.Do("AUTH", opts.Username, opts.Password)
+		} else {
+			_, authErr = c.Do("AUTH", opts.Password)
+		}
+		_ = c.SetDeadline(time.Time{})
+		if authErr != nil {
+			_ = c.Close()
+			return nil, fmt.Errorf("resp auth: %w", authErr)
+		}
+	}
+	return c, nil
 }
 
 // Close closes the underlying connection.

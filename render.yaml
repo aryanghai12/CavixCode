@@ -1,19 +1,30 @@
-# Cavix — one-click FREE deploy of the website (control-plane) on Render.
+# Cavix — FULL-PIPELINE deploy on Render (mostly free).
+#
+# This provisions the whole product:
+#   • cavix              the website + dashboard (control-plane, Node)   [web, free]
+#   • cavix-edge         GitHub webhook receiver (Go)                     [web, free]
+#   • cavix-orchestrator the review engine (Node)                        [web, free]
+#   • cavix-redis        the job queue (Key Value / Redis)               [free]
+#   • cavix-db           Postgres, so accounts/reviews persist           [free]
 #
 # How to use:
 #   1. Push this repo to GitHub.
-#   2. In Render:  New +  →  Blueprint  →  connect this repo  →  Apply.
-#   3. When it's live, open the URL, click Sign up, and share it. Org owners bring
-#      their own AI key on the site (BYOK) — you set no API keys here.
+#   2. Render → New + → Blueprint → pick this repo → Apply.
+#   3. Fill in the few `sync: false` values (they can't be auto-generated):
+#        - cavix:              CAVIX_ADMIN_EMAILS   = your email
+#        - cavix-orchestrator: CAVIX_CONTROL_PLANE_URL = the cavix web service URL
+#                              CAVIX_APP_ID, CAVIX_APP_PRIVATE_KEY  (GitHub App, §8B)
+#   4. In your GitHub App (GUIDE §8B): set the Webhook URL to the cavix-edge URL
+#      (…/webhook) and the Webhook secret to cavix-edge's generated CAVIX_WEBHOOK_SECRET
+#      (view it in Render → cavix-edge → Environment).
 #
-# Everything below runs on Render's FREE plan. The two secrets are auto-generated
-# and persist across deploys. Set CAVIX_ADMIN_EMAILS to your email so you get the
-# founder Admin console.
+# JUST WANT THE FREE TRIAL SITE? Delete the cavix-edge, cavix-orchestrator, and
+# cavix-redis service blocks (and their notes). The `cavix` web service + Postgres are
+# fully self-contained — org owners bring their own AI key on the site (BYOK).
 #
-# Note (free tier): a free web service spins down after ~15 min of inactivity and
-# cold-starts (~30-60s) on the next visit. Fine for a trial; upgrade the plan to keep
-# it always-on. This blueprint provisions a FREE Postgres and wires DATABASE_URL, so
-# accounts/reviews SURVIVE restarts and redeploys.
+# Free-tier facts: free web services sleep after ~15 min idle and cold-start on the
+# next request. Render's free Postgres/Redis are time-limited; swap in Neon/Supabase
+# (Postgres) or Upstash (Redis) free for unlimited — just set DATABASE_URL / CAVIX_REDIS_URL.
 
 databases:
   - name: cavix-db
@@ -22,6 +33,13 @@ databases:
     user: cavix
 
 services:
+  # ---------- job queue (Redis / Key Value) ----------
+  - type: redis
+    name: cavix-redis
+    plan: free
+    ipAllowList: []          # internal-only (no public access)
+
+  # ---------- the website + dashboard (what org owners use) ----------
   - type: web
     name: cavix
     runtime: node
@@ -32,7 +50,7 @@ services:
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
-      - key: DATABASE_URL             # persistent storage (auto-wired to cavix-db)
+      - key: DATABASE_URL              # persistent storage (auto-wired)
         fromDatabase:
           name: cavix-db
           property: connectionString
@@ -40,9 +58,65 @@ services:
         generateValue: true
       - key: CAVIX_SECRET_KEY          # encrypts stored BYOK keys (auto-generated)
         generateValue: true
+      - key: CAVIX_INTERNAL_TOKEN      # lets the orchestrator read org keys (auto-generated)
+        generateValue: true
       - key: CAVIX_ADMIN_EMAILS        # YOUR email → founder Admin console
         sync: false
-      - key: CAVIX_LLM_PROVIDER        # default provider shown to a new org (optional)
+      - key: CAVIX_LLM_PROVIDER        # default provider a new org sees (optional)
         value: anthropic
-      - key: CAVIX_LLM_MODEL           # default model shown to a new org (optional)
+      - key: CAVIX_LLM_MODEL           # default model a new org sees (optional)
         value: claude-sonnet-4-6
+
+  # ---------- edge: receives GitHub webhooks, queues jobs ----------
+  - type: web
+    name: cavix-edge
+    runtime: go
+    plan: free
+    region: oregon
+    rootDir: services/edge
+    buildCommand: go build -o edge ./cmd/edge
+    startCommand: ./edge
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: CAVIX_REDIS_URL           # queue connection (auto-wired, incl. password)
+        fromService:
+          name: cavix-redis
+          type: redis
+          property: connectionString
+      - key: CAVIX_WEBHOOK_SECRET      # generated; paste this into your GitHub App webhook
+        generateValue: true
+      - key: CAVIX_BOT_HANDLE          # your GitHub App handle (e.g. cavixcode)
+        value: cavix
+
+  # ---------- orchestrator: runs the review, posts to GitHub ----------
+  - type: web
+    name: cavix-orchestrator
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm run orchestrator
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: CAVIX_REDIS_URL           # same queue as the edge (auto-wired)
+        fromService:
+          name: cavix-redis
+          type: redis
+          property: connectionString
+      - key: CAVIX_INTERNAL_TOKEN      # shared with the site (auto-copied)
+        fromService:
+          name: cavix
+          type: web
+          envVarKey: CAVIX_INTERNAL_TOKEN
+      - key: CAVIX_CONTROL_PLANE_URL   # the cavix web service URL (paste after 1st deploy)
+        sync: false
+      - key: CAVIX_APP_ID              # GitHub App id (GUIDE §8B)
+        sync: false
+      - key: CAVIX_APP_PRIVATE_KEY     # GitHub App .pem contents (GUIDE §8B)
+        sync: false
+      - key: CAVIX_BOT_HANDLE
+        value: cavix
+      - key: CAVIX_SANDBOX_BACKEND     # "local" runs fine on Render's free box
+        value: local

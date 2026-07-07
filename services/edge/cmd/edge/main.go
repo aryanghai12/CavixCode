@@ -16,6 +16,7 @@ import (
 	"github.com/cavix/edge/internal/dedupe"
 	"github.com/cavix/edge/internal/obs"
 	"github.com/cavix/edge/internal/queue"
+	"github.com/cavix/edge/internal/resp"
 	"github.com/cavix/edge/internal/webhook"
 )
 
@@ -35,13 +36,18 @@ func main() {
 		log.Warn("CAVIX_REDIS_ADDR empty — using in-memory queue (jobs are NOT durable)")
 		producer = queue.NewFakeProducer()
 	} else {
-		p, err := queue.NewRedisStreamProducer(cfg.RedisAddr, cfg.StreamKey, cfg.EnqueueDialMs)
+		p, err := queue.NewRedisStreamProducerWithOptions(cfg.RedisAddr, cfg.StreamKey, resp.Options{
+			Username: cfg.RedisUsername,
+			Password: cfg.RedisPassword,
+			TLS:      cfg.RedisTLS,
+			Timeout:  cfg.EnqueueDialMs,
+		})
 		if err != nil {
 			log.Error("redis connect failed", "addr", cfg.RedisAddr, "err", err.Error())
 			os.Exit(1)
 		}
 		producer = p
-		log.Info("connected to redis stream", "addr", cfg.RedisAddr, "stream", cfg.StreamKey)
+		log.Info("connected to redis stream", "addr", cfg.RedisAddr, "stream", cfg.StreamKey, "tls", cfg.RedisTLS)
 	}
 	defer producer.Close()
 

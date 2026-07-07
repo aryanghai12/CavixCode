@@ -27,9 +27,18 @@ type RedisStreamProducer struct {
 
 // NewRedisStreamProducer dials addr ("host:port") and targets the given stream.
 func NewRedisStreamProducer(addr, stream string, timeout time.Duration) (*RedisStreamProducer, error) {
-	c, err := resp.Dial(addr, timeout)
+	return NewRedisStreamProducerWithOptions(addr, stream, resp.Options{Timeout: timeout})
+}
+
+// NewRedisStreamProducerWithOptions dials with auth/TLS (managed Redis).
+func NewRedisStreamProducerWithOptions(addr, stream string, opts resp.Options) (*RedisStreamProducer, error) {
+	c, err := resp.DialWithOptions(addr, opts)
 	if err != nil {
 		return nil, err
+	}
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 3 * time.Second
 	}
 	return &RedisStreamProducer{client: c, stream: stream, timeout: timeout}, nil
 }

@@ -801,34 +801,45 @@ Four things run in production:
 
 ### Path A0 — FREE one‑click deploy (the fastest way to go live, $0)
 
-The repo ships a **`render.yaml` blueprint**, so you can put the website live on
-Render's **free** plan without configuring anything by hand.
+The repo ships a **`render.yaml` blueprint** that provisions the **whole product** on
+Render's **free** plan: the **website**, the **edge** (webhook receiver), the
+**orchestrator** (review engine), a **Redis** queue, and a **Postgres** database — all
+wired together automatically.
 
 1. **Push the repo to GitHub** (see Step A1 below if it isn't there yet).
 2. Go to **https://render.com** → sign up (use your GitHub account) → **New + →
    Blueprint** → pick your repo → **Apply**.
-3. Render reads `render.yaml`, creates the **`cavix`** web service on the **free**
-   plan, and **auto‑generates** the two required secrets for you.
-4. In the service's **Environment** tab, set **`CAVIX_ADMIN_EMAILS`** to your email
-   (so you get the founder Admin console). That's the only thing you type.
-5. Wait for the build, then open the URL Render gives you (e.g.
-   `https://cavix.onrender.com`). **Sign up, and share the link — anyone can test it.** 🎉
+3. Render reads `render.yaml`, creates all five components, **auto‑generates** the
+   secrets, and **auto‑wires** `DATABASE_URL`, the Redis URL, and the shared
+   `CAVIX_INTERNAL_TOKEN` between services.
+4. Fill in the few values it can't generate (each service's **Environment** tab):
+   - **cavix:** `CAVIX_ADMIN_EMAILS` = your email (founder Admin console).
+   - **cavix‑orchestrator:** `CAVIX_CONTROL_PLANE_URL` = the **cavix** service URL;
+     `CAVIX_APP_ID` + `CAVIX_APP_PRIVATE_KEY` from your GitHub App ([§8B](#8b-go-live-on-github-production-github-app--cavix-commands)).
+5. In your **GitHub App** settings, set the **Webhook URL** to the **cavix‑edge** URL
+   ending in `/webhook`, and the **Webhook secret** to cavix‑edge's generated
+   `CAVIX_WEBHOOK_SECRET` (view it in Render → cavix‑edge → Environment).
+6. Open the **cavix** URL, sign up, and share it. Install the GitHub App on a repo and
+   open a PR — Cavix reviews it end‑to‑end, using that org's own key from the site. 🎉
 
-**No AI key, no Redis, no orchestrator** — the website is fully self‑contained. Org
-owners bring their own AI key on the site (BYOK).
+> **Just want the free trial site (no real‑PR pipeline)?** In `render.yaml`, delete the
+> **cavix‑edge**, **cavix‑orchestrator**, and **cavix‑redis** blocks. The **cavix** web
+> service + Postgres are fully self‑contained — org owners bring their own AI key on the
+> site (BYOK). This is the simplest, guaranteed‑green free deploy; do the full pipeline
+> once you've created the GitHub App.
 
 > **Free‑tier facts (so nothing surprises you):**
-> - A free web service **spins down after ~15 minutes idle** and **cold‑starts**
->   (~30–60s) on the next visit. Perfectly fine for a trial; switch the plan to
->   Starter to keep it always‑on.
-> - **Data now persists.** The blueprint also provisions a **free Postgres** and wires
->   `DATABASE_URL`, so accounts, reviews, and settings **survive restarts and
->   redeploys**. (Render's free Postgres is time‑limited — see "a real database" in the
->   checklist; swap in Neon/Supabase free for an unlimited free DB.)
-> - The two secrets are generated once and persist; don't rotate `CAVIX_SECRET_KEY`
->   or previously‑saved BYOK keys can't be decrypted.
+> - Free web services **spin down after ~15 minutes idle** and **cold‑start**
+>   (~30–60s) on the next request. Fine for a trial; a plan bump keeps them always‑on.
+> - **Data persists** via the auto‑wired Postgres (`DATABASE_URL`), so accounts and
+>   reviews **survive restarts/redeploys**.
+> - Render's free **Postgres and Redis are time‑limited**; for unlimited free, swap in
+>   **Neon/Supabase** (Postgres → `DATABASE_URL`) or **Upstash** (Redis → set each
+>   service's `CAVIX_REDIS_URL` to the `rediss://…` string). Both are supported now
+>   (password + TLS).
+> - Don't rotate `CAVIX_SECRET_KEY` or previously‑saved BYOK keys can't be decrypted.
 
-The manual steps below (Path A) are the same thing done by hand, or for Railway/Fly.
+The manual steps below (Path A) are the website done by hand, or for Railway/Fly.
 
 ---
 
