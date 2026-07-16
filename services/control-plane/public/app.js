@@ -188,7 +188,7 @@
 
     const summaryCard = rs.summary ? `
       <div class="summary-card" style="margin-bottom:18px">
-        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px">◆</span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">preview</span></div>
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><svg class="lm-svg" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 9 L6.5 16 L11 23"/><path d="M21 9 L25.5 16 L21 23"/><path d="M13.5 16.6 L15.6 18.8 L19 13.4"/></g></svg></span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">preview</span></div>
         <div class="sc-body">
           <h4>Summary</h4>
           <p>${esc((toneBlurb[s.tone] || toneBlurb.concise))}</p>
@@ -208,7 +208,7 @@
 <div class="cr-line add"><span class="ln">87</span><span class="k">  if</span> (!refund.<span class="f">isSettled</span>(id)) <span class="k">await</span> charge.<span class="f">refund</span>(amount)</div>
         </div>
         <div class="cr-comment">
-          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px">◆</span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><svg class="lm-svg" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 9 L6.5 16 L11 23"/><path d="M21 9 L25.5 16 L21 23"/><path d="M13.5 16.6 L15.6 18.8 L19 13.4"/></g></svg></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
           <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund.</div>
           ${rs.proof ? `<div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts, <span class="t-red">exit 1</span>
 <span class="t-purple">[after-fix]</span> refund.retry.test.ts, <span class="t-green">exit 0</span>
@@ -512,7 +512,7 @@
     const current = orgs.find((o) => o.name === org) || { tier: "free" };
     const tier = current.tier;
     const P = window.CAVIX_PRICING;
-    const price = (t) => t.custom ? "Custom" : (t.byok === 0 ? "$0" : (t.byok === t.managed ? `$${t.byok}/seat/mo` : `$${t.byok}–${t.managed}/seat/mo`));
+    const price = (t) => t.custom ? "Custom" : (t.byok === 0 ? "$0" : (t.byok === t.managed ? `$${t.byok}/seat/mo` : `$${t.byok}-${t.managed}/seat/mo`));
     content.innerHTML = `
       <div class="panel"><div class="panel-head"><h2>Current plan</h2></div>
         <div class="panel-body"><div class="settings-row"><div><div class="sr-label">${tier === "free" ? "Free / OSS" : tier === "paid" ? "Team / Pro" : "Enterprise"}</div><div class="sr-desc">Billing is illustrative in this trial build, connect Stripe for production charging.</div></div><span class="badge badge-verified">active</span></div></div>

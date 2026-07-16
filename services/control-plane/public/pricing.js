@@ -29,7 +29,7 @@ window.CAVIX_PRICING = {
     },
     {
       id: "enterprise", name: "Enterprise", custom: true, priceLabel: "Custom",
-      source: "$30–60/seat or site license",
+      source: "$30-60/seat or site license",
       blurb: "For regulated & air-gapped orgs.",
       features: ["Self-host / VPC / air-gapped", "SSO / SAML + SCIM + RBAC", "Audit log & zero-retention", "Legacy languages + modernization", "Dedicated support & SLA"],
       cta: "Contact sales",

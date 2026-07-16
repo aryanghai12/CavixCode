@@ -100,7 +100,7 @@ services:
       - key: CAVIX_WEBHOOK_SECRET      # generated; paste this into your GitHub App webhook
         generateValue: true
       - key: CAVIX_BOT_HANDLE          # your GitHub App handle (e.g. cavixcode)
-        value: cavix
+        value: cavixcode
 
   # ---------- orchestrator: runs the review, posts to GitHub ----------
   - type: web
@@ -130,6 +130,6 @@ services:
       - key: CAVIX_APP_PRIVATE_KEY     # GitHub App .pem contents (GUIDE §8B)
         sync: false
       - key: CAVIX_BOT_HANDLE
-        value: cavix
+        value: cavixcode
       - key: CAVIX_SANDBOX_BACKEND     # "local" runs fine on Render's free box
         value: local

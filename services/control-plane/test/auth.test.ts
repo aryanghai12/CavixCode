@@ -234,7 +234,9 @@ test("static site: marketing, login, and dashboard shell are served", async () =
   await withServer(async (base) => {
     const home = await fetch(base + "/");
     assert.equal(home.status, 200);
-    assert.match(await home.text(), /proves it before it speaks/i);
+    // Anchor on the page's structure, not its headline: this asserts the
+    // marketing page is served, and shouldn't fail every time copy is edited.
+    assert.match(await home.text(), /<header class="hero">/);
 
     const login = await fetch(base + "/login");
     assert.match(await login.text(), /Welcome back|auth-card/);
