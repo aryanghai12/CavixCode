@@ -1,17 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Cavix">
   <title>Cavix</title>
+  <!--
+    TRANSPARENT BACKGROUND BY DESIGN. This mark is used bare, on the tab bar, the
+    dark nav, and light surfaces alike, so nothing in it may be near-black: the
+    original navy end stop (#0B1E3D) disappeared against a dark page and forced an
+    ugly light tile behind the logo. The gradient now runs highlight -> royal ->
+    a mid blue that still holds its own on white, and the execution node's ring
+    is a mid navy rather than near-black. Same geometry, same brand, works
+    everywhere with no plate behind it.
+  -->
   <defs>
-    <!-- Primary brand gradient: royal blue (light source, top-left) -> dark navy (bottom-right) -->
+    <!-- Brand gradient: highlight (top-left light source) -> royal -> deep blue -->
     <linearGradient id="cxArc" x1="46" y1="46" x2="210" y2="210" gradientUnits="userSpaceOnUse">
-      <stop offset="0"    stop-color="#3B82F6"/>
-      <stop offset="0.52" stop-color="#1E46A8"/>
-      <stop offset="1"    stop-color="#0B1E3D"/>
+      <stop offset="0"    stop-color="#7FB2FF"/>
+      <stop offset="0.48" stop-color="#3B82F6"/>
+      <stop offset="1"    stop-color="#1E56C8"/>
     </linearGradient>
 
-    <!-- Wireframe gradient: one step lighter so the box reads as "inside/behind" the C -->
+    <!-- Wireframe: one step lighter so the box reads as "inside/behind" the C -->
     <linearGradient id="cxBox" x1="92" y1="86" x2="164" y2="170" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#7FB2FF"/>
-      <stop offset="1" stop-color="#2D62D6"/>
+      <stop offset="0" stop-color="#A8CCFF"/>
+      <stop offset="1" stop-color="#4A83E8"/>
     </linearGradient>
 
     <!-- Execution node glow: flat vector approximation, no blur filter (SVG filters break in favicons/emails) -->
@@ -36,9 +45,9 @@
   </g>
 
   <!-- 3. EXECUTION NODE at the cube's near corner -->
-  <circle cx="128" cy="128" r="12.5" fill="#0B1E3D"/>
-  <circle cx="128" cy="128" r="9"    fill="#7FB2FF"/>
-  <circle cx="128" cy="128" r="4"    fill="#E8F2FF"/>
+  <circle cx="128" cy="128" r="12.5" fill="#1E56C8"/>
+  <circle cx="128" cy="128" r="9"    fill="#8FC2FF"/>
+  <circle cx="128" cy="128" r="4"    fill="#F2F8FF"/>
 
   <!-- 4. THE 'C': a 256-degree arc, gap facing east, round caps -->
   <path d="M 174.17 68.9 A 75 75 0 1 0 174.17 187.1"

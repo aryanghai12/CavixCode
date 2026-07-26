@@ -1,33 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Cavix">
   <title>Cavix</title>
   <!--
-    Favicon build of the Cavix mark. Same geometry as cavix-mark.svg, adapted for
-    16px: it sits on a light rounded tile so it reads on light AND dark browser
-    chrome, the cube keeps only its outer silhouette (the interior edges turn to
-    mush at this size), and strokes are thickened so nothing disappears.
+    TRANSPARENT favicon, the way major sites do it: the glyph sits directly on the
+    browser's tab bar with no plate behind it, so it works in light and dark chrome
+    and never shows a mismatched square. Same geometry as cavix-mark.svg, adapted
+    for 16px: the cube keeps only its outer silhouette (interior edges turn to mush
+    at this size) and strokes are thickened so nothing disappears.
   -->
   <defs>
     <linearGradient id="fxArc" x1="52" y1="52" x2="204" y2="204" gradientUnits="userSpaceOnUse">
-      <stop offset="0"    stop-color="#3B82F6"/>
-      <stop offset="0.52" stop-color="#1E46A8"/>
-      <stop offset="1"    stop-color="#0B1E3D"/>
+      <stop offset="0"    stop-color="#7FB2FF"/>
+      <stop offset="0.48" stop-color="#3B82F6"/>
+      <stop offset="1"    stop-color="#1E56C8"/>
     </linearGradient>
     <linearGradient id="fxBox" x1="92" y1="86" x2="164" y2="170" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5E9BFF"/>
-      <stop offset="1" stop-color="#2D62D6"/>
+      <stop offset="0" stop-color="#A8CCFF"/>
+      <stop offset="1" stop-color="#4A83E8"/>
     </linearGradient>
   </defs>
-
-  <!-- Light tile: keeps the navy end of the gradient legible on dark tab bars. -->
-  <rect width="256" height="256" rx="56" fill="#EEF3FA"/>
 
   <!-- Sandbox silhouette only. -->
   <path d="M 128 86 L 164.37 107 L 164.37 149 L 128 170 L 91.63 149 L 91.63 107 Z"
         fill="none" stroke="url(#fxBox)" stroke-width="11" stroke-linejoin="round"/>
 
   <!-- Execution node. -->
-  <circle cx="128" cy="128" r="15" fill="#0B1E3D"/>
-  <circle cx="128" cy="128" r="7"  fill="#7FB2FF"/>
+  <circle cx="128" cy="128" r="15" fill="#1E56C8"/>
+  <circle cx="128" cy="128" r="7"  fill="#A8CCFF"/>
 
   <!-- The 'C'. -->
   <path d="M 174.17 68.9 A 75 75 0 1 0 174.17 187.1"

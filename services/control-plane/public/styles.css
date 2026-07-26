@@ -2,16 +2,21 @@
 :root {
   /* ---------------------------------------------------------------------
      DEEP NAVY, derived from the brand mark (cavix-mark.svg).
-     The mark runs royal #3B82F6 -> mid #1E46A8 -> navy #0B1E3D. The page sits
-     BELOW that navy so the logo reads as the light source in the room rather
-     than a sticker on top of it. Every surface carries the same ~218deg hue,
-     so the whole UI is cool, never neutral grey.
+     Every surface carries the same ~218deg hue, so the whole UI is cool and
+     never neutral grey.
+
+     COMFORT: these surfaces are deliberately NOT near-black. Body text on a
+     near-black ground lands around 17:1, which causes halation, the glow/blur
+     that makes dark UIs tiring to read. The ladder below puts body text at
+     ~12.8:1, inside the 10-13:1 band that reads as rich and dark without
+     straining. Every step is ~1.3x the previous luminance, so panels separate
+     by depth rather than by outline.
      --------------------------------------------------------------------- */
-  --navy-950: #04070F;      /* deepest, page background */
-  --navy-900: #070D1A;      /* elevated */
-  --navy-850: #091326;      /* cards */
-  --navy-800: #0E1D38;      /* raised / hover */
-  --navy-700: #0B1E3D;      /* the mark's navy, signature surface */
+  --navy-950: #141F35;      /* page background */
+  --navy-900: #18253E;      /* elevated */
+  --navy-850: #1B2A47;      /* cards */
+  --navy-800: #213353;      /* raised / hover */
+  --navy-700: #0B1E3D;      /* the mark's navy, deep accent panels */
   --navy-600: #1E46A8;      /* the mark's mid stop */
   --blue-500: #3B82F6;      /* the mark's royal, primary accent */
   --blue-300: #7FB2FF;      /* the mark's highlight */
@@ -21,12 +26,12 @@
   --bg-elev: var(--navy-900);
   --bg-card: var(--navy-850);
   --bg-card-2: var(--navy-800);
-  --border: #1D3559;
-  --border-soft: #122340;
-  --text: #E9F1FC;          /* cool white, never pure #fff */
-  --text-dim: #A6BAD6;
-  --text-faint: #6C83A4;
-  --davys: #2B4B7E;
+  --border: #2A3F63;
+  --border-soft: #223351;
+  --text: #D9E4F3;          /* softened off-white: pure white here glares */
+  --text-dim: #9DB0CC;
+  --text-faint: #87A0C6;   /* clears 4.5:1 even on the raised surface */
+  --davys: #3A5C8F;
   --accent: var(--blue-500);
   --accent-2: var(--blue-300);
   --brand: var(--blue-500);
@@ -40,17 +45,14 @@
   --brand-grad: linear-gradient(135deg, #2A68D4 0%, #1A3F97 100%);
   --brand-grad-soft: rgba(59,130,246,.13);
   --ink: #F2F8FF;                    /* text on the blue primary button */
-  /* The logo tile stays LIGHT: the mark's gradient ends in near-black navy,
-     which would vanish if the tile were blue or dark. */
-  --tile: linear-gradient(160deg, #EDF4FF 0%, #C8DCF7 100%);
   --green: #3FD6A0;
   --amber: #E6B45F;
   --red: #F0857E;
   --blue: var(--blue-300);
   --radius: 14px;
   --radius-sm: 10px;
-  --shadow: 0 24px 60px -20px rgba(2,6,16,.95);
-  --shadow-glow: 0 0 0 1px rgba(59,130,246,.22), 0 18px 48px -14px rgba(2,6,16,.85);
+  --shadow: 0 24px 60px -20px rgba(5,10,22,.72);
+  --shadow-glow: 0 0 0 1px rgba(59,130,246,.22), 0 18px 48px -14px rgba(5,10,22,.62);
   --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --maxw: 1560px;
@@ -71,7 +73,7 @@ body {
      "blob". This is depth, not decoration: it makes the page read as lit from
      where the logo sits, and everything below it fall away into the dark. */
   background:
-    radial-gradient(1400px 620px at 50% -260px, rgba(30,70,168,.20), transparent 72%),
+    radial-gradient(1400px 620px at 50% -260px, rgba(45,95,205,.22), transparent 72%),
     var(--bg);
   background-attachment: fixed;
   color: var(--text);
@@ -126,7 +128,7 @@ code, .mono { font-family: var(--mono); }
 .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
 .btn-ghost:hover { border-color: #2B4B7E; color: var(--text); background: rgba(59,130,246,.10); }
 .btn-soft { background: var(--bg-card-2); color: var(--text); border-color: var(--border); }
-.btn-soft:hover { border-color: #2B4B7E; background: #12233F; }
+.btn-soft:hover { border-color: #2B4B7E; background: #2A3F63; }
 .btn-sm { padding: 6px 12px; font-size: 13px; }
 .btn-danger { background: transparent; border-color: rgba(248,113,113,.35); color: var(--red); }
 .btn-danger:hover { background: rgba(248,113,113,.12); }
@@ -156,8 +158,11 @@ code, .mono { font-family: var(--mono); }
    page: the mark's gradient ends in deep navy, which would disappear against the
    near-black background. The tile is the same white->silver gradient as primary
    buttons, so the brand blue stays legible without introducing a new accent. */
-.logo-mark { width: 28px; height: 28px; border-radius: 7px; background: var(--tile); color: #0B1E3D; display: grid; place-items: center; flex: none; box-shadow: none; overflow: hidden; }
-.lm-svg { width: 90%; height: 90%; display: block; object-fit: contain; }
+/* No plate behind the mark: the SVG is transparent and tuned to read on any
+   background, so it sits directly on the nav the way a favicon sits on the
+   tab bar. Nudged up 1px because the glyph's optical centre sits low. */
+.logo-mark { width: 30px; height: 30px; background: none; border-radius: 0; display: grid; place-items: center; flex: none; box-shadow: none; }
+.lm-svg { width: 100%; height: 100%; display: block; object-fit: contain; }
 .nav-links { display: flex; align-items: center; gap: 28px; }
 .nav-links a { color: var(--text-dim); font-size: 14px; font-weight: 500; }
 .nav-links a:hover { color: var(--text); }
@@ -174,7 +179,7 @@ code, .mono { font-family: var(--mono); }
 .hero-cta { display: flex; gap: 12px; justify-content: flex-start; margin-top: 32px; flex-wrap: wrap; }
 .trust { margin-top: 28px; padding-top: 20px; border-top: var(--rule); color: var(--text-faint); font-size: 13px; max-width: 52ch; }
 
-.terminal { max-width: none; margin: 0; background: #050B16; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; text-align: left; }
+.terminal { max-width: none; margin: 0; background: #0E1729; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; text-align: left; }
 .terminal-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border-soft); }
 .dot { width: 12px; height: 12px; border-radius: 50%; }
 .dot-r { background: #ff5f57; } .dot-y { background: #febc2e; } .dot-g { background: #28c840; }
@@ -361,7 +366,7 @@ code, .mono { font-family: var(--mono); }
 .stat-inline .l { color: var(--text-dim); font-size: 13.5px; margin-top: 4px; }
 
 /* ---------- code review mockup (the code-themed centerpiece) ---------- */
-.cr-window { max-width: none; margin: 0; background: #050B16; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; font-family: var(--mono); font-size: 13px; }
+.cr-window { max-width: none; margin: 0; background: #0E1729; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; font-family: var(--mono); font-size: 13px; }
 .cr-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border-soft); color: var(--text-faint); }
 .cr-head .fname { margin-left: 6px; color: var(--text-dim); }
 .cr-head .pill-sm { margin-left: auto; font-size: 11px; padding: 2px 9px; border-radius: 999px; background: rgba(52,211,153,.14); color: #a7f3d0; border: 1px solid rgba(52,211,153,.3); }
@@ -376,7 +381,7 @@ code, .mono { font-family: var(--mono); }
 .cr-comment .cc-head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
 .cr-comment .cc-bot { font-weight: 700; }
 .cr-comment .cc-body { font-size: 13.5px; color: var(--text-dim); }
-.cr-comment .cc-proof { margin-top: 10px; background: #050B16; border: 1px solid var(--border-soft); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.7; }
+.cr-comment .cc-proof { margin-top: 10px; background: #0E1729; border: 1px solid var(--border-soft); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.7; }
 .cr-comment .cc-actions { display: flex; gap: 8px; margin-top: 10px; }
 
 /* ---------- pillars ---------- */
@@ -427,8 +432,8 @@ code, .mono { font-family: var(--mono); }
 }
 
 /* ---------- GitHub / OAuth buttons ---------- */
-.btn-github { background: #0E1D38; color: var(--text); border: 1px solid var(--border); font-weight: 600; }
-.btn-github:hover { background: #14294A; border-color: #2B4B7E; }
+.btn-github { background: #213353; color: var(--text); border: 1px solid var(--border); font-weight: 600; }
+.btn-github:hover { background: #2A3F63; border-color: #2B4B7E; }
 .btn-github svg { width: 18px; height: 18px; }
 
 /* ---------- Connect flow (providers, orgs, repos) ---------- */
@@ -439,7 +444,7 @@ code, .mono { font-family: var(--mono); }
 .provider-tab .tag { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--bg-elev); border: 1px solid var(--border); color: var(--text-faint); }
 
 .connect-hero { text-align: center; padding: 48px 24px; }
-.connect-hero .gh-badge { width: 60px; height: 60px; border-radius: 16px; background: #0E1D38; border: 1px solid var(--border); display: grid; place-items: center; margin: 0 auto 18px; }
+.connect-hero .gh-badge { width: 60px; height: 60px; border-radius: 16px; background: #213353; border: 1px solid var(--border); display: grid; place-items: center; margin: 0 auto 18px; }
 .connect-hero h2 { font-size: 22px; margin-bottom: 8px; }
 .connect-hero p { color: var(--text-dim); max-width: 440px; margin: 0 auto 22px; font-size: 14.5px; }
 
@@ -494,9 +499,9 @@ select, .field select {
   background-repeat: no-repeat; background-position: right 11px center;
   transition: border-color .15s, box-shadow .15s, background-color .15s;
 }
-select:hover { border-color: #2B4B7E; background-color: #0C1729; }
+select:hover { border-color: #2B4B7E; background-color: #16223A; }
 select:focus, select:focus-visible { outline: none; border-color: #35578C; box-shadow: 0 0 0 3px rgba(59,130,246,.22); }
-select option { background: #0C1729; color: var(--text); }
+select option { background: #16223A; color: var(--text); }
 
 /* ============================================================= */
 /* ANIMATIONS (reactbits-inspired, dependency-free)              */
@@ -577,7 +582,7 @@ select option { background: #0C1729; color: var(--text); }
 .docs-body p, .docs-body li { color: var(--text-dim); font-size: 15px; line-height: 1.7; }
 .docs-body ul { padding-left: 20px; }
 .docs-body code { background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 6px; font-size: 13px; color: var(--brand-2); }
-.docs-body pre { background: #050B16; border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
+.docs-body pre { background: #0E1729; border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
 .docs-body pre code { background: none; border: none; color: var(--text-dim); padding: 0; }
 
 /* ============================================================= */
@@ -613,7 +618,7 @@ select option { background: #0C1729; color: var(--text); }
   background-color: var(--bg-card);
 }
 .stats-band, .compare { background-image: none; }
-.terminal { background-image: none; background-color: #050B16; }
+.terminal { background-image: none; background-color: #0E1729; }
 /* Cards state-change on the border only: no lift, no glow. */
 .feature { transition: border-color .18s, background-color .18s; }
 .feature:hover { border-color: #2B4B7E; background: var(--bg-elev); transform: none; box-shadow: none; }
