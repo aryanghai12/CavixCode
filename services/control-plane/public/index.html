@@ -7,14 +7,14 @@
 <meta name="description" content="Cavix reproduces every bug in a sandbox before it comments, verified findings, not guesses. PR summaries, cross-repo impact, CI/CD regression prediction, optional pre-merge checks, BYOK on every tier, self-hostable and fully air-gapped.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=8">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=8">
-<link rel="apple-touch-icon" href="/cavix-mark.svg?v=8">
+<link rel="stylesheet" href="/styles.css?v=9">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=9">
+<link rel="apple-touch-icon" href="/cavix-mark.svg?v=9">
 </head>
 <body>
 <nav class="nav">
   <div class="container nav-inner">
-    <a href="/" class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span> Cavix</a>
+    <a href="/" class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=9" alt="" aria-hidden="true"></span> Cavix</a>
     <div class="nav-links">
       <a href="#pillars">Product</a>
       <a href="#review">Sample review</a>
@@ -96,7 +96,7 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
     <!-- Panel: PR summary (posted as a comment, like CodeRabbit's walkthrough) -->
     <div class="showcase-panel on" data-panel="summary">
       <div class="summary-card">
-        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">now</span></div>
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=9" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">now</span></div>
         <div class="sc-body">
           <h4>Summary</h4>
           <p>This PR refactors the refund flow and adds retry handling to the payments service. It touches 3 files (+128 / −44). One high-severity correctness issue was <b>verified</b> (double-refund on webhook retry) and one nit was suppressed as unverifiable.</p>
@@ -130,7 +130,7 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
 <div class="cr-line"><span class="ln">88</span>  <span class="k">return</span> { <span class="f">ok</span>: <span class="n2">true</span> }</div>
         </div>
         <div class="cr-comment">
-          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=9" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
           <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund. I reproduced it and confirmed the guard fixes it:</div>
           <div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts → <span class="t-red">exit 1</span>  <span class="t-dim">double refund</span>
 <span class="t-purple">[after-fix]</span> refund.retry.test.ts → <span class="t-green">exit 0</span>  <span class="t-dim">single refund</span>
@@ -292,7 +292,7 @@ $ cavix review ./pr
 <footer class="footer">
   <div class="container footer-inner">
     <div>
-      <div class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span> Cavix</div>
+      <div class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=9" alt="" aria-hidden="true"></span> Cavix</div>
       <div style="color:var(--text-faint);margin-top:8px;font-size:13px">Proven, not guessed. · cavix.ai · @CavixCode</div>
     </div>
     <div style="display:flex;gap:28px;flex-wrap:wrap">
@@ -300,9 +300,9 @@ $ cavix review ./pr
     </div>
   </div>
 </footer>
-<script src="/icons.js?v=8"></script>
-<script src="/pricing.js?v=8"></script>
-<script src="/landing.js?v=8"></script>
-<script src="/fx.js?v=8"></script>
+<script src="/icons.js?v=9"></script>
+<script src="/pricing.js?v=9"></script>
+<script src="/landing.js?v=9"></script>
+<script src="/fx.js?v=9"></script>
 </body>
 </html>
