@@ -63,8 +63,8 @@ test("ensemble: model routing sends frontier agents to the frontier model", asyn
   const res = await ensemble.run(INPUT);
   const security = res.perAgent.find((a) => a.agentId === "security")!;
   const performance = res.perAgent.find((a) => a.agentId === "performance")!;
-  assert.equal(security.model, "claude-opus-4-8", "security routes to frontier");
-  assert.equal(performance.model, "claude-sonnet-4-6", "performance routes to cheap");
+  assert.equal(security.model, "claude-opus-5", "security routes to frontier");
+  assert.equal(performance.model, "claude-sonnet-5", "performance routes to cheap");
   assert.ok(res.totalCostUsd > 0, "ensemble accrues cost");
 });
 

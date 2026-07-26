@@ -177,6 +177,8 @@ export interface Store {
   setRepoEnabled(org: string, name: string, enabled: boolean, visibility?: "public" | "private"): Repo | null;
   /** Gatekeeper: is this "owner/name" repo enabled in any workspace? */
   isRepoEnabled(fullName: string): boolean;
+  /** Gatekeeper detail: the enabled row plus the workspace that owns it (for BYOK). */
+  lookupRepo(fullName: string): { org: string; repo: Repo } | null;
   saveReview(input: SaveReviewInput): ReviewRecord;
   listReviews(org?: string, limit?: number): ReviewRecord[];
   getReview(id: string): ReviewRecord | undefined;
@@ -223,7 +225,7 @@ export interface Store {
 function defaultSettings(): OrgSettings {
   return {
     llmProvider: process.env.CAVIX_LLM_PROVIDER ?? "anthropic",
-    llmModel: process.env.CAVIX_LLM_MODEL ?? "claude-sonnet-4-6",
+    llmModel: process.env.CAVIX_LLM_MODEL ?? "claude-opus-5",
     autoReview: true,
     reviewDraftPRs: false,
     tone: "concise",
@@ -297,10 +299,18 @@ export class InMemoryStore implements Store {
     return repo;
   }
   isRepoEnabled(fullName: string): boolean {
+    return this.lookupRepo(fullName) !== null;
+  }
+  /**
+   * Find the enabled row for "owner/name" and the workspace that owns it.
+   * The orchestrator needs the owning org to load that workspace's BYOK key —
+   * the GitHub owner login is a different name and must not be used for it.
+   */
+  lookupRepo(fullName: string): { org: string; repo: Repo } | null {
     for (const r of this.repos.values()) {
-      if (r.name === fullName && r.enabled !== false) return true;
+      if (r.name === fullName && r.enabled !== false) return { org: r.org, repo: r };
     }
-    return false;
+    return null;
   }
   listOrgs(): Org[] {
     return [...this.orgs.values()];

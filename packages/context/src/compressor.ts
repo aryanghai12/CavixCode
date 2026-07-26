@@ -14,7 +14,7 @@ export class GatewayCompressor implements Compressor {
   constructor(opts: { gateway: Gateway; org: string; model?: string; maxTokens?: number }) {
     this.gateway = opts.gateway;
     this.org = opts.org;
-    this.model = opts.model ?? "claude-haiku-4-5-20251001";
+    this.model = opts.model ?? "claude-haiku-4-5";
     this.maxTokens = opts.maxTokens ?? 512;
   }
 

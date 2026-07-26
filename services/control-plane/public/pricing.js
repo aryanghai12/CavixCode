@@ -10,7 +10,7 @@ window.CAVIX_PRICING = {
       id: "free", name: "Free / OSS", tierMatch: "free",
       byok: 0, managed: 0, source: "BYOK only",
       blurb: "For public repositories.",
-      features: ["Unlimited public repos", "~50 private reviews / mo", "Full 13-stage verification", "@cavix commands & chat", "Community support"],
+      features: ["Unlimited public repos", "~50 private reviews / mo", "Full 13-stage verification", "@cavixcode commands & chat", "Community support"],
       cta: "Start free",
     },
     {

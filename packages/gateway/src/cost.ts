@@ -14,8 +14,14 @@ export interface ModelPrice {
 
 export const DEFAULT_PRICING: Record<string, ModelPrice> = {
   // Claude family (default routing: Opus reason / Sonnet build / Haiku compress).
-  "claude-opus-4-8": { inputPerMTok: 15, outputPerMTok: 75 },
+  "claude-opus-5": { inputPerMTok: 5, outputPerMTok: 25 },
+  "claude-opus-4-8": { inputPerMTok: 5, outputPerMTok: 25 },
+  "claude-opus-4-7": { inputPerMTok: 5, outputPerMTok: 25 },
+  // Sonnet 5 list price. An introductory $2/$10 runs through 2026-08-31; we bill
+  // the list rate so an org is never under-quoted when the promo ends.
+  "claude-sonnet-5": { inputPerMTok: 3, outputPerMTok: 15 },
   "claude-sonnet-4-6": { inputPerMTok: 3, outputPerMTok: 15 },
+  "claude-haiku-4-5": { inputPerMTok: 1, outputPerMTok: 5 },
   "claude-haiku-4-5-20251001": { inputPerMTok: 1, outputPerMTok: 5 },
   // Deterministic test provider — free.
   "fake-model": { inputPerMTok: 0, outputPerMTok: 0 },

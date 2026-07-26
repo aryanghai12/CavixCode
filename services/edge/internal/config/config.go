@@ -22,7 +22,7 @@ type Config struct {
 	StreamKey     string        // Redis Stream to XADD jobs onto
 	DedupeTTL     time.Duration // idempotency window
 	EnqueueDialMs time.Duration // dial timeout for Redis
-	BotHandle     string        // mention handle: "@<handle> review" (e.g. "cavixcode")
+	BotHandle     string        // mention handle(s), comma-separated: "@<handle> review"
 }
 
 // Load reads config from env with safe defaults.
@@ -43,7 +43,10 @@ func Load() (Config, error) {
 		StreamKey:     getenv("CAVIX_STREAM_KEY", "cavix:reviewjobs"),
 		DedupeTTL:     24 * time.Hour,
 		EnqueueDialMs: 3 * time.Second,
-		BotHandle:     getenv("CAVIX_BOT_HANDLE", "cavix"),
+		// Default answers to BOTH the GitHub App slug people actually type
+		// ("@cavixcode review") and the short alias ("@cavix review"). Override
+		// with CAVIX_BOT_HANDLE if your App slug differs.
+		BotHandle: getenv("CAVIX_BOT_HANDLE", "cavixcode,cavix"),
 	}
 
 	// Redis: prefer a full URL (managed Redis), else discrete host:port + auth vars.

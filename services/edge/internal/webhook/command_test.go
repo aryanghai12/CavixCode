@@ -39,6 +39,65 @@ func TestParseCommand(t *testing.T) {
 	}
 }
 
+// The GitHub App's slug is "cavixcode", so "@cavixcode review" is what humans
+// actually type. Under a single "cavix" handle the trailing \b made that a
+// non-match and the command was silently ignored.
+func TestParseCommandMultipleHandles(t *testing.T) {
+	const handles = "cavixcode,cavix"
+	cases := []struct {
+		body     string
+		wantOK   bool
+		wantName string
+		wantArgs string
+	}{
+		{"@cavixcode review", true, "review", ""},
+		{"@cavixcode", true, "help", ""},
+		{"@CavixCode Review", true, "review", ""},
+		{"@cavixcode[bot] review", true, "review", ""},
+		{"@cavix review", true, "review", ""},
+		{"please @cavixcode review this when you can", true, "review", "this when you can"},
+		{"@cavixcode why is this unsafe?", true, "ask", "why is this unsafe?"},
+		{"@cavixcodex review", false, "", ""}, // a different, unknown handle
+		{"nothing to see here", false, "", ""},
+	}
+	for _, c := range cases {
+		got, ok := ParseCommand(c.body, handles)
+		if ok != c.wantOK {
+			t.Fatalf("ParseCommand(%q) ok=%v want %v", c.body, ok, c.wantOK)
+		}
+		if ok && (got.Name != c.wantName || got.Args != c.wantArgs) {
+			t.Fatalf("ParseCommand(%q) = %+v, want {%s %q}", c.body, got, c.wantName, c.wantArgs)
+		}
+	}
+}
+
+func TestSplitHandles(t *testing.T) {
+	got := SplitHandles(" @cavix, cavixcode ")
+	// Longest first, so "@cavixcode" is never matched as a bare "@cavix".
+	if len(got) != 2 || got[0] != "cavixcode" || got[1] != "cavix" {
+		t.Fatalf("SplitHandles = %v, want [cavixcode cavix]", got)
+	}
+	if len(SplitHandles("   ")) != 0 {
+		t.Fatalf("empty setting must yield no handles")
+	}
+}
+
+// Cavix quotes commands back in its own status comments; without this guard the
+// bot would answer itself forever.
+func TestIssueCommentFromBotIsIgnored(t *testing.T) {
+	body := `{
+		"action":"created",
+		"issue":{"number":7,"title":"t","pull_request":{"url":"u"}},
+		"comment":{"id":1,"body":"@cavixcode review","author_association":"OWNER",
+		           "user":{"login":"cavixcode[bot]","type":"Bot"}},
+		"repository":{"id":5,"full_name":"acme/widget","owner":{"login":"acme"}},
+		"installation":{"id":9}
+	}`
+	if _, err := NormalizeIssueComment([]byte(body), "d-1", "cavixcode"); err != ErrNotTrigger {
+		t.Fatalf("bot-authored command must be ignored, got err=%v", err)
+	}
+}
+
 func issueComment(assoc, bodyText string) string {
 	return `{
       "action": "created",

@@ -481,7 +481,7 @@ passes instead of one permanent password. Much safer than a personal login.
    |------------|--------|-----|
    | Contents | Read | to fetch the code / the change |
    | Pull requests | Read & write | to post reviews + inline comments |
-   | Issues | Read & write | to receive/post PR comments (`@cavix` commands) |
+   | Issues | Read & write | to receive/post PR comments and add the 👀/🚀 reactions (`@cavixcode` commands) |
    | Checks | Read & write | the ✓/✗ Cavix status mark on the PR |
    | Metadata | Read | required basic access |
 6. **Subscribe to events:** tick **Pull request**, **Issue comment**,
@@ -510,10 +510,16 @@ so it can mint its own short‑lived passes. PowerShell:
 ```powershell
 $env:CAVIX_APP_ID = "123456"
 $env:CAVIX_APP_PRIVATE_KEY = Get-Content "C:\Users\aryan\Downloads\cavix.private-key.pem" -Raw
-$env:CAVIX_BOT_HANDLE = "cavixcode"        # must match the App name you chose
+$env:CAVIX_BOT_HANDLE = "cavixcode,cavix"  # mention handles; the App slug should be first
 $env:CAVIX_WEBHOOK_SECRET = "..."          # must match the App's webhook secret
 $env:CAVIX_LLM_API_KEY = "sk-..."          # your AI key (or an offline self-hosted model)
 ```
+
+> **These two are not optional in production.** A GitHub App install never hands you
+> a token, so without `CAVIX_APP_ID` **and** `CAVIX_APP_PRIVATE_KEY` the orchestrator
+> has no way to post anything and every review fails. Use `Get-Content ... -Raw` as
+> shown so the `.pem` keeps its line breaks. If you must paste it into a hosting
+> dashboard as a single line, escaped `\n` and base64 of the whole file both work.
 
 > **In one sentence:** the developer quick‑start (8c) uses a personal token
 > (`CAVIX_GITHUB_TOKEN`); production uses the App key above. Both plug into the same
@@ -549,25 +555,56 @@ Cavix. The `@name` you use is your app's name.
 
 | Comment you type on the PR | What Cavix does |
 |---------------------------|-----------------|
-| `@cavix review` | **Fresh full review** — throws away its old reviews, deletes its stale comments, **clears its memory of the PR**, and reviews from scratch. |
-| `@cavix re-review` / `@cavix full` | Same as `review`. |
-| `@cavix resolve` | Marks its own review threads as resolved. |
-| `@cavix pause` | Stops automatic reviews on this PR. |
-| `@cavix resume` | Turns automatic reviews back on. |
-| `@cavix summary` | Rewrites the PR summary/overview. |
-| `@cavix help` | Posts the list of commands. |
-| `@cavix <any question>` | Free‑text Q&A about the PR (chat). |
+| `@cavixcode review` | **Fresh full review** — throws away its old reviews, deletes its stale comments, **clears its memory of the PR**, and reviews from scratch. |
+| `@cavixcode re-review` / `@cavixcode full` | Same as `review`. |
+| `@cavixcode resolve` | Marks its own review threads as resolved. |
+| `@cavixcode pause` | Stops automatic reviews on this PR. |
+| `@cavixcode resume` | Turns automatic reviews back on. |
+| `@cavixcode summary` | Rewrites the PR summary/overview. |
+| `@cavixcode help` | Posts the list of commands. |
+| `@cavixcode <any question>` | Free‑text Q&A about the PR (chat). |
 
-**Why "fresh" matters:** when you type `@cavix review`, that comment is treated as a
-brand‑new, one‑off request every single time (it's never skipped as a duplicate).
-Cavix then clears out its old reviews and comments before posting a completely new
-one. That's exactly the "remove the old stuff, give me a clean new review" behavior.
-Commands from people **without** write access are ignored (a safety guard against
-abuse).
+#### How you know it heard you (emoji acknowledgment)
 
-**Setting the name:** Cavix answers to `@` + whatever you put in `CAVIX_BOT_HANDLE`
-(default `cavix`). To make it answer to `@cavixcode`, set
-`CAVIX_BOT_HANDLE = "cavixcode"`.
+Cavix reacts to **your own comment** so you never have to wonder whether anything
+is happening:
+
+| Emoji on your comment | Meaning |
+|---|---|
+| 👀 | Picked up. Cavix is working on it. Appears within seconds. |
+| 🚀 | Done — the review has been posted on the PR. |
+| 👍 | Heard you, but there was nothing to do (usually: this repo isn't toggled ON in the dashboard). Cavix replies explaining. |
+| 😕 | It failed. Cavix replies with the error and what to fix. |
+| *(nothing)* | The webhook never reached Cavix. See the troubleshooting table below. |
+
+**Why "fresh" matters:** when you type `@cavixcode review`, that comment is treated
+as a brand‑new, one‑off request every single time (it's never skipped as a
+duplicate). Cavix then clears out its old reviews and comments before posting a
+completely new one. That's exactly the "remove the old stuff, give me a clean new
+review" behavior. Commands from people **without** write access are ignored (a
+safety guard against abuse). Comments written by bots are ignored too, so Cavix
+never answers itself in a loop.
+
+**Setting the name:** Cavix answers to `@` + whatever you put in `CAVIX_BOT_HANDLE`.
+The default is `cavixcode,cavix`, so **both** `@cavixcode review` and `@cavix review`
+work out of the box. If your GitHub App's slug is something else, set
+`CAVIX_BOT_HANDLE` to a comma-separated list, e.g. `"myapp,cavix"`.
+
+#### If nothing happens at all
+
+Work down this list in order — these are the things that actually go wrong:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| No emoji ever appears | The App isn't subscribed to the **Issue comment** event, so the command never leaves GitHub | GitHub App → Permissions & events → Subscribe to events → tick **Issue comment** *and* **Pull request** |
+| No emoji, and Recent Deliveries shows a red ✗ | Webhook secret mismatch | Copy `CAVIX_WEBHOOK_SECRET` from the `cavix-edge` service into the App's Webhook secret field |
+| 👀 then 😕, "GitHub App credential problem" | `CAVIX_APP_ID` / `CAVIX_APP_PRIVATE_KEY` missing or mismatched on **cavix-orchestrator** | Set both from the *same* App. The private key is the whole `.pem` file contents, `-----BEGIN` line included |
+| 👀 then 👍, "not enabled" | The repo isn't toggled ON | Dashboard → **Repositories** → toggle the repo on |
+| 👀 then 😕, "no AI key saved" | No BYOK key for your workspace | Dashboard → **AI & BYOK** → paste your Anthropic key |
+
+You can watch every delivery GitHub attempted at **GitHub App → Advanced → Recent
+Deliveries** — that page alone tells you whether the problem is before or after
+GitHub.
 
 ### Step 6 — Per‑repo configuration (`.cavix.yaml`)
 

@@ -29,7 +29,7 @@ function fixturePredictor(): Predict {
 function livePredictor(): Predict {
   const apiKey = process.env.CAVIX_LLM_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
   if (!apiKey) throw new Error("EVAL_MODE=live requires CAVIX_LLM_API_KEY or ANTHROPIC_API_KEY");
-  const model = process.env.CAVIX_LLM_MODEL ?? "claude-sonnet-4-6";
+  const model = process.env.CAVIX_LLM_MODEL ?? "claude-opus-5";
   const config: GatewayConfigData = { orgs: { eval: { provider: "anthropic", apiKey, model } } };
   const gateway = new Gateway({ providers: new Map([["anthropic", new AnthropicProvider()]]), config });
   const reviewer = new Reviewer({ gateway });

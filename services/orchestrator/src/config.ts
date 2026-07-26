@@ -7,6 +7,13 @@ import type { GatewayConfigData } from "@cavix/gateway";
 // BYOK note: in production the per-org keys come from a secret store, not env.
 // For Phase 0 a single-org mapping from env is enough to run the real path.
 
+/**
+ * Default model when an org hasn't chosen one on the dashboard. Opus 5 is the
+ * current flagship — reviews are the product, so capability wins over cost here,
+ * and BYOK means the org pays their own provider directly either way.
+ */
+export const DEFAULT_MODEL = "claude-opus-5";
+
 export interface RedisConfig {
   host: string;
   port: number;
@@ -15,12 +22,22 @@ export interface RedisConfig {
   tls?: boolean;
 }
 
+export interface GitHubConfig {
+  /** Static PAT / pre-minted token. Fallback for local runs. */
+  token: string;
+  baseUrl: string;
+  /** GitHub App id — the production auth path (an App install never yields a PAT). */
+  appId: string;
+  /** GitHub App private key (.pem contents). */
+  privateKey: string;
+}
+
 export interface OrchestratorConfig {
   redis: RedisConfig;
   stream: string;
   group: string;
   consumer: string;
-  github: { token: string; baseUrl: string };
+  github: GitHubConfig;
   gateway: GatewayConfigData;
 }
 
@@ -55,7 +72,7 @@ export function resolveRedis(env: NodeJS.ProcessEnv): RedisConfig {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
   const org = env.CAVIX_ORG ?? "default";
   const provider = env.CAVIX_LLM_PROVIDER ?? "anthropic";
-  const model = env.CAVIX_LLM_MODEL ?? "claude-sonnet-4-6";
+  const model = env.CAVIX_LLM_MODEL ?? DEFAULT_MODEL;
   const apiKey = env.CAVIX_LLM_API_KEY ?? env.ANTHROPIC_API_KEY ?? "";
 
   return {
@@ -66,6 +83,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
     github: {
       token: env.CAVIX_GITHUB_TOKEN ?? "",
       baseUrl: env.CAVIX_GITHUB_API ?? "https://api.github.com",
+      // Accept the documented names and the common GitHub-ecosystem aliases, so a
+      // value pasted under either name works instead of failing silently.
+      appId: env.CAVIX_APP_ID ?? env.CAVIX_GITHUB_APP_ID ?? env.GITHUB_APP_ID ?? "",
+      privateKey:
+        env.CAVIX_APP_PRIVATE_KEY ?? env.CAVIX_GITHUB_APP_PRIVATE_KEY ?? env.GITHUB_APP_PRIVATE_KEY ?? "",
     },
     gateway: {
       orgs: {

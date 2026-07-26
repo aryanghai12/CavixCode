@@ -25,7 +25,7 @@ function seedDemo(store: InMemoryStore): void {
   store.createUser({ email: "demo@cavix.dev", name: "Demo Owner", password: "cavixdemo", org: "acme", role: "owner" });
   store.createUser({ email: "reviewer@cavix.dev", name: "Riya Reviewer", password: "cavixdemo", org: "acme", role: "reviewer" });
   store.setApiKey("acme", "sk-ant-demo-0000000000000000000000000000demo");
-  store.updateSettings("acme", { llmModel: "claude-opus-4-8", policyEnabled: true });
+  store.updateSettings("acme", { llmModel: "claude-opus-5", policyEnabled: true });
   store.createRepo("acme", "widget", { visibility: "private" });
   store.createRepo("acme", "payments-api", { visibility: "private" });
   store.saveReview({

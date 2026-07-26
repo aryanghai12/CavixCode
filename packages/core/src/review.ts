@@ -13,6 +13,11 @@ export interface ReviewJob {
   repo_id: number;
   pr_number: number;
   action: string;
+  /**
+   * Commit to review. EMPTY for command jobs ("@cavixcode review"): an
+   * issue_comment payload carries no commit, so the orchestrator resolves the
+   * PR's current head from the API before posting.
+   */
   head_sha: string;
   base_sha: string;
   installation_id: number;
@@ -20,6 +25,26 @@ export interface ReviewJob {
   title: string;
   author: string;
   enqueued_at: string;
+
+  /** Why this job exists: "pull_request" (automatic) or "command" (a human mention). */
+  trigger?: string;
+  /** Set only when trigger === "command". */
+  command?: string;
+  command_args?: string;
+  /** The comment that issued the command — what we react to and reply under. */
+  comment_id?: number;
+  author_association?: string;
+  /** "@cavixcode review" → discard caches and stale bot reviews. */
+  force_fresh?: boolean;
+}
+
+/** Trigger values the edge emits. */
+export const TRIGGER_PULL_REQUEST = "pull_request";
+export const TRIGGER_COMMAND = "command";
+
+/** True when the job came from a human typing "@cavixcode <command>" on a PR. */
+export function isCommandJob(job: ReviewJob): boolean {
+  return job.trigger === TRIGGER_COMMAND;
 }
 
 /**
@@ -38,9 +63,16 @@ export function parseReviewJob(value: unknown): ReviewJob {
       `review job schema mismatch: got ${String(v.schema_version)}, want ${SCHEMA_VERSION}`,
     );
   }
-  for (const field of ["repo", "head_sha"] as const) {
-    if (typeof v[field] !== "string" || v[field] === "") {
-      throw new Error(`review job missing required field: ${field}`);
+  if (typeof v.repo !== "string" || v.repo === "") {
+    throw new Error("review job missing required field: repo");
+  }
+  // head_sha is required for pull_request jobs (the event always carries it) but
+  // NOT for command jobs — an issue_comment payload has no commit, so the
+  // orchestrator resolves the PR head itself. Requiring it here used to drop
+  // every "@cavixcode review" as a poison message.
+  if (v.trigger !== TRIGGER_COMMAND) {
+    if (typeof v.head_sha !== "string" || v.head_sha === "") {
+      throw new Error("review job missing required field: head_sha");
     }
   }
   if (typeof v.pr_number !== "number" || v.pr_number <= 0) {

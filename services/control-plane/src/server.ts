@@ -315,7 +315,10 @@ async function apiRoute(
     const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
     if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
     const fullName = url.searchParams.get("fullName") ?? "";
-    return void sendJson(res, 200, { enabled: store.isRepoEnabled(fullName) });
+    // `org` is the WORKSPACE that enabled the repo. The orchestrator needs it to
+    // load that workspace's BYOK key — the GitHub owner login is a different name.
+    const found = store.lookupRepo(fullName);
+    return void sendJson(res, 200, { enabled: found !== null, org: found?.org });
   }
 
   // ----- orgs / onboarding (unauthenticated create kept for API/tests & GitHub App onboarding) -----

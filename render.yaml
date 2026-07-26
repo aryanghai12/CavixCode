@@ -17,6 +17,17 @@
 #   4. In your GitHub App (GUIDE §8B): set the Webhook URL to the cavix-edge URL
 #      (…/webhook) and the Webhook secret to cavix-edge's generated CAVIX_WEBHOOK_SECRET
 #      (view it in Render → cavix-edge → Environment).
+#      Subscribe the App to BOTH events: "Pull request" AND "Issue comment"
+#      (issue_comment is what delivers "@cavixcode review" — without it, commands
+#      never reach Cavix at all).
+#      Permissions: Pull requests = Read & write, Contents = Read, Metadata = Read.
+#   5. Sign in to the site, open Repositories, and toggle ON each repo you want
+#      reviewed. Cavix deliberately reviews nothing until you do.
+#
+# Checking it works: comment "@cavixcode review" on a pull request. Cavix reacts 👀
+# within seconds, then 🚀 when the review posts. A 😕 means it failed and the reply
+# comment says why. NO reaction at all means the webhook never arrived — check the
+# GitHub App's "Recent Deliveries" page.
 #
 # JUST WANT THE FREE TRIAL SITE? Delete the cavix-edge, cavix-orchestrator, and
 # cavix-redis service blocks (and their notes). The `cavix` web service + Postgres are
@@ -78,7 +89,7 @@ services:
       - key: CAVIX_LLM_PROVIDER        # default provider a new org sees (optional)
         value: anthropic
       - key: CAVIX_LLM_MODEL           # default model a new org sees (optional)
-        value: claude-sonnet-4-6
+        value: claude-opus-5
 
   # ---------- edge: receives GitHub webhooks, queues jobs ----------
   - type: web
@@ -99,8 +110,8 @@ services:
           property: connectionString
       - key: CAVIX_WEBHOOK_SECRET      # generated; paste this into your GitHub App webhook
         generateValue: true
-      - key: CAVIX_BOT_HANDLE          # your GitHub App handle (e.g. cavixcode)
-        value: cavixcode
+      - key: CAVIX_BOT_HANDLE          # mention handles, comma-separated
+        value: cavixcode,cavix
 
   # ---------- orchestrator: runs the review, posts to GitHub ----------
   - type: web
@@ -125,11 +136,17 @@ services:
           envVarKey: CAVIX_INTERNAL_TOKEN
       - key: CAVIX_CONTROL_PLANE_URL   # the cavix web service URL (paste after 1st deploy)
         sync: false
+      # REQUIRED to post anything to GitHub. A GitHub App install never gives you a
+      # token — the orchestrator signs a JWT with the App key and exchanges it for a
+      # short-lived installation token on every review.
+      #   CAVIX_APP_ID          = "App ID" on your GitHub App's General page
+      #   CAVIX_APP_PRIVATE_KEY = the ENTIRE .pem file contents you downloaded there,
+      #                           including the "-----BEGIN..." and "-----END..." lines
       - key: CAVIX_APP_ID              # GitHub App id (GUIDE §8B)
         sync: false
       - key: CAVIX_APP_PRIVATE_KEY     # GitHub App .pem contents (GUIDE §8B)
         sync: false
-      - key: CAVIX_BOT_HANDLE
-        value: cavixcode
+      - key: CAVIX_BOT_HANDLE          # answers to "@cavixcode review" and "@cavix review"
+        value: cavixcode,cavix
       - key: CAVIX_SANDBOX_BACKEND     # "local" runs fine on Render's free box
         value: local

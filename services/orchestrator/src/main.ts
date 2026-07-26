@@ -10,6 +10,7 @@ import http from "node:http";
 import { AnthropicProvider, FakeProvider, Gateway, type LLMProvider } from "@cavix/gateway";
 import { loadConfig } from "./config.ts";
 import { RestGitHubClient, StaticTokenProvider } from "./github/rest.ts";
+import { GitHubAppTokenProvider } from "./github/appAuth.ts";
 import { Reviewer } from "./reviewer/reviewer.ts";
 import { makeReviewHandler } from "./workflow/reviewWorkflow.ts";
 import { InlineEngine } from "./workflow/inline.ts";
@@ -68,8 +69,29 @@ async function main() {
     logger: { info: (m, meta) => log("info", m, meta), warn: (m, meta) => log("warn", m, meta) },
   });
 
+  // GitHub auth. A GitHub App install (the product's onboarding flow) never gives
+  // you a PAT — it gives an App id + private key, which we exchange for short-lived
+  // per-installation tokens. The static token is only a local-dev fallback.
+  let tokens;
+  if (cfg.github.appId && cfg.github.privateKey) {
+    tokens = new GitHubAppTokenProvider({
+      appId: cfg.github.appId,
+      privateKey: cfg.github.privateKey,
+      baseUrl: cfg.github.baseUrl,
+      logger: { info: (m, meta) => log("info", m, meta) },
+    });
+    log("info", "GitHub auth: App installation tokens", { app_id: cfg.github.appId });
+  } else if (cfg.github.token) {
+    tokens = new StaticTokenProvider(cfg.github.token);
+    log("warn", "GitHub auth: static token (dev mode). Set CAVIX_APP_ID + CAVIX_APP_PRIVATE_KEY for the App path.");
+  } else {
+    // Fail loudly at boot instead of on every job with "static token is empty".
+    log("error", "GitHub auth is NOT configured: set CAVIX_APP_ID and CAVIX_APP_PRIVATE_KEY (from your GitHub App), or CAVIX_GITHUB_TOKEN for local runs. No review can be posted until you do.");
+    tokens = new StaticTokenProvider("");
+  }
+
   const github = new RestGitHubClient({
-    tokens: new StaticTokenProvider(cfg.github.token),
+    tokens,
     baseUrl: cfg.github.baseUrl,
   });
   const reviewer = new Reviewer({ gateway });

@@ -24,6 +24,6 @@ export class ConfigModelRouter implements ModelRouter {
 
 // Sensible defaults aligned with the baseline (Opus reason / Sonnet build).
 export const DEFAULT_TIER_CONFIG: ModelTierConfig = {
-  cheap: "claude-sonnet-4-6",
-  frontier: "claude-opus-4-8",
+  cheap: "claude-sonnet-5",
+  frontier: "claude-opus-5",
 };

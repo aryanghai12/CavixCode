@@ -29,15 +29,16 @@ type Handler struct {
 	queue      queue.Producer
 	dedupe     dedupe.Store
 	log        *slog.Logger
-	botHandle  string          // e.g. "cavix" → responds to "@cavix review"
+	botHandle  string          // comma-separated mention handles, e.g. "cavixcode,cavix"
 	allowedCmd map[string]bool // author_associations allowed to run commands
 }
 
-// NewHandler wires the edge handler. botHandle is the GitHub App's mention handle
-// (empty → "cavix"); commands are honored only from allowed author associations.
+// NewHandler wires the edge handler. botHandle is the GitHub App's mention handle,
+// or a comma-separated list of handles (empty → "cavixcode,cavix"); commands are
+// honored only from allowed author associations.
 func NewHandler(secret string, q queue.Producer, d dedupe.Store, log *slog.Logger, botHandle string) *Handler {
 	if botHandle == "" {
-		botHandle = "cavix"
+		botHandle = "cavixcode,cavix"
 	}
 	return &Handler{secret: secret, queue: q, dedupe: d, log: log, botHandle: botHandle, allowedCmd: DefaultAllowedAssociations}
 }

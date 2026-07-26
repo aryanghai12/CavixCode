@@ -5,6 +5,7 @@ import { Gateway, FakeProvider, type GatewayConfigData } from "@cavix/gateway";
 import {
   Reviewer,
   FakeGitHubClient,
+  type GitHubClient,
   InlineEngine,
   FakeStreamSource,
   makeReviewHandler,
@@ -131,7 +132,7 @@ test("e2e: a clean diff posts a no-issues summary and no inline comments", async
 
 test("gatekeeper: a repo toggled OFF is skipped — no review is posted", async () => {
   const { github, reviewer } = wire();
-  const handler = makeReviewHandler({ github, reviewer, gate: async () => false });
+  const handler = makeReviewHandler({ github, reviewer, gate: async () => ({ enabled: false }) });
   await handler(makeJob());
   assert.equal(github.submissions.length, 0, "disabled repo must not be reviewed");
 });
@@ -139,8 +140,102 @@ test("gatekeeper: a repo toggled OFF is skipped — no review is posted", async 
 test("gatekeeper: a repo toggled ON is reviewed and posted", async () => {
   const { github, reviewer } = wire();
   let gatedRepo = "";
-  const handler = makeReviewHandler({ github, reviewer, gate: async (full) => { gatedRepo = full; return true; } });
+  const handler = makeReviewHandler({
+    github,
+    reviewer,
+    gate: async (full) => { gatedRepo = full; return { enabled: true }; },
+  });
   await handler(makeJob());
   assert.equal(gatedRepo, "acme/widget", "gate is asked about the PR's repo");
   assert.equal(github.submissions.length, 1);
+});
+
+// ---- "@cavixcode review" (command jobs) ----
+//
+// These cover the exact path that used to fail silently end-to-end: a comment
+// command carries no head SHA, and nothing ever acknowledged the comment.
+
+function makeCommandJob(overrides: Partial<ReviewJob> = {}): ReviewJob {
+  return {
+    ...makeJob(),
+    action: "command",
+    head_sha: "", // issue_comment payloads have no commit — this is the point
+    trigger: "command",
+    command: "review",
+    comment_id: 777,
+    author_association: "OWNER",
+    force_fresh: true,
+    ...overrides,
+  };
+}
+
+test("command job: head SHA is resolved from the PR before posting", async () => {
+  const { github, reviewer } = wire();
+  const outcome = await runReview(makeCommandJob(), { github, reviewer });
+  assert.equal(outcome.findingCount, 1);
+  // The submission must carry the resolved commit, never an empty string (422).
+  assert.equal(github.submissions[0].ref.headSha, "resolvedheadsha");
+});
+
+test("command job: reacts with eyes on pickup and rocket when the review lands", async () => {
+  const { github, reviewer } = wire();
+  const handler = makeReviewHandler({ github, reviewer, gate: async () => ({ enabled: true }) });
+  await handler(makeCommandJob());
+
+  assert.deepEqual(
+    github.reactions.map((r) => r.content),
+    ["eyes", "rocket"],
+    "the human sees 👀 immediately, then 🚀 when the review is posted",
+  );
+  assert.equal(github.reactions[0].commentId, 777, "reacts to the triggering comment");
+  assert.equal(github.submissions.length, 1);
+});
+
+test("command job: a disabled repo gets 👍 and a comment telling you how to enable it", async () => {
+  const { github, reviewer } = wire();
+  const handler = makeReviewHandler({ github, reviewer, gate: async () => ({ enabled: false }) });
+  await handler(makeCommandJob());
+
+  assert.deepEqual(github.reactions.map((r) => r.content), ["eyes", "+1"]);
+  assert.equal(github.submissions.length, 0);
+  assert.match(github.comments[0], /not enabled/i);
+  assert.match(github.comments[0], /Repositories/);
+});
+
+test("command job: a failure reacts 😕 and explains the cause in a comment", async () => {
+  const { github, reviewer } = wire();
+  // Delegate everything to the fake except the diff fetch, which fails the way a
+  // missing App installation does.
+  const broken: GitHubClient = {
+    fetchPullDiff: async () => { throw new Error("github: fetch diff HTTP 404 Not Found"); },
+    getPull: (ref) => github.getPull(ref),
+    postReview: (ref, review) => github.postReview(ref, review),
+    addReaction: (ref, id, content) => github.addReaction(ref, id, content),
+    createComment: (ref, body) => github.createComment(ref, body),
+  };
+  const handler = makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) });
+
+  await assert.rejects(() => handler(makeCommandJob()), /HTTP 404/);
+  assert.deepEqual(github.reactions.map((r) => r.content), ["eyes", "confused"]);
+  assert.match(github.comments[0], /could not finish/i);
+  assert.match(github.comments[0], /may not be installed on this repository/i);
+});
+
+test("command job: BYOK uses the dashboard workspace from the gate, not the GitHub login", async () => {
+  const config: GatewayConfigData = {
+    // The key lives under the Cavix workspace name "acme-workspace"; the job's
+    // org is the GitHub owner login "acme". Only the gate knows the mapping.
+    orgs: { "acme-workspace": { provider: "fake", apiKey: "byok-acme", model: "claude-opus-5" } },
+  };
+  const gateway = new Gateway({ providers: new Map([["fake", new FakeProvider(responder)]]), config });
+  const github = new FakeGitHubClient({ diff: DIFF });
+  const handler = makeReviewHandler({
+    github,
+    reviewer: new Reviewer({ gateway }),
+    gate: async () => ({ enabled: true, org: "acme-workspace" }),
+  });
+
+  await handler(makeCommandJob());
+  assert.equal(github.submissions.length, 1);
+  assert.equal(gateway.costLog()[0].org, "acme-workspace", "cost is attributed to the workspace");
 });

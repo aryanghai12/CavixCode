@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -42,13 +43,45 @@ type ParsedCommand struct {
 	Args string
 }
 
+// SplitHandles turns a handle setting into the list of mentions we answer to.
+// It accepts a comma/space separated list ("cavixcode, cavix") so one deployment
+// can respond to the GitHub App's slug AND any shorter alias people actually type.
+// Handles are returned longest-first so "@cavixcode" never matches as "@cavix".
+func SplitHandles(setting string) []string {
+	var out []string
+	for _, h := range strings.FieldsFunc(setting, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+		h = strings.TrimSpace(strings.TrimPrefix(h, "@"))
+		if h != "" {
+			out = append(out, h)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
+}
+
 // ParseCommand finds "@<handle> <command> [args]" in a comment body.
 // Rules: a recognized command → that command; a mention followed by other text →
 // "ask" (free-text Q&A); a bare mention → "help". Returns ok=false if the bot is
 // not mentioned at all.
+//
+// handle may be a single handle or a comma-separated list; GitHub renders an App
+// mention as either "@slug" or "@slug[bot]", so both forms are accepted.
 func ParseCommand(body, handle string) (ParsedCommand, bool) {
-	// Match "@handle" (case-insensitive), then capture the rest of that line.
-	re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(handle) + `\b[ \t]*([^\r\n]*)`)
+	handles := SplitHandles(handle)
+	if len(handles) == 0 {
+		return ParsedCommand{}, false
+	}
+	alts := make([]string, 0, len(handles))
+	for _, h := range handles {
+		alts = append(alts, regexp.QuoteMeta(h))
+	}
+	// Match "@handle" or "@handle[bot]" (case-insensitive), then capture the rest
+	// of that line. Alternatives are longest-first, so "@cavixcode review" is not
+	// mis-read as a bare "@cavix" mention.
+	// The handle is followed either by the literal "[bot]" suffix GitHub appends to
+	// App mentions, or by a word boundary. (A trailing "]" is not a word character,
+	// so "\b" alone would reject "@cavixcode[bot] review".)
+	re := regexp.MustCompile(`(?i)@(?:` + strings.Join(alts, "|") + `)(?:\[bot\]|\b)[ \t]*([^\r\n]*)`)
 	m := re.FindStringSubmatch(body)
 	if m == nil {
 		return ParsedCommand{}, false
@@ -82,6 +115,7 @@ type issueCommentEvent struct {
 		AuthorAssociation string `json:"author_association"`
 		User              struct {
 			Login string `json:"login"`
+			Type  string `json:"type"` // "User" or "Bot"
 		} `json:"user"`
 	} `json:"comment"`
 	Repository struct {
@@ -108,6 +142,11 @@ func NormalizeIssueComment(body []byte, deliveryID, handle string) (canonical.Re
 	}
 	if ev.Issue.PullRequest == nil {
 		return canonical.ReviewJob{}, ErrNotTrigger // a plain issue, not a PR
+	}
+	// Never react to our own (or any other bot's) comments: Cavix quotes the
+	// command back in its status comments, which would otherwise loop forever.
+	if strings.EqualFold(ev.Comment.User.Type, "Bot") || strings.HasSuffix(strings.ToLower(ev.Comment.User.Login), "[bot]") {
+		return canonical.ReviewJob{}, ErrNotTrigger
 	}
 	cmd, ok := ParseCommand(ev.Comment.Body, handle)
 	if !ok {

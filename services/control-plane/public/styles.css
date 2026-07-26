@@ -120,8 +120,12 @@ code, .mono { font-family: var(--mono); }
 .nav { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(16px); background: rgba(9,9,10,.72); border-bottom: 1px solid var(--border-soft); }
 .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 66px; }
 .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: -.02em; }
-.logo-mark { width: 28px; height: 28px; border-radius: 7px; background: var(--brand-grad); color: var(--ink); display: grid; place-items: center; flex: none; box-shadow: none; }
-.lm-svg { width: 74%; height: 74%; display: block; }
+/* The Cavix mark (cavix-mark.svg) sits on the light tile rather than bare on the
+   page: the mark's gradient ends in deep navy, which would disappear against the
+   near-black background. The tile is the same white->silver gradient as primary
+   buttons, so the brand blue stays legible without introducing a new accent. */
+.logo-mark { width: 28px; height: 28px; border-radius: 7px; background: var(--brand-grad); color: var(--ink); display: grid; place-items: center; flex: none; box-shadow: none; overflow: hidden; }
+.lm-svg { width: 90%; height: 90%; display: block; object-fit: contain; }
 .nav-links { display: flex; align-items: center; gap: 28px; }
 .nav-links a { color: var(--text-dim); font-size: 14px; font-weight: 500; }
 .nav-links a:hover { color: var(--text); }

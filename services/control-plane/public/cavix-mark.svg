@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Cavix">
+  <title>Cavix</title>
+  <defs>
+    <!-- Primary brand gradient: royal blue (light source, top-left) -> dark navy (bottom-right) -->
+    <linearGradient id="cxArc" x1="46" y1="46" x2="210" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#3B82F6"/>
+      <stop offset="0.52" stop-color="#1E46A8"/>
+      <stop offset="1"    stop-color="#0B1E3D"/>
+    </linearGradient>
+
+    <!-- Wireframe gradient: one step lighter so the box reads as "inside/behind" the C -->
+    <linearGradient id="cxBox" x1="92" y1="86" x2="164" y2="170" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7FB2FF"/>
+      <stop offset="1" stop-color="#2D62D6"/>
+    </linearGradient>
+
+    <!-- Execution node glow: flat vector approximation, no blur filter (SVG filters break in favicons/emails) -->
+    <radialGradient id="cxGlow" cx="128" cy="128" r="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#8FC2FF" stop-opacity="0.55"/>
+      <stop offset="0.42" stop-color="#4E8DF5" stop-opacity="0.22"/>
+      <stop offset="1"    stop-color="#4E8DF5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 1. GLOW HALO (drawn first so it sits behind everything) -->
+  <circle cx="128" cy="128" r="36" fill="url(#cxGlow)"/>
+
+  <!-- 2. SANDBOX: isometric wireframe cube -->
+  <g fill="none" stroke="url(#cxBox)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+    <!-- outer hexagon silhouette (R = 42, vertices at 30 deg increments) -->
+    <path d="M 128 86 L 164.37 107 L 164.37 149 L 128 170 L 91.63 149 L 91.63 107 Z"/>
+    <!-- three interior edges meeting at the near corner = reads as a 3D cube -->
+    <path d="M 128 128 L 128 170"/>
+    <path d="M 128 128 L 91.63 107"/>
+    <path d="M 128 128 L 164.37 107"/>
+  </g>
+
+  <!-- 3. EXECUTION NODE at the cube's near corner -->
+  <circle cx="128" cy="128" r="12.5" fill="#0B1E3D"/>
+  <circle cx="128" cy="128" r="9"    fill="#7FB2FF"/>
+  <circle cx="128" cy="128" r="4"    fill="#E8F2FF"/>
+
+  <!-- 4. THE 'C': a 256-degree arc, gap facing east, round caps -->
+  <path d="M 174.17 68.9 A 75 75 0 1 0 174.17 187.1"
+        fill="none" stroke="url(#cxArc)" stroke-width="26" stroke-linecap="round"/>
+</svg>

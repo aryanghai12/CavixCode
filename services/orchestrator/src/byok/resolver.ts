@@ -29,7 +29,7 @@ export function makeControlPlaneResolver(opts: ControlPlaneResolverOptions): Org
       if (!data.apiKey) return null; // org hasn't set a key yet → fall back
       return {
         provider: data.provider || "anthropic",
-        model: data.model || "claude-sonnet-4-6",
+        model: data.model || "claude-opus-5",
         apiKey: data.apiKey,
       };
     } catch (err) {

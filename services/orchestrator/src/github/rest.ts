@@ -2,15 +2,16 @@ import type {
   GitHubClient,
   PullRef,
   PostedReview,
+  PullMeta,
+  ReactionContent,
   ReviewSubmission,
 } from "./client.ts";
 
 // RestGitHubClient is the production GitHub transport. It uses fetch (no SDK) and
-// obtains a token per call from a TokenProvider — for a GitHub App that's a
-// short-lived installation token minted from the App private key. Phase 0 ships
-// a StaticTokenProvider (a PAT or pre-minted installation token from env) so the
-// real posting path is runnable today; JWT-based installation-token minting is a
-// later, drop-in TokenProvider with no change to this client.
+// obtains a token per call from a TokenProvider. Two providers ship:
+//   • GitHubAppTokenProvider (appAuth.ts) — the real product path: mints a
+//     short-lived installation token from the App id + private key.
+//   • StaticTokenProvider — a PAT or pre-minted token, handy for local runs.
 
 export interface TokenProvider {
   token(installationId: number): Promise<string>;
@@ -68,6 +69,69 @@ export class RestGitHubClient implements GitHubClient {
     return res.text();
   }
 
+  async getPull(ref: PullRef): Promise<PullMeta> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`;
+    const res = await this.fetchImpl(url, {
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    if (!res.ok) {
+      throw new Error(`github: get pull HTTP ${res.status} ${res.statusText}`);
+    }
+    const data = (await res.json()) as {
+      title?: string;
+      draft?: boolean;
+      state?: string;
+      head?: { sha?: string };
+      base?: { sha?: string };
+    };
+    return {
+      headSha: data.head?.sha ?? "",
+      baseSha: data.base?.sha ?? "",
+      title: data.title ?? "",
+      draft: data.draft === true,
+      state: data.state ?? "open",
+    };
+  }
+
+  async addReaction(ref: PullRef, commentId: number, content: ReactionContent): Promise<void> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/issues/comments/${commentId}/reactions`;
+    const res = await this.fetchImpl(url, {
+      method: "POST",
+      headers: {
+        ...(await this.headers(ref, "application/vnd.github+json")),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ content }),
+    });
+    // 200 = reaction already existed, 201 = created. Anything else is a real error.
+    if (res.status !== 200 && res.status !== 201) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(
+        `github: add reaction HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`,
+      );
+    }
+  }
+
+  async createComment(ref: PullRef, body: string): Promise<{ id: number; htmlUrl: string }> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/issues/${ref.number}/comments`;
+    const res = await this.fetchImpl(url, {
+      method: "POST",
+      headers: {
+        ...(await this.headers(ref, "application/vnd.github+json")),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ body }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(
+        `github: create comment HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`,
+      );
+    }
+    const data = (await res.json()) as { id: number; html_url: string };
+    return { id: data.id, htmlUrl: data.html_url };
+  }
+
   async postReview(ref: PullRef, review: ReviewSubmission): Promise<PostedReview> {
     const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews`;
     const res = await this.fetchImpl(url, {
@@ -77,7 +141,9 @@ export class RestGitHubClient implements GitHubClient {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        commit_id: ref.headSha,
+        // Omit commit_id entirely when unknown — GitHub then reviews the PR's
+        // latest commit. Sending "" is a 422.
+        ...(ref.headSha ? { commit_id: ref.headSha } : {}),
         body: review.body,
         event: review.event,
         // GitHub anchors review comments on the RIGHT (new) side of the diff.

@@ -188,7 +188,7 @@
 
     const summaryCard = rs.summary ? `
       <div class="summary-card" style="margin-bottom:18px">
-        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><svg class="lm-svg" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 9 L6.5 16 L11 23"/><path d="M21 9 L25.5 16 L21 23"/><path d="M13.5 16.6 L15.6 18.8 L19 13.4"/></g></svg></span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">preview</span></div>
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">preview</span></div>
         <div class="sc-body">
           <h4>Summary</h4>
           <p>${esc((toneBlurb[s.tone] || toneBlurb.concise))}</p>
@@ -208,7 +208,7 @@
 <div class="cr-line add"><span class="ln">87</span><span class="k">  if</span> (!refund.<span class="f">isSettled</span>(id)) <span class="k">await</span> charge.<span class="f">refund</span>(amount)</div>
         </div>
         <div class="cr-comment">
-          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><svg class="lm-svg" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 9 L6.5 16 L11 23"/><path d="M21 9 L25.5 16 L21 23"/><path d="M13.5 16.6 L15.6 18.8 L19 13.4"/></g></svg></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
           <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund.</div>
           ${rs.proof ? `<div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts, <span class="t-red">exit 1</span>
 <span class="t-purple">[after-fix]</span> refund.retry.test.ts, <span class="t-green">exit 0</span>
@@ -305,7 +305,7 @@
   // ---------- BYOK ----------
   const PROVIDERS = { anthropic: "Anthropic (Claude)", openai: "OpenAI (GPT)", google: "Google (Gemini)", selfhosted: "Self-hosted / open model" };
   const MODELS = {
-    anthropic: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-7"],
+    anthropic: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-opus-4-8", "claude-sonnet-4-6"],
     openai: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o", "o4-mini"],
     google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
     selfhosted: ["llama-3.1-70b-instruct", "qwen2.5-coder-32b", "deepseek-coder-v2", "mistral-large"],
