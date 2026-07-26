@@ -5,33 +5,41 @@
      Every surface carries the same ~218deg hue, so the whole UI is cool and
      never neutral grey.
 
-     COMFORT: these surfaces are deliberately NOT near-black. Body text on a
-     near-black ground lands around 17:1, which causes halation, the glow/blur
-     that makes dark UIs tiring to read. The ladder below puts body text at
-     ~12.8:1, inside the 10-13:1 band that reads as rich and dark without
-     straining. Every step is ~1.3x the previous luminance, so panels separate
-     by depth rather than by outline.
+     DARK GROUND, BRIGHT TEXT. The surfaces are genuinely dark; the text sits
+     bright and near-neutral on top (body ~15.9:1, headings ~17.5:1) so copy
+     reads crisp rather than washed. The thing to avoid is not brightness, it is
+     a near-BLACK ground under bright text - that combination blooms (halation).
+     Keeping the page at #0A1020 rather than #04070F is what buys the headroom.
+     Every surface step is ~1.4x the previous luminance, so panels separate by
+     depth rather than by outline.
      --------------------------------------------------------------------- */
-  --navy-950: #141F35;      /* page background */
-  --navy-900: #18253E;      /* elevated */
-  --navy-850: #1B2A47;      /* cards */
-  --navy-800: #213353;      /* raised / hover */
+  --navy-980: #060C18;      /* recessed: code windows, terminals */
+  --navy-950: #0A1020;      /* page background */
+  --navy-900: #0D1526;      /* elevated */
+  --navy-850: #101A2E;      /* cards */
+  --navy-800: #16233C;      /* raised */
+  --navy-750: #1E2F4E;      /* hover */
   --navy-700: #0B1E3D;      /* the mark's navy, deep accent panels */
   --navy-600: #1E46A8;      /* the mark's mid stop */
   --blue-500: #3B82F6;      /* the mark's royal, primary accent */
-  --blue-300: #7FB2FF;      /* the mark's highlight */
+  --blue-300: #8FBCFF;      /* the mark's highlight, lifted a touch for links */
   --blue-100: #E8F2FF;      /* the mark's node core */
 
   --bg: var(--navy-950);
   --bg-elev: var(--navy-900);
   --bg-card: var(--navy-850);
   --bg-card-2: var(--navy-800);
-  --border: #2A3F63;
-  --border-soft: #223351;
-  --text: #D9E4F3;          /* softened off-white: pure white here glares */
-  --text-dim: #9DB0CC;
-  --text-faint: #87A0C6;   /* clears 4.5:1 even on the raised surface */
-  --davys: #3A5C8F;
+  --border: #1C2C4C;
+  --border-soft: #182642;
+  /* Text runs BRIGHT and nearly neutral. Two things were making it look dull:
+     low luminance, and a heavy blue cast (the old #C8D6E8 was 14% saturated,
+     which reads as muddy grey rather than crisp white). These keep just enough
+     cool tint to belong to the navy, at 4-9% cast instead. */
+  --text-head: #F2F6FD;     /* headings: the brightest tier, for punch */
+  --text: #E4ECF6;          /* body */
+  --text-dim: #B0C1D9;      /* secondary */
+  --text-faint: #94A7C6;    /* metadata; worst case is a hovered row, still 5.5:1 */
+  --davys: #3D5B8C;
   --accent: var(--blue-500);
   --accent-2: var(--blue-300);
   --brand: var(--blue-500);
@@ -51,8 +59,8 @@
   --blue: var(--blue-300);
   --radius: 14px;
   --radius-sm: 10px;
-  --shadow: 0 24px 60px -20px rgba(5,10,22,.72);
-  --shadow-glow: 0 0 0 1px rgba(59,130,246,.22), 0 18px 48px -14px rgba(5,10,22,.62);
+  --shadow: 0 24px 60px -20px rgba(2,5,12,.85);
+  --shadow-glow: 0 0 0 1px rgba(59,130,246,.22), 0 18px 48px -14px rgba(2,5,12,.75);
   --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --maxw: 1560px;
@@ -73,7 +81,7 @@ body {
      "blob". This is depth, not decoration: it makes the page read as lit from
      where the logo sits, and everything below it fall away into the dark. */
   background:
-    radial-gradient(1400px 620px at 50% -260px, rgba(45,95,205,.22), transparent 72%),
+    radial-gradient(1400px 620px at 50% -260px, rgba(40,88,196,.17), transparent 70%),
     var(--bg);
   background-attachment: fixed;
   color: var(--text);
@@ -93,7 +101,12 @@ body.has-orbs { position: relative; overflow-x: hidden; }
 .app, .auth-wrap, .docs, .nav, .footer, main.main { position: relative; z-index: 1; }
 
 a { color: inherit; text-decoration: none; }
-h1, h2, h3 { line-height: 1.15; letter-spacing: -.02em; margin: 0; }
+/* Headings sit a tier above body so the page has a crisp top end to read against;
+   without this everything flattens into one grey wash. */
+h1, h2, h3, h4 { line-height: 1.15; letter-spacing: -.02em; margin: 0; color: var(--text-head); }
+/* Scoped to prose only. A global `b` rule would stomp the deliberate colours on
+   .stage b, badges, and the terminal spans. */
+.docs-body b, .docs-body strong { color: var(--text-head); }
 p { margin: 0; }
 code, .mono { font-family: var(--mono); }
 
@@ -126,9 +139,9 @@ code, .mono { font-family: var(--mono); }
    brighter would push the 14px label under 4.5:1. The glow carries the feedback. */
 .btn-primary:hover { background: linear-gradient(135deg, #2560C6 0%, #16357F 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,.34), 0 12px 34px -8px rgba(59,130,246,.95); }
 .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
-.btn-ghost:hover { border-color: #2B4B7E; color: var(--text); background: rgba(59,130,246,.10); }
+.btn-ghost:hover { border-color: #2A4370; color: var(--text); background: rgba(59,130,246,.10); }
 .btn-soft { background: var(--bg-card-2); color: var(--text); border-color: var(--border); }
-.btn-soft:hover { border-color: #2B4B7E; background: #2A3F63; }
+.btn-soft:hover { border-color: #2A4370; background: #1E2F4E; }
 .btn-sm { padding: 6px 12px; font-size: 13px; }
 .btn-danger { background: transparent; border-color: rgba(248,113,113,.35); color: var(--red); }
 .btn-danger:hover { background: rgba(248,113,113,.12); }
@@ -142,7 +155,7 @@ code, .mono { font-family: var(--mono); }
 .badge-medium { color: #fde68a; background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.28); }
 .badge-low { color: #bae6fd; background: rgba(96,165,250,.12); border-color: rgba(96,165,250,.28); }
 .badge-verified { color: #a7f3d0; background: rgba(52,211,153,.14); border-color: rgba(52,211,153,.3); }
-.badge-policy { color: #CFE0F7; background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.30); }
+.badge-policy { color: #DEE9FA; background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.30); }
 
 /* ---------- cards ---------- */
 .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; }
@@ -151,7 +164,7 @@ code, .mono { font-family: var(--mono); }
 /* ============================================================= */
 /* MARKETING / LANDING                                           */
 /* ============================================================= */
-.nav { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(16px); background: rgba(4,7,15,.78); border-bottom: 1px solid var(--border-soft); }
+.nav { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(16px); background: rgba(10,16,32,.82); border-bottom: 1px solid var(--border-soft); }
 .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 66px; }
 .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: -.02em; }
 /* The Cavix mark (cavix-mark.svg) sits on the light tile rather than bare on the
@@ -179,14 +192,14 @@ code, .mono { font-family: var(--mono); }
 .hero-cta { display: flex; gap: 12px; justify-content: flex-start; margin-top: 32px; flex-wrap: wrap; }
 .trust { margin-top: 28px; padding-top: 20px; border-top: var(--rule); color: var(--text-faint); font-size: 13px; max-width: 52ch; }
 
-.terminal { max-width: none; margin: 0; background: #0E1729; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; text-align: left; }
+.terminal { max-width: none; margin: 0; background: #060C18; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; text-align: left; }
 .terminal-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border-soft); }
 .dot { width: 12px; height: 12px; border-radius: 50%; }
 .dot-r { background: #ff5f57; } .dot-y { background: #febc2e; } .dot-g { background: #28c840; }
 .terminal-bar span { margin-left: 8px; color: var(--text-faint); font-size: 12.5px; font-family: var(--mono); }
 .terminal { min-width: 0; }
 .terminal pre { margin: 0; padding: 20px; font-family: var(--mono); font-size: 13px; line-height: 1.7; overflow-x: auto; max-width: 100%; }
-.t-dim { color: var(--text-faint); } .t-green { color: var(--green); } .t-red { color: var(--red); } .t-purple { color: #A9A0F0; } .t-cyan { color: var(--brand-2); }
+.t-dim { color: var(--text-faint); } .t-green { color: var(--green); } .t-red { color: var(--red); } .t-purple { color: #B9B1F7; } .t-cyan { color: var(--brand-2); }
 
 .section { padding: clamp(56px, 6vw, 92px) 0; }
 /* Section headers sit left and span the grid, with the description beside the
@@ -201,7 +214,7 @@ code, .mono { font-family: var(--mono); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 .feature { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px; transition: border-color .2s, transform .2s; }
-.feature:hover { border-color: #2B4B7E; }
+.feature:hover { border-color: #2A4370; }
 .feature .ico { width: 44px; height: 44px; border-radius: 11px; background: var(--brand-grad-soft); border: 1px solid var(--border); display: grid; place-items: center; font-size: 22px; margin-bottom: 16px; }
 .feature h3 { font-size: 18px; margin-bottom: 8px; }
 .feature p { color: var(--text-dim); font-size: 14.5px; }
@@ -221,7 +234,7 @@ code, .mono { font-family: var(--mono); }
 
 .pricing { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; align-items: stretch; }
 .plan { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px; display: flex; flex-direction: column; }
-.plan.featured { border-color: #2E5490; box-shadow: none; position: relative; }
+.plan.featured { border-color: #2A4370; box-shadow: none; position: relative; }
 .plan.featured::before { content: "Most popular"; position: absolute; top: 0; right: 0; background: var(--brand-grad); color: var(--ink); font-size: 11px; font-weight: 600; padding: 4px 12px; border-bottom-left-radius: 10px; }
 .plan h3 { font-size: 20px; }
 .plan .price { font-size: 40px; font-weight: 800; margin: 14px 0 4px; letter-spacing: -.03em; }
@@ -295,7 +308,7 @@ code, .mono { font-family: var(--mono); }
 .user-chip .u-org { font-size: 12px; color: var(--text-faint); }
 
 .main { padding: 0; overflow-y: auto; height: 100vh; }
-.topbar { display: flex; align-items: center; justify-content: space-between; padding: 20px 32px; border-bottom: 1px solid var(--border-soft); position: sticky; top: 0; background: rgba(5,10,20,.86); backdrop-filter: blur(10px); z-index: 20; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 20px 32px; border-bottom: 1px solid var(--border-soft); position: sticky; top: 0; background: rgba(10,16,32,.88); backdrop-filter: blur(10px); z-index: 20; }
 .topbar h1 { font-size: 21px; font-weight: 700; }
 .topbar .crumb { color: var(--text-faint); font-size: 13px; margin-top: 2px; }
 .content { padding: 28px 32px 60px; }
@@ -366,22 +379,22 @@ code, .mono { font-family: var(--mono); }
 .stat-inline .l { color: var(--text-dim); font-size: 13.5px; margin-top: 4px; }
 
 /* ---------- code review mockup (the code-themed centerpiece) ---------- */
-.cr-window { max-width: none; margin: 0; background: #0E1729; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; font-family: var(--mono); font-size: 13px; }
+.cr-window { max-width: none; margin: 0; background: #060C18; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; font-family: var(--mono); font-size: 13px; }
 .cr-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border-soft); color: var(--text-faint); }
 .cr-head .fname { margin-left: 6px; color: var(--text-dim); }
 .cr-head .pill-sm { margin-left: auto; font-size: 11px; padding: 2px 9px; border-radius: 999px; background: rgba(52,211,153,.14); color: #a7f3d0; border: 1px solid rgba(52,211,153,.3); }
 .cr-code { padding: 8px 0; }
 .cr-line { display: flex; padding: 1px 16px; white-space: pre; }
-.cr-line .ln { width: 34px; color: #33507E; user-select: none; flex: none; text-align: right; margin-right: 16px; }
+.cr-line .ln { width: 34px; color: #3D5B8C; user-select: none; flex: none; text-align: right; margin-right: 16px; }
 .cr-line.add { background: rgba(52,211,153,.08); }
 .cr-line.del { background: rgba(248,113,113,.08); }
 .cr-line.add .ln { color: #34d399; } .cr-line.del .ln { color: #f87171; }
-.k { color: #7FB2FF; } .s { color: #6FD9BE; } .f { color: #C6D8F2; } .c { color: #35578C; } .n2 { color: #A9A0F0; }
+.k { color: #8FBCFF; } .s { color: #7FE3CA; } .f { color: #DCE7F7; } .c { color: #5E7CB0; } .n2 { color: #B9B1F7; }
 .cr-comment { margin: 6px 16px 16px 66px; background: var(--bg-card); border: 1px solid var(--border); border-left: 3px solid var(--brand); border-radius: 10px; padding: 14px; font-family: var(--font); }
 .cr-comment .cc-head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
 .cr-comment .cc-bot { font-weight: 700; }
 .cr-comment .cc-body { font-size: 13.5px; color: var(--text-dim); }
-.cr-comment .cc-proof { margin-top: 10px; background: #0E1729; border: 1px solid var(--border-soft); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.7; }
+.cr-comment .cc-proof { margin-top: 10px; background: #060C18; border: 1px solid var(--border-soft); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.7; }
 .cr-comment .cc-actions { display: flex; gap: 8px; margin-top: 10px; }
 
 /* ---------- pillars ---------- */
@@ -432,8 +445,8 @@ code, .mono { font-family: var(--mono); }
 }
 
 /* ---------- GitHub / OAuth buttons ---------- */
-.btn-github { background: #213353; color: var(--text); border: 1px solid var(--border); font-weight: 600; }
-.btn-github:hover { background: #2A3F63; border-color: #2B4B7E; }
+.btn-github { background: #16233C; color: var(--text); border: 1px solid var(--border); font-weight: 600; }
+.btn-github:hover { background: #1E2F4E; border-color: #2A4370; }
 .btn-github svg { width: 18px; height: 18px; }
 
 /* ---------- Connect flow (providers, orgs, repos) ---------- */
@@ -444,7 +457,7 @@ code, .mono { font-family: var(--mono); }
 .provider-tab .tag { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--bg-elev); border: 1px solid var(--border); color: var(--text-faint); }
 
 .connect-hero { text-align: center; padding: 48px 24px; }
-.connect-hero .gh-badge { width: 60px; height: 60px; border-radius: 16px; background: #213353; border: 1px solid var(--border); display: grid; place-items: center; margin: 0 auto 18px; }
+.connect-hero .gh-badge { width: 60px; height: 60px; border-radius: 16px; background: #16233C; border: 1px solid var(--border); display: grid; place-items: center; margin: 0 auto 18px; }
 .connect-hero h2 { font-size: 22px; margin-bottom: 8px; }
 .connect-hero p { color: var(--text-dim); max-width: 440px; margin: 0 auto 22px; font-size: 14.5px; }
 
@@ -454,7 +467,7 @@ code, .mono { font-family: var(--mono); }
 .org-chip:hover { border-color: var(--brand); color: var(--text); }
 .org-chip.active { background: var(--brand-grad); color: var(--text); border-color: transparent; }
 .org-chip .oa { width: 22px; height: 22px; border-radius: 6px; background: var(--brand-grad-soft); display: grid; place-items: center; font-size: 11px; font-weight: 800; color: var(--brand-2); }
-.org-chip.active .oa { background: rgba(4,7,15,.30); color: var(--text); }
+.org-chip.active .oa { background: rgba(6,12,24,.34); color: var(--text); }
 
 .repo-list { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .repo-row { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--border-soft); }
@@ -499,9 +512,9 @@ select, .field select {
   background-repeat: no-repeat; background-position: right 11px center;
   transition: border-color .15s, box-shadow .15s, background-color .15s;
 }
-select:hover { border-color: #2B4B7E; background-color: #16223A; }
-select:focus, select:focus-visible { outline: none; border-color: #35578C; box-shadow: 0 0 0 3px rgba(59,130,246,.22); }
-select option { background: #16223A; color: var(--text); }
+select:hover { border-color: #2A4370; background-color: #0D1526; }
+select:focus, select:focus-visible { outline: none; border-color: #5E7CB0; box-shadow: 0 0 0 3px rgba(59,130,246,.22); }
+select option { background: #0D1526; color: var(--text); }
 
 /* ============================================================= */
 /* ANIMATIONS (reactbits-inspired, dependency-free)              */
@@ -582,7 +595,7 @@ select option { background: #16223A; color: var(--text); }
 .docs-body p, .docs-body li { color: var(--text-dim); font-size: 15px; line-height: 1.7; }
 .docs-body ul { padding-left: 20px; }
 .docs-body code { background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 6px; font-size: 13px; color: var(--brand-2); }
-.docs-body pre { background: #0E1729; border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
+.docs-body pre { background: #060C18; border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
 .docs-body pre code { background: none; border: none; color: var(--text-dim); padding: 0; }
 
 /* ============================================================= */
@@ -618,23 +631,23 @@ select option { background: #16223A; color: var(--text); }
   background-color: var(--bg-card);
 }
 .stats-band, .compare { background-image: none; }
-.terminal { background-image: none; background-color: #0E1729; }
+.terminal { background-image: none; background-color: #060C18; }
 /* Cards state-change on the border only: no lift, no glow. */
 .feature { transition: border-color .18s, background-color .18s; }
-.feature:hover { border-color: #2B4B7E; background: var(--bg-elev); transform: none; box-shadow: none; }
+.feature:hover { border-color: #2A4370; background: var(--bg-elev); transform: none; box-shadow: none; }
 .nav-links a { position: relative; }
 .nav-links a:hover { color: var(--text); }
 .btn-primary { text-shadow: none; }
-.badge-policy { color: #CFE0F7; background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.30); }
+.badge-policy { color: #DEE9FA; background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.30); }
 .compare .cavix-col { background: rgba(59,130,246,.10); }
 .pipeline .stage { transition: border-color .18s, color .18s; }
-.pipeline .stage:hover { border-color: #2B4B7E; color: var(--text); transform: none; }
+.pipeline .stage:hover { border-color: #2A4370; color: var(--text); transform: none; }
 .hero .sub b, .feature em { color: var(--text); font-style: normal; }
 /* A hairline, not a halo. */
 .terminal, .cr-window { box-shadow: none; }
 
 .sidebar { background: var(--bg-elev); }
-.topbar { background: rgba(4,7,15,.92); }
+.topbar { background: rgba(10,16,32,.92); }
 .nav-item.active { box-shadow: inset 0 0 0 1px rgba(59,130,246,.30); }
 .nav-item .ni-ico { color: inherit; }
 
