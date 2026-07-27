@@ -310,19 +310,49 @@
     google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
     selfhosted: ["llama-3.1-70b-instruct", "qwen2.5-coder-32b", "deepseek-coder-v2", "mistral-large"],
   };
+  // MODELS above is only the FALLBACK, used before a key is saved or if the
+  // provider's listing endpoint is unreachable. The real list comes from the
+  // provider and reflects what this specific key is entitled to call, so we
+  // never offer a model that is retired or gated off the user's plan.
+  let liveModels = null;   // [{id,label,contextWindow}] once loaded
+  let liveNote = "";       // why the live list is unavailable, if it is
+
+  function modelList(provider) {
+    if (liveModels && liveModels.length) return liveModels;
+    return (MODELS[provider] || []).map((id) => ({ id }));
+  }
+  function modelLabel(m) {
+    const ctx = m.contextWindow ? ` · ${Math.round(m.contextWindow / 1000)}K ctx` : "";
+    return m.label && m.label !== m.id ? `${m.label} (${m.id})${ctx}` : `${m.id}${ctx}`;
+  }
   function modelOptions(provider, selected) {
-    const list = MODELS[provider] || [];
-    const known = list.map((m) => `<option value="${esc(m)}"${m === selected ? " selected" : ""}>${esc(m)}</option>`).join("");
-    const isCustom = selected && !list.includes(selected);
+    const list = modelList(provider);
+    const known = list.map((m) => `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(modelLabel(m))}</option>`).join("");
+    const isCustom = selected && !list.some((m) => m.id === selected);
     return known + `<option value="__custom__"${isCustom ? " selected" : ""}>Custom…</option>`;
+  }
+  /** Ask the server which models this org's key can actually use. */
+  async function loadModels(provider) {
+    liveModels = null; liveNote = "";
+    try {
+      const r = await api(`/api/orgs/${org}/models?provider=${encodeURIComponent(provider)}`);
+      if (r.source === "live" && r.models.length) liveModels = r.models;
+      else liveNote = r.reason || "";
+    } catch (e) { liveNote = e.message; }
+  }
+  function modelsHint(provider) {
+    if (liveModels) return `<span class="badge badge-verified">${liveModels.length} available on your key</span>`;
+    if (liveNote) return `<span class="sr-desc">Showing the built-in list. ${esc(liveNote)}</span>`;
+    return `<span class="sr-desc">Save an API key to see the models it unlocks.</span>`;
   }
   async function renderByok() {
     const s = await api(`/api/orgs/${org}/settings`);
+    await loadModels(s.llmProvider);
     const status = s.apiKeyFingerprint
       ? `<div class="key-box"><code>${esc(s.apiKeyFingerprint)}</code><span class="badge badge-verified">active</span></div>
          <div class="sr-desc" style="margin-top:8px">Set ${s.apiKeySetAt ? new Date(s.apiKeySetAt).toLocaleString() : ""}. Your key is encrypted at rest (AES-256-GCM) and never shown again.</div>`
       : `<div class="sr-desc">No key yet. Add one so Cavix can run reviews with your own AI account.</div>`;
-    const customModel = !(MODELS[s.llmProvider] || []).includes(s.llmModel);
+    const customModel = !modelList(s.llmProvider).some((m) => m.id === s.llmModel);
 
     content.innerHTML = `
       <div class="panel">
@@ -332,6 +362,7 @@
             <div class="field" style="margin:0"><label>Provider</label><select id="provider">${Object.entries(PROVIDERS).map(([v, l]) => `<option value="${v}"${v === s.llmProvider ? " selected" : ""}>${l}</option>`).join("")}</select></div>
             <div class="field" style="margin:0"><label>Model</label><select id="model">${modelOptions(s.llmProvider, s.llmModel)}</select></div>
           </div>
+          <div id="modelsHint" style="margin-top:10px">${modelsHint(s.llmProvider)}</div>
           <div class="field" id="customWrap" style="margin:14px 0 0;${customModel ? "" : "display:none"}"><label>Custom model id</label><input id="customModel" value="${customModel ? esc(s.llmModel) : ""}" placeholder="your-model-id"></div>
           <button class="btn btn-primary btn-sm" id="saveModel" style="margin-top:16px">Save provider &amp; model</button>
         </div>
@@ -347,7 +378,14 @@
       </div>`;
 
     const providerSel = $("provider"), modelSel = $("model");
-    providerSel.addEventListener("change", () => { modelSel.innerHTML = modelOptions(providerSel.value, MODELS[providerSel.value][0]); toggleCustom(); });
+    providerSel.addEventListener("change", async () => {
+      $("modelsHint").innerHTML = `<span class="sr-desc">Checking which models your key can use…</span>`;
+      await loadModels(providerSel.value);
+      const first = modelList(providerSel.value)[0];
+      modelSel.innerHTML = modelOptions(providerSel.value, first && first.id);
+      $("modelsHint").innerHTML = modelsHint(providerSel.value);
+      toggleCustom();
+    });
     modelSel.addEventListener("change", toggleCustom);
     function toggleCustom() { $("customWrap").style.display = modelSel.value === "__custom__" ? "" : "none"; }
 

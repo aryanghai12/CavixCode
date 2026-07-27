@@ -1,4 +1,4 @@
-import type { LLMProvider, LLMRequest, LLMResponse } from "../provider.ts";
+import type { LLMProvider, LLMRequest, LLMResponse, ModelInfo } from "../provider.ts";
 
 // AnthropicProvider calls the Claude Messages API directly over fetch (built
 // into Node) — no SDK dependency, consistent with the edge's zero-dep stance and
@@ -34,6 +34,10 @@ export class AnthropicProvider implements LLMProvider {
     this.baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  listModels(apiKey: string): Promise<ModelInfo[]> {
+    return listAnthropicModels(apiKey, { baseUrl: this.baseUrl, fetchImpl: this.fetchImpl });
   }
 
   async complete(req: LLMRequest, apiKey: string): Promise<LLMResponse> {
@@ -85,6 +89,49 @@ export class AnthropicProvider implements LLMProvider {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * List the Claude models this key can call. `GET /v1/models` paginates with
+ * `after_id` + `has_more`, and returns newest-first.
+ */
+export async function listAnthropicModels(
+  apiKey: string,
+  opts: { baseUrl?: string | undefined; fetchImpl?: typeof fetch } = {},
+): Promise<ModelInfo[]> {
+  if (!apiKey) throw new Error("anthropic: BYOK api key is empty");
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+  const doFetch = opts.fetchImpl ?? fetch;
+
+  const out: ModelInfo[] = [];
+  let afterId = "";
+  for (let page = 0; page < 10; page++) {
+    const url = `${baseUrl}/v1/models?limit=100${afterId ? `&after_id=${encodeURIComponent(afterId)}` : ""}`;
+    const res = await doFetch(url, {
+      headers: { "x-api-key": apiKey, "anthropic-version": ANTHROPIC_VERSION },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`anthropic: list models HTTP ${res.status} ${res.statusText}: ${truncate(body, 300)}`);
+    }
+    const data = (await res.json()) as {
+      data?: Array<{ id?: string; display_name?: string; max_input_tokens?: number; max_tokens?: number }>;
+      has_more?: boolean;
+      last_id?: string;
+    };
+    for (const m of data.data ?? []) {
+      if (!m.id) continue;
+      out.push({
+        id: m.id,
+        label: m.display_name,
+        contextWindow: m.max_input_tokens,
+        maxOutputTokens: m.max_tokens,
+      });
+    }
+    if (!data.has_more || !data.last_id) break;
+    afterId = data.last_id;
+  }
+  return out;
 }
 
 function truncate(s: string, n: number): string {

@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GoogleProvider, OpenAIProvider, tokenBudgetField, Gateway, FakeProvider } from "@cavix/gateway";
+import {
+  GoogleProvider, OpenAIProvider, tokenBudgetField, Gateway, FakeProvider,
+  listGoogleModels, listAnthropicModels, listOpenAICompatibleModels,
+} from "@cavix/gateway";
 
 // The dashboard's AI & BYOK dropdown offers Anthropic, Google, OpenAI and
 // self-hosted. Anything offered there must actually work, or the org picks it and
@@ -170,5 +173,90 @@ test("gateway: an unavailable provider names the ones that ARE available", async
   await assert.rejects(
     () => gw.complete("acme", { messages: [{ role: "user", content: "x" }] }),
     /"mistral" is not available.*Available: anthropic, google/s,
+  );
+});
+
+// ---------- live model discovery ----------
+//
+// A hardcoded dropdown drifts: providers retire models and gate others by plan
+// or account age. Offering one the key cannot call only surfaces later as a
+// failed review ("this model is no longer available to new users"), so the list
+// has to come from the provider.
+
+test("google: lists only models that can actually generate content", async () => {
+  const { fetchImpl, calls } = capture(() =>
+    json({
+      models: [
+        { name: "models/gemini-2.5-pro", displayName: "Gemini 2.5 Pro",
+          supportedGenerationMethods: ["generateContent", "countTokens"],
+          inputTokenLimit: 1048576, outputTokenLimit: 65536 },
+        // Embedding models appear in the same list and would fail as a reviewer.
+        { name: "models/text-embedding-004", displayName: "Embedding",
+          supportedGenerationMethods: ["embedContent"] },
+        { name: "models/gemini-2.0-flash", supportedGenerationMethods: ["generateContent"] },
+      ],
+    }),
+  );
+  const models = await listGoogleModels("AIza-key", { fetchImpl });
+
+  assert.deepEqual(models.map((m) => m.id), ["gemini-2.5-pro", "gemini-2.0-flash"]);
+  assert.equal(models[0].label, "Gemini 2.5 Pro");
+  assert.equal(models[0].contextWindow, 1048576);
+  assert.equal(calls[0].headers["x-goog-api-key"], "AIza-key");
+  assert.ok(!calls[0].url.includes("AIza-key"), "the key must not appear in the URL");
+});
+
+test("google: follows nextPageToken", async () => {
+  let n = 0;
+  const { fetchImpl, calls } = capture(() => {
+    n++;
+    return n === 1
+      ? json({ models: [{ name: "models/a", supportedGenerationMethods: ["generateContent"] }], nextPageToken: "tok2" })
+      : json({ models: [{ name: "models/b", supportedGenerationMethods: ["generateContent"] }] });
+  });
+  const models = await listGoogleModels("k", { fetchImpl });
+  assert.deepEqual(models.map((m) => m.id), ["a", "b"]);
+  assert.match(calls[1].url, /pageToken=tok2/);
+});
+
+test("anthropic: lists models and follows has_more pagination", async () => {
+  let n = 0;
+  const { fetchImpl, calls } = capture(() => {
+    n++;
+    return n === 1
+      ? json({ data: [{ id: "claude-opus-5", display_name: "Claude Opus 5", max_input_tokens: 1000000, max_tokens: 128000 }],
+               has_more: true, last_id: "claude-opus-5" })
+      : json({ data: [{ id: "claude-haiku-4-5", display_name: "Claude Haiku 4.5" }], has_more: false });
+  });
+  const models = await listAnthropicModels("sk-ant-key", { fetchImpl });
+
+  assert.deepEqual(models.map((m) => m.id), ["claude-opus-5", "claude-haiku-4-5"]);
+  assert.equal(models[0].contextWindow, 1000000);
+  assert.equal(calls[0].headers["x-api-key"], "sk-ant-key");
+  assert.equal(calls[0].headers["anthropic-version"], "2023-06-01");
+  assert.match(calls[1].url, /after_id=claude-opus-5/);
+});
+
+test("openai: filters out models that cannot chat", async () => {
+  const { fetchImpl, calls } = capture(() =>
+    json({
+      data: [
+        { id: "gpt-5" }, { id: "gpt-4o" },
+        { id: "text-embedding-3-large" }, { id: "whisper-1" },
+        { id: "dall-e-3" }, { id: "tts-1" }, { id: "omni-moderation-latest" },
+      ],
+    }),
+  );
+  const models = await listOpenAICompatibleModels("sk-test", { fetchImpl });
+
+  assert.deepEqual(models.map((m) => m.id), ["gpt-4o", "gpt-5"]);
+  assert.equal(calls[0].headers.authorization, "Bearer sk-test");
+});
+
+test("listing surfaces a bad key clearly, without echoing it", async () => {
+  const { fetchImpl } = capture(() => new Response('{"error":{"message":"API key not valid"}}', { status: 400 }));
+  await assert.rejects(
+    () => listGoogleModels("bad-secret", { fetchImpl }),
+    (err: Error) => /list models HTTP 400/.test(err.message) && !err.message.includes("bad-secret"),
   );
 });

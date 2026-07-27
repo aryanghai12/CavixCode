@@ -6,15 +6,15 @@
 <title>Docs · Cavix</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=12">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=12">
-<link rel="apple-touch-icon" href="/cavix-mark.svg?v=12">
+<link rel="stylesheet" href="/styles.css?v=13">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=13">
+<link rel="apple-touch-icon" href="/cavix-mark.svg?v=13">
 </head>
 <body>
 
 <nav class="nav">
   <div class="container nav-inner">
-    <a href="/" class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=12" alt="" aria-hidden="true"></span> Cavix</a>
+    <a href="/" class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span> Cavix</a>
     <div class="nav-links">
       <a href="/#pillars">Product</a><a href="/#pricing">Pricing</a><a href="/docs">Docs</a><a href="/#enterprise">Enterprise</a>
     </div>
@@ -119,6 +119,7 @@ failOn: [critical]</code></pre>
 
     <h2 id="byok">BYOK &amp; models</h2>
     <p>Bring your own key on <b>AI &amp; BYOK</b>: pick a provider (Anthropic / OpenAI / Google / self-hosted) and model, and paste your key. It's encrypted at rest (AES-256-GCM) and only a fingerprint is ever shown. Cavix never marks up tokens, you pay your provider directly.</p>
+    <p><b>The model list is live.</b> Once your key is saved, Cavix asks the provider which models <i>that key</i> can actually call and shows only those, with their context windows. Providers retire models and gate others by plan or account age, so a fixed list would eventually offer something you cannot use, and you would only find out when a review failed. If the provider cannot be reached, Cavix falls back to a built-in list and says so.</p>
 
     <h2 id="selfhost">Self-host &amp; air-gap</h2>
     <p>Cavix ships a Helm chart and Terraform. In air-gapped mode a deny-all-egress NetworkPolicy plus an application egress guard guarantee zero outbound calls; the model runs in your cluster. See the deployment guide for the full runbook.</p>
@@ -134,8 +135,8 @@ failOn: [critical]</code></pre>
     <p style="margin-top:40px"><a href="/signup" class="btn btn-primary">Start free →</a> &nbsp; <a href="/" class="btn btn-soft">Back to home</a></p>
   </main>
 </div>
-<script src="/icons.js?v=12"></script>
-<script src="/docs.js?v=12"></script>
-<script src="/fx.js?v=12"></script>
+<script src="/icons.js?v=13"></script>
+<script src="/docs.js?v=13"></script>
+<script src="/fx.js?v=13"></script>
 </body>
 </html>

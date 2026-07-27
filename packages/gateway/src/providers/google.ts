@@ -1,4 +1,4 @@
-import type { LLMProvider, LLMRequest, LLMResponse } from "../provider.ts";
+import type { LLMProvider, LLMRequest, LLMResponse, ModelInfo } from "../provider.ts";
 
 // GoogleProvider calls the Gemini generateContent API directly over fetch — no
 // SDK, matching the Anthropic provider and the repo's dependency-free stance.
@@ -42,6 +42,10 @@ export class GoogleProvider implements LLMProvider {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  listModels(apiKey: string): Promise<ModelInfo[]> {
+    return listGoogleModels(apiKey, { baseUrl: this.baseUrl, fetchImpl: this.fetchImpl });
   }
 
   async complete(req: LLMRequest, apiKey: string): Promise<LLMResponse> {
@@ -106,6 +110,57 @@ export class GoogleProvider implements LLMProvider {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * List the Gemini models this key can call.
+ *
+ * Google retires models and gates others ("no longer available to new users"),
+ * so only `supportedGenerationMethods` containing `generateContent` tells us a
+ * model is actually usable. Anything else in the list would fail at review time.
+ */
+export async function listGoogleModels(
+  apiKey: string,
+  opts: { baseUrl?: string | undefined; fetchImpl?: typeof fetch } = {},
+): Promise<ModelInfo[]> {
+  if (!apiKey) throw new Error("google: BYOK api key is empty");
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+  const doFetch = opts.fetchImpl ?? fetch;
+
+  const out: ModelInfo[] = [];
+  let pageToken = "";
+  // The list is paginated; a key with many tuned models needs more than one page.
+  for (let page = 0; page < 10; page++) {
+    const url = `${baseUrl}/${API_VERSION}/models?pageSize=200${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+    const res = await doFetch(url, { headers: { "x-goog-api-key": apiKey } });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`google: list models HTTP ${res.status} ${res.statusText}: ${truncate(body, 300)}`);
+    }
+    const data = (await res.json()) as {
+      models?: Array<{
+        name?: string;
+        displayName?: string;
+        supportedGenerationMethods?: string[];
+        inputTokenLimit?: number;
+        outputTokenLimit?: number;
+      }>;
+      nextPageToken?: string;
+    };
+    for (const m of data.models ?? []) {
+      if (!m.name) continue;
+      if (!(m.supportedGenerationMethods ?? []).includes("generateContent")) continue;
+      out.push({
+        id: m.name.replace(/^models\//, ""),
+        label: m.displayName,
+        contextWindow: m.inputTokenLimit,
+        maxOutputTokens: m.outputTokenLimit,
+      });
+    }
+    pageToken = data.nextPageToken ?? "";
+    if (!pageToken) break;
+  }
+  return out;
 }
 
 function truncate(s: string, n: number): string {

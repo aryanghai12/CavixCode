@@ -1,4 +1,4 @@
-import type { LLMProvider, LLMRequest, LLMResponse } from "../provider.ts";
+import type { LLMProvider, LLMRequest, LLMResponse, ModelInfo } from "../provider.ts";
 
 // OpenAIProvider calls the Chat Completions API directly over fetch. The wire
 // format is the same one SelfHostedProvider speaks (vLLM/Ollama/TGI all emulate
@@ -43,6 +43,10 @@ export class OpenAIProvider implements LLMProvider {
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.organization = opts.organization;
+  }
+
+  listModels(apiKey: string): Promise<ModelInfo[]> {
+    return listOpenAICompatibleModels(apiKey, { baseUrl: this.baseUrl, fetchImpl: this.fetchImpl });
   }
 
   async complete(req: LLMRequest, apiKey: string): Promise<LLMResponse> {
@@ -92,6 +96,40 @@ export class OpenAIProvider implements LLMProvider {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * List models from any OpenAI-compatible `/v1/models` endpoint — OpenAI itself,
+ * and self-hosted servers (vLLM, Ollama, TGI) that emulate it. Returns only
+ * chat-capable ids; the raw list also contains embeddings, TTS and moderation
+ * models that would fail as a review model.
+ */
+export async function listOpenAICompatibleModels(
+  apiKey: string,
+  opts: { baseUrl?: string | undefined; fetchImpl?: typeof fetch } = {},
+): Promise<ModelInfo[]> {
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+  const doFetch = opts.fetchImpl ?? fetch;
+  const headers: Record<string, string> = {};
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
+  const res = await doFetch(`${baseUrl}/v1/models`, { headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`openai: list models HTTP ${res.status} ${res.statusText}: ${truncate(body, 300)}`);
+  }
+  const data = (await res.json()) as { data?: Array<{ id?: string }> };
+  return (data.data ?? [])
+    .map((m) => m.id)
+    .filter((id): id is string => !!id && isChatModel(id))
+    .sort()
+    .map((id) => ({ id }));
+}
+
+/** OpenAI returns every model on the account, most of which cannot chat. */
+function isChatModel(id: string): boolean {
+  if (/embedding|whisper|tts|dall-e|moderation|audio|realtime|image|transcribe/i.test(id)) return false;
+  return /^(gpt|o\d|chatgpt)/i.test(id) || !/^(text-|davinci|babbage|curie|ada)/i.test(id);
 }
 
 function truncate(s: string, n: number): string {

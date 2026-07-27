@@ -7,6 +7,7 @@ import {
   clearCookie,
   constantTimeEqual,
   cookieSecureAttr,
+  fingerprint,
   isPlatformAdmin,
   parseCookies,
   sessionCookie,
@@ -16,6 +17,53 @@ import {
 } from "./auth.ts";
 import type { OrgTier } from "./store.ts";
 import * as gh from "./github.ts";
+import {
+  listAnthropicModels,
+  listGoogleModels,
+  listOpenAICompatibleModels,
+  type ModelInfo,
+} from "@cavix/gateway";
+
+/**
+ * Ask a provider which models the given key may actually call.
+ *
+ * Cached briefly: the AI & BYOK page re-renders on every provider switch, and a
+ * provider listing endpoint is slower than the rest of the dashboard.
+ */
+const modelCache = new Map<string, { at: number; models: ModelInfo[] }>();
+const MODEL_CACHE_MS = 5 * 60_000;
+
+async function listModelsForProvider(provider: string, apiKey: string): Promise<ModelInfo[]> {
+  // Key on a fingerprint, never the raw key.
+  const cacheKey = `${provider}:${fingerprint(apiKey)}`;
+  const hit = modelCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < MODEL_CACHE_MS) return hit.models;
+
+  // Base URLs are overridable so a corporate proxy or an Anthropic-compatible
+  // gateway can be pointed at without a code change.
+  let models: ModelInfo[];
+  switch (provider) {
+    case "anthropic":
+      models = await listAnthropicModels(apiKey, { baseUrl: process.env.CAVIX_ANTHROPIC_BASE_URL });
+      break;
+    case "google":
+      models = await listGoogleModels(apiKey, { baseUrl: process.env.CAVIX_GOOGLE_BASE_URL });
+      break;
+    case "openai":
+      models = await listOpenAICompatibleModels(apiKey, { baseUrl: process.env.CAVIX_OPENAI_BASE_URL });
+      break;
+    case "selfhosted": {
+      const baseUrl = process.env.CAVIX_SELFHOSTED_URL;
+      if (!baseUrl) throw new Error("self-hosted endpoint not configured (set CAVIX_SELFHOSTED_URL)");
+      models = await listOpenAICompatibleModels(apiKey, { baseUrl });
+      break;
+    }
+    default:
+      throw new Error(`unknown provider "${provider}"`);
+  }
+  modelCache.set(cacheKey, { at: Date.now(), models });
+  return models;
+}
 
 // A dependency-free HTTP API + static site server for the Cavix control plane.
 // node:http (no framework) keeps it buildable in air-gapped / minimal images.
@@ -391,6 +439,41 @@ async function apiRoute(
       return void sendJson(res, 200, { apiKeyFingerprint: s.apiKeyFingerprint, apiKeySetAt: s.apiKeySetAt });
     } catch (err) {
       return void sendJson(res, 400, { error: (err as Error).message });
+    }
+  }
+
+  // Live model discovery: ask the PROVIDER which models this org's key may use.
+  // A hardcoded dropdown drifts — providers retire models and gate others by
+  // plan or account age, and picking one you cannot call only surfaces later as
+  // a failed review ("this model is no longer available to new users").
+  mm = /^\/api\/orgs\/([^/]+)\/models$/.exec(p);
+  if (m === "GET" && mm) {
+    const org = decodeURIComponent(mm[1]);
+    const auth = requireOrg(req, res, store, org);
+    if (!auth) return;
+    const settings = store.getSettings(org);
+    const provider = url.searchParams.get("provider") || settings.llmProvider;
+    const apiKey = store.getApiKey(org);
+    if (!apiKey) {
+      return void sendJson(res, 200, {
+        provider,
+        models: [],
+        source: "none",
+        reason: "Save an API key first, then Cavix can list the models it unlocks.",
+      });
+    }
+    try {
+      const models = await listModelsForProvider(provider, apiKey);
+      return void sendJson(res, 200, { provider, models, source: "live" });
+    } catch (err) {
+      // Never fail the settings page over this — the UI falls back to its
+      // built-in list and shows why the live list is unavailable.
+      return void sendJson(res, 200, {
+        provider,
+        models: [],
+        source: "error",
+        reason: (err as Error).message.slice(0, 300),
+      });
     }
   }
 

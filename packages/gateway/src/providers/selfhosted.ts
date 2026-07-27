@@ -1,4 +1,5 @@
-import type { LLMProvider, LLMRequest, LLMResponse } from "../provider.ts";
+import type { LLMProvider, LLMRequest, LLMResponse, ModelInfo } from "../provider.ts";
+import { listOpenAICompatibleModels } from "./openai.ts";
 
 // SelfHostedProvider speaks the OpenAI-compatible Chat Completions API that local
 // model servers (vLLM, Ollama, llama.cpp, TGI) expose. In air-gapped mode the
@@ -31,6 +32,11 @@ export class SelfHostedProvider implements LLMProvider {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.timeoutMs = opts.timeoutMs ?? 120_000;
+  }
+
+  /** Local servers (vLLM, Ollama, TGI) expose the OpenAI-compatible listing. */
+  listModels(apiKey: string): Promise<ModelInfo[]> {
+    return listOpenAICompatibleModels(apiKey, { baseUrl: this.baseUrl, fetchImpl: this.fetchImpl });
   }
 
   async complete(req: LLMRequest, apiKey: string): Promise<LLMResponse> {
