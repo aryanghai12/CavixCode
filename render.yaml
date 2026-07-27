@@ -139,12 +139,29 @@ services:
       # REQUIRED to post anything to GitHub. A GitHub App install never gives you a
       # token — the orchestrator signs a JWT with the App key and exchanges it for a
       # short-lived installation token on every review.
-      #   CAVIX_APP_ID          = "App ID" on your GitHub App's General page
-      #   CAVIX_APP_PRIVATE_KEY = the ENTIRE .pem file contents you downloaded there,
-      #                           including the "-----BEGIN..." and "-----END..." lines
+      #
+      #   CAVIX_APP_ID = the NUMERIC "App ID" on your GitHub App's General page.
+      #                  (NOT the Client ID, which starts with Iv1./Iv23.)
+      #
+      # For the private key you have two options. THE SECRET FILE IS MORE RELIABLE:
+      # a .pem is multi-line, and pasting multi-line text into an env-var field is
+      # the single most common way this breaks.
+      #
+      #   RECOMMENDED  Render → cavix-orchestrator → Environment → "Add Secret File"
+      #                Filename: cavix.pem   Contents: the whole .pem
+      #                then set CAVIX_APP_PRIVATE_KEY_FILE = /etc/secrets/cavix.pem
+      #
+      #   OR           CAVIX_APP_PRIVATE_KEY = the ENTIRE .pem contents, including
+      #                the "-----BEGIN..." and "-----END..." lines.
+      #
+      # Cavix repairs the usual manglings (escaped \n, quotes, newlines flattened to
+      # spaces, base64) and, if the key still cannot sign, it logs exactly what it
+      # received and keeps running rather than failing the deploy.
       - key: CAVIX_APP_ID              # GitHub App id (GUIDE §8B)
         sync: false
       - key: CAVIX_APP_PRIVATE_KEY     # GitHub App .pem contents (GUIDE §8B)
+        sync: false
+      - key: CAVIX_APP_PRIVATE_KEY_FILE  # e.g. /etc/secrets/cavix.pem (preferred)
         sync: false
       - key: CAVIX_BOT_HANDLE          # answers to "@cavixcode review" and "@cavix review"
         value: cavixcode,cavix

@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -199,4 +200,56 @@ func postEvent(t *testing.T, h *Handler, event, delivery, body string) *httptest
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// TestWireContract pins the JSON the orchestrator actually parses.
+//
+// The TypeScript side (services/orchestrator/test/wireContract.test.ts) asserts
+// against these exact bytes. Nothing else couples the two languages: rename a
+// json tag here and every job would still enqueue, then be dropped downstream as
+// a "poison stream entry" with no user-visible error. If this test fails, update
+// the TS fixture in the same commit.
+func TestWireContract(t *testing.T) {
+	body := `{
+	  "action":"created",
+	  "issue":{"number":7,"title":"Add login lookup","pull_request":{"url":"u"}},
+	  "comment":{"id":998877,"body":"@cavixcode review","author_association":"OWNER",
+	             "user":{"login":"aryan-ghai","type":"User"}},
+	  "repository":{"id":55,"full_name":"aryan-ghai/my-repo","owner":{"login":"aryan-ghai"}},
+	  "installation":{"id":9182}
+	}`
+	job, err := NormalizeIssueComment([]byte(body), "delivery-1", "cavixcode,cavix")
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	raw, err := json.Marshal(job)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Exactly the keys the orchestrator reads, with the values it depends on.
+	want := map[string]any{
+		"schema_version":     "1",
+		"trigger":            "command",
+		"command":            "review",
+		"comment_id":         float64(998877),
+		"force_fresh":        true,
+		"author_association": "OWNER",
+		"installation_id":    float64(9182),
+		"repo":               "aryan-ghai/my-repo",
+		"pr_number":          float64(7),
+		"head_sha":           "", // command jobs carry no commit
+	}
+	for k, w := range want {
+		g, ok := got[k]
+		if !ok {
+			t.Fatalf("wire contract: key %q is missing; the orchestrator reads it", k)
+		}
+		if g != w {
+			t.Fatalf("wire contract: %q = %v, want %v", k, g, w)
+		}
+	}
 }

@@ -72,15 +72,26 @@ async function main() {
   // GitHub auth. A GitHub App install (the product's onboarding flow) never gives
   // you a PAT — it gives an App id + private key, which we exchange for short-lived
   // per-installation tokens. The static token is only a local-dev fallback.
+  //
+  // NOTE: a bad credential must never stop the process. The service binds its
+  // port and keeps consuming; broken auth surfaces per review, on the PR.
   let tokens;
-  if (cfg.github.appId && cfg.github.privateKey) {
-    tokens = new GitHubAppTokenProvider({
+  if (cfg.github.appId || cfg.github.privateKey) {
+    const app = new GitHubAppTokenProvider({
       appId: cfg.github.appId,
       privateKey: cfg.github.privateKey,
       baseUrl: cfg.github.baseUrl,
       logger: { info: (m, meta) => log("info", m, meta) },
     });
-    log("info", "GitHub auth: App installation tokens", { app_id: cfg.github.appId });
+    tokens = app;
+    if (app.configError) {
+      log("error", app.configError, {
+        fix: "Render → cavix-orchestrator → Environment. For the key, use 'Add Secret File' or paste the whole .pem including the BEGIN/END lines.",
+      });
+      log("warn", "the orchestrator is running, but reviews will fail until the GitHub App credentials are fixed");
+    } else {
+      log("info", "GitHub auth: App installation tokens", { app_id: cfg.github.appId });
+    }
   } else if (cfg.github.token) {
     tokens = new StaticTokenProvider(cfg.github.token);
     log("warn", "GitHub auth: static token (dev mode). Set CAVIX_APP_ID + CAVIX_APP_PRIVATE_KEY for the App path.");

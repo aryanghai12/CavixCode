@@ -518,8 +518,35 @@ $env:CAVIX_LLM_API_KEY = "sk-..."          # your AI key (or an offline self-hos
 > **These two are not optional in production.** A GitHub App install never hands you
 > a token, so without `CAVIX_APP_ID` **and** `CAVIX_APP_PRIVATE_KEY` the orchestrator
 > has no way to post anything and every review fails. Use `Get-Content ... -Raw` as
-> shown so the `.pem` keeps its line breaks. If you must paste it into a hosting
-> dashboard as a single line, escaped `\n` and base64 of the whole file both work.
+> shown so the `.pem` keeps its line breaks.
+
+#### Pasting the private key into a hosting dashboard
+
+A `.pem` is **multi-line**, and pasting multi-line text into an env-var box is the
+most common way this breaks. On Render, prefer a **Secret File**:
+
+1. Render → **cavix-orchestrator** → **Environment** → **Add Secret File**
+2. Filename `cavix.pem`, contents = the whole `.pem` file
+3. Add an env var `CAVIX_APP_PRIVATE_KEY_FILE` = `/etc/secrets/cavix.pem`
+
+Cavix repairs the usual manglings on its own (escaped `\n`, surrounding quotes,
+newlines flattened to spaces, base64 of the whole file, even a missing
+`-----BEGIN` line), so an imperfect paste usually still works.
+
+If the key genuinely cannot be used, **the service no longer crashes**. It starts
+normally and logs exactly what it received, for example:
+
+```
+CAVIX_APP_PRIVATE_KEY could not be read as an RSA private key.
+Received: 17 chars, 1 line(s), NO BEGIN marker, NO END marker.
+```
+
+Reviews then fail individually with a 😕 and an explanation on the pull request,
+rather than taking the whole deploy down.
+
+> **`CAVIX_APP_ID` is the numeric App ID** shown on the App's General page, not the
+> Client ID (which starts with `Iv1.` or `Iv23`). Cavix now names this mix-up
+> explicitly if you hit it.
 
 > **In one sentence:** the developer quick‑start (8c) uses a personal token
 > (`CAVIX_GITHUB_TOKEN`); production uses the App key above. Both plug into the same

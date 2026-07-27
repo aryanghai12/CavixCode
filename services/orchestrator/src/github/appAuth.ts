@@ -9,21 +9,96 @@ import type { TokenProvider } from "./rest.ts";
 // a repo is the whole onboarding flow, and an App install never yields a PAT. It
 // uses node:crypto only, consistent with the repo's dependency-free stance.
 
-/** Normalize a PEM pasted into an env var (Render/Railway often escape newlines). */
+/** PEM wrappers we can rebuild a key into. GitHub hands out PKCS#1 ("RSA PRIVATE
+ *  KEY"); some tooling converts to PKCS#8 ("PRIVATE KEY"). Node reads both. */
+const PEM_LABELS = ["RSA PRIVATE KEY", "PRIVATE KEY"] as const;
+
+/** Re-wrap a bare base64 body into a PEM block with 64-char lines. */
+function wrapPem(body: string, label: string): string {
+  const lines = body.replace(/[^A-Za-z0-9+/=]/g, "").match(/.{1,64}/g) ?? [];
+  return `-----BEGIN ${label}-----\n${lines.join("\n")}\n-----END ${label}-----\n`;
+}
+
+/** Can node actually sign with this? The only test that means anything. */
+export function canSign(pem: string): boolean {
+  try {
+    const s = createSign("RSA-SHA256");
+    s.update("cavix-probe");
+    s.end();
+    s.sign(pem);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Normalize a private key pasted into an env var, then verify it can sign.
+ *
+ * Hosting dashboards mangle PEMs in a handful of predictable ways and each one
+ * produces a service that boots fine and then fails on every review, so we
+ * repair them here instead of demanding a perfect paste:
+ *   - wrapped in quotes;
+ *   - newlines escaped as the two characters \ and n;
+ *   - newlines flattened to SPACES by a single-line input (the common one);
+ *   - the whole .pem base64-encoded;
+ *   - header/footer lines lost entirely, leaving just the base64 body.
+ * Returns "" if nothing we can do produces a usable key.
+ */
 export function normalizePrivateKey(raw: string): string {
-  let key = raw.trim();
-  // Some dashboards wrap the whole value in quotes.
+  let key = (raw ?? "").trim();
+  if (!key) return "";
+
+  // Some dashboards keep the surrounding quotes as part of the value.
   if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-    key = key.slice(1, -1);
+    key = key.slice(1, -1).trim();
   }
-  // A PEM pasted as a single line keeps its newlines as the two characters \ and n.
-  if (key.includes("\\n")) key = key.replace(/\\n/g, "\n");
-  // Base64 of a whole PEM file is also a common way to smuggle it through env vars.
-  if (!key.includes("-----BEGIN") && /^[A-Za-z0-9+/=\s]+$/.test(key)) {
-    const decoded = Buffer.from(key.replace(/\s/g, ""), "base64").toString("utf8");
-    if (decoded.includes("-----BEGIN")) key = decoded;
+  key = key.replace(/\\r/g, "").replace(/\\n/g, "\n").replace(/\r\n?/g, "\n").trim();
+
+  // Straightforward case: it already is a PEM and node accepts it.
+  if (canSign(key)) return key;
+
+  // The whole file, base64-encoded.
+  if (!key.includes("-----BEGIN") && /^[A-Za-z0-9+/=_\-\s]+$/.test(key)) {
+    const decoded = Buffer.from(key.replace(/-/g, "+").replace(/_/g, "/").replace(/\s/g, ""), "base64").toString("utf8");
+    if (decoded.includes("-----BEGIN") && canSign(decoded)) return decoded;
   }
-  return key.replace(/\r\n/g, "\n").trim();
+
+  // A PEM whose newlines became spaces: pull the label and the body back out and
+  // re-wrap it properly. This is what a single-line env-var input does to a paste.
+  const marked = /-----BEGIN ([A-Z ]+?)-----([\s\S]*?)-----END \1-----/.exec(key);
+  if (marked) {
+    const rebuilt = wrapPem(marked[2], marked[1].trim());
+    if (canSign(rebuilt)) return rebuilt;
+  }
+
+  // Header and footer lost: we have only the base64 body. Try each label.
+  const body = key.replace(/-----[^-]*-----/g, "").replace(/\s/g, "");
+  if (body.length > 100 && /^[A-Za-z0-9+/=]+$/.test(body)) {
+    for (const label of PEM_LABELS) {
+      const rebuilt = wrapPem(body, label);
+      if (canSign(rebuilt)) return rebuilt;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * A safe description of what we actually received, for logs. Never reveals key
+ * material: only shape. Without this, "not a PEM" is unactionable.
+ */
+export function describeKeyMaterial(raw: string): string {
+  const v = raw ?? "";
+  if (!v.trim()) return "empty";
+  const parts = [
+    `${v.length} chars`,
+    `${v.split("\n").length} line(s)`,
+    v.includes("-----BEGIN") ? "has BEGIN marker" : "NO BEGIN marker",
+    v.includes("-----END") ? "has END marker" : "NO END marker",
+  ];
+  if (v.includes("\\n")) parts.push("contains literal \\n");
+  return parts.join(", ");
 }
 
 function base64url(input: Buffer | string): string {
@@ -75,23 +150,40 @@ export class GitHubAppTokenProvider implements TokenProvider {
   /** In-flight mints, so a burst of parallel calls makes one token request. */
   private readonly inflight = new Map<number, Promise<string>>();
 
+  /**
+   * A credential problem is recorded, NOT thrown. Throwing here killed the whole
+   * process at boot: the health server never bound a port, the deploy failed,
+   * and the Redis consumer never started, so a one-line env-var typo took the
+   * entire service down. Now the service stays up and each affected review
+   * reports the problem on its own PR (the confused reaction + a comment).
+   */
+  readonly configError: string | null = null;
+
   constructor(opts: GitHubAppOptions) {
-    this.appId = String(opts.appId).trim();
-    this.privateKey = normalizePrivateKey(opts.privateKey);
+    this.appId = String(opts.appId ?? "").trim();
+    this.privateKey = normalizePrivateKey(opts.privateKey ?? "");
     this.baseUrl = opts.baseUrl ?? "https://api.github.com";
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.userAgent = opts.userAgent ?? "cavix-orchestrator";
     this.logger = opts.logger;
 
-    if (!this.appId) throw new Error("github app: CAVIX_APP_ID is empty");
-    if (!this.privateKey.includes("-----BEGIN")) {
-      throw new Error(
-        "github app: CAVIX_APP_PRIVATE_KEY is not a PEM private key — paste the whole .pem file contents, including the BEGIN/END lines",
-      );
+    if (!this.appId) {
+      this.configError = "github app: CAVIX_APP_ID is empty";
+    } else if (!/^\d+$/.test(this.appId)) {
+      // A frequent mix-up: pasting the Client ID (Iv1.abc…) instead of the App ID.
+      this.configError =
+        `github app: CAVIX_APP_ID should be the numeric "App ID" from the GitHub App's General page, got "${this.appId}". ` +
+        "The Client ID (starts with Iv1. or Iv23) is a different value.";
+    } else if (!this.privateKey) {
+      this.configError =
+        "github app: CAVIX_APP_PRIVATE_KEY could not be read as an RSA private key. Paste the ENTIRE .pem file " +
+        "you downloaded from the GitHub App page, including the -----BEGIN and -----END lines. " +
+        `Received: ${describeKeyMaterial(opts.privateKey ?? "")}.`;
     }
   }
 
   async token(installationId: number): Promise<string> {
+    if (this.configError) throw new Error(this.configError);
     if (!installationId) {
       throw new Error(
         "github app: webhook carried no installation id — is the Cavix App installed on this repository?",

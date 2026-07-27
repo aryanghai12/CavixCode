@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { GatewayConfigData } from "@cavix/gateway";
 
 // Orchestrator config from env. Config over hardcode: provider, model, keys,
@@ -69,6 +70,50 @@ export function resolveRedis(env: NodeJS.ProcessEnv): RedisConfig {
   };
 }
 
+/**
+ * The GitHub App private key, from an env var OR a file on disk.
+ *
+ * Multi-line values are exactly what hosting dashboards mangle, so the file path
+ * matters: on Render, "Secret Files" preserves a .pem byte-for-byte where the
+ * Environment Variables field may not. Set CAVIX_APP_PRIVATE_KEY_FILE to the
+ * secret file's path (e.g. /etc/secrets/cavix.pem). We also accept a bare path
+ * in CAVIX_APP_PRIVATE_KEY itself, since that mix-up is easy to make.
+ */
+export function resolvePrivateKey(env: NodeJS.ProcessEnv, readFile = defaultReadFile): string {
+  const file = env.CAVIX_APP_PRIVATE_KEY_FILE ?? env.CAVIX_GITHUB_APP_PRIVATE_KEY_FILE ?? "";
+  if (file) {
+    const contents = readFile(file);
+    if (contents) return contents;
+  }
+  const inline =
+    env.CAVIX_APP_PRIVATE_KEY ?? env.CAVIX_GITHUB_APP_PRIVATE_KEY ?? env.GITHUB_APP_PRIVATE_KEY ?? "";
+  // A path pasted where the key was expected: read it rather than failing.
+  //
+  // The test must be strict. Base64 uses "/" as a character, so "contains a
+  // slash" alone would misread a headerless key body as a filename. Require a
+  // real path shape instead: absolute, explicitly relative, or ending in .pem.
+  const v = inline.trim();
+  const looksLikePath =
+    v.length > 0 &&
+    v.length < 512 &&
+    !/\s/.test(v) &&
+    !v.includes("-----") &&
+    (/^\.{0,2}\//.test(v) || /^[A-Za-z]:[\\/]/.test(v) || /\.pem$/i.test(v));
+  if (looksLikePath) {
+    const contents = readFile(v);
+    if (contents) return contents;
+  }
+  return inline;
+}
+
+function defaultReadFile(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return ""; // missing/unreadable: fall through to the inline value
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
   const org = env.CAVIX_ORG ?? "default";
   const provider = env.CAVIX_LLM_PROVIDER ?? "anthropic";
@@ -86,8 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OrchestratorCo
       // Accept the documented names and the common GitHub-ecosystem aliases, so a
       // value pasted under either name works instead of failing silently.
       appId: env.CAVIX_APP_ID ?? env.CAVIX_GITHUB_APP_ID ?? env.GITHUB_APP_ID ?? "",
-      privateKey:
-        env.CAVIX_APP_PRIVATE_KEY ?? env.CAVIX_GITHUB_APP_PRIVATE_KEY ?? env.GITHUB_APP_PRIVATE_KEY ?? "",
+      privateKey: resolvePrivateKey(env),
     },
     gateway: {
       orgs: {
