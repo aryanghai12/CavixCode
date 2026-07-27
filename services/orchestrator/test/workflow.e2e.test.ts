@@ -12,7 +12,9 @@ import {
   pumpOnce,
   runReview,
   isPermanentFailure,
+  isModelUnavailable,
   cleanUp,
+  renderSuggestions,
 } from "@cavix/orchestrator";
 
 const DIFF = `diff --git a/src/auth.js b/src/auth.js
@@ -342,4 +344,79 @@ test('a "limit: 0" quota error says waiting will not help', async () => {
   await makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) })(makeCommandJob());
   assert.match(github.comments[0], /no quota for this model/i);
   assert.match(github.comments[0], /billing|switch to a model/i);
+});
+
+// ---- retired / gated models ----
+//
+// Regression: a provider 404 ("this model is no longer available to new users")
+// fell through to the GitHub 404 branch and told the user their App was not
+// installed — sending them to debug entirely the wrong system.
+
+const RETIRED_MODEL_ERROR =
+  'google: HTTP 404 : {"error":{"code":404,"message":"This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use a newer model.","status":"NOT_FOUND"}}';
+
+test("a provider model 404 is NOT mistaken for a GitHub App problem", async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => { throw new Error(RETIRED_MODEL_ERROR); });
+  await makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) })(makeCommandJob());
+
+  assert.match(github.comments[0], /not available to your API key/i);
+  assert.doesNotMatch(github.comments[0], /App may not be installed/i,
+    "must not send the user to debug the GitHub App");
+  assert.match(github.comments[0], /AI & BYOK/);
+});
+
+test("a GitHub 404 still explains the GitHub App", async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => { throw new Error("github: fetch diff HTTP 404 Not Found"); });
+  await makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) })(makeCommandJob());
+  assert.match(github.comments[0], /may not be installed on this repository/i);
+});
+
+test("isModelUnavailable distinguishes provider model errors from GitHub errors", () => {
+  assert.equal(isModelUnavailable(RETIRED_MODEL_ERROR), true);
+  assert.equal(isModelUnavailable("openai: HTTP 404 : The model `gpt-9` does not exist"), true);
+  assert.equal(isModelUnavailable("anthropic: HTTP 404 : model not found"), true);
+  // Not a model problem:
+  assert.equal(isModelUnavailable("github: fetch diff HTTP 404 Not Found"), false);
+  assert.equal(isModelUnavailable("google: HTTP 429 : quota exceeded"), false);
+  assert.equal(isModelUnavailable("boom: upstream HTTP 503"), false);
+});
+
+test("a retired model names the models the key CAN use", async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => { throw new Error(RETIRED_MODEL_ERROR); });
+  await makeReviewHandler({
+    github: broken,
+    reviewer,
+    gate: async () => ({ enabled: true, org: "acme" }),
+    suggestModels: async () => ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-flash-latest"],
+  })(makeCommandJob());
+
+  assert.match(github.comments[0], /Models your key can use right now/);
+  assert.match(github.comments[0], /`gemini-2\.5-pro`/);
+  assert.match(github.comments[0], /`gemini-2\.0-flash`/);
+});
+
+test("a failing model lookup never turns into a second failure", async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => { throw new Error(RETIRED_MODEL_ERROR); });
+  await makeReviewHandler({
+    github: broken,
+    reviewer,
+    gate: async () => ({ enabled: true, org: "acme" }),
+    suggestModels: async () => { throw new Error("control-plane unreachable"); },
+  })(makeCommandJob());
+
+  // Still exactly one comment, still the right explanation.
+  assert.equal(github.comments.length, 1);
+  assert.match(github.comments[0], /not available to your API key/i);
+});
+
+test("renderSuggestions caps the list and says how many more there are", () => {
+  const many = Array.from({ length: 10 }, (_, i) => `m-${i}`);
+  const out = renderSuggestions(many, 3);
+  assert.match(out, /`m-0`/);
+  assert.match(out, /…and 7 more/);
+  assert.equal(renderSuggestions([]), "", "no suggestions means no section");
 });

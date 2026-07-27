@@ -27,6 +27,8 @@ import { RedisStreamSource } from "./bridge/redisSource.ts";
 import { runBridge } from "./bridge/bridge.ts";
 import { makeControlPlaneResolver } from "./byok/resolver.ts";
 import { makeRepoGate } from "./byok/gate.ts";
+import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
+import { preflight, formatPreflight } from "./preflight.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "orchestrator", msg, ...meta }));
@@ -126,23 +128,22 @@ async function main() {
     baseUrl: cfg.github.baseUrl,
   });
 
-  // Say out loud WHO Cavix posts as. With App auth every comment, review and
-  // reaction comes from "<slug>[bot]" with the App's own avatar and profile. With
-  // a personal access token it posts as that human instead, wearing their name
-  // and picture, which is almost never what anyone wants.
-  void github
-    .whoAmI()
-    .then((id) => {
-      if (id.kind === "app") {
-        log("info", "posting to GitHub as the Cavix App", { identity: id.login });
-      } else if (id.kind === "user") {
-        log("warn", `posting to GitHub as the USER "${id.login}" — reviews will carry that person's name and avatar`, {
-          fix: "Set CAVIX_APP_ID + CAVIX_APP_PRIVATE_KEY (and remove CAVIX_GITHUB_TOKEN) so Cavix posts under its own bot identity.",
-        });
-      }
+  // ONE consolidated check of every dependency, reported together. Each of these
+  // used to surface separately, on a pull request, one deploy at a time.
+  void preflight({
+    whoAmI: () => github.whoAmI(),
+    githubConfigError: tokens instanceof GitHubAppTokenProvider ? tokens.configError : null,
+    controlPlaneUrl: cpUrl,
+    internalToken,
+    redisConfigured: !!cfg.redis.host && cfg.redis.host !== "127.0.0.1",
+    providers: [...providers.keys()],
+  })
+    .then((results) => {
+      const blocking = results.some((r) => !r.ok && r.required);
+      log(blocking ? "error" : "info", formatPreflight(results));
     })
     .catch(() => {
-      /* identity is diagnostic only; never block startup on it */
+      /* diagnostics only; never block startup */
     });
 
   const reviewer = new Reviewer({ gateway });
@@ -153,10 +154,21 @@ async function main() {
     : undefined;
   if (gate) log("info", "execution gatekeeper on: only dashboard-enabled repos are reviewed");
 
+  // Lets a "model retired" failure name real alternatives on the pull request.
+  const suggestModels = cpUrl && internalToken
+    ? makeModelSuggester({ url: cpUrl, token: internalToken, logger: { warn: (m, meta) => log("warn", m, meta) } })
+    : undefined;
+  const saveModel = cpUrl && internalToken
+    ? makeModelSaver({ url: cpUrl, token: internalToken, logger: { warn: (m, meta) => log("warn", m, meta) } })
+    : undefined;
+  if (suggestModels) log("info", "model self-heal on: a retired model is replaced automatically");
+
   const handler = makeReviewHandler({
     github,
     reviewer,
     gate,
+    suggestModels,
+    saveModel,
     logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
   });
 

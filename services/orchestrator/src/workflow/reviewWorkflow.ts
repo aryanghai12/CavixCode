@@ -4,6 +4,7 @@ import { refFromJob } from "../github/client.ts";
 import type { Reviewer } from "../reviewer/reviewer.ts";
 import { buildReviewSubmission } from "../poster/poster.ts";
 import type { ReviewHandler } from "./engine.ts";
+import { pickBestModel, renderSuggestions } from "../byok/models.ts";
 
 // The review workflow body: the durable steps that turn a ReviewJob into a posted
 // PR review. Each step is a clean await so a future Temporal port can wrap them as
@@ -35,6 +36,13 @@ export interface ReviewWorkflowDeps {
   logger?: WorkflowLogger;
   /** Execution gatekeeper: return enabled=false to skip (repo not toggled on). */
   gate?: (fullName: string) => Promise<GateDecision>;
+  /**
+   * Given an org, list the model ids its key can call. Used to enrich the failure
+   * comment, and to self-heal when the saved model has been retired.
+   */
+  suggestModels?: (org: string) => Promise<string[]>;
+  /** Persist an auto-selected model so the next review and the dashboard agree. */
+  saveModel?: (org: string, model: string) => Promise<boolean>;
 }
 
 export interface ReviewOutcome {
@@ -132,7 +140,7 @@ export function isPermanentFailure(message: string): boolean {
 export async function runReview(
   job: ReviewJob,
   deps: ReviewWorkflowDeps,
-  overrides: { org?: string } = {},
+  overrides: { org?: string; model?: string } = {},
 ): Promise<ReviewOutcome> {
   const log = deps.logger ?? noopLogger;
   const ref = refFromJob(job);
@@ -158,7 +166,14 @@ export async function runReview(
   // GitHub owner login — those are different names, and using the login meant the
   // org's saved API key was never found.
   const org = overrides.org || job.org;
-  const result = await deps.reviewer.review({ org, title: job.title, diff });
+  const result = await deps.reviewer.review({
+    org,
+    title: job.title,
+    diff,
+    // Explicit override: the gateway caches org config briefly, so a model we
+    // just auto-healed to would otherwise lose to the stale cached value.
+    ...(overrides.model ? { model: overrides.model } : {}),
+  });
   log.info("review complete", {
     ...base,
     org,
@@ -187,6 +202,35 @@ export async function runReview(
     costUsd: result.costUsd,
     model: result.model,
   };
+}
+
+/**
+ * Swap a retired model for one the org's key can actually call, and persist it.
+ * Returns the new model id, or "" if we could not determine a replacement (in
+ * which case the caller reports the original failure).
+ */
+async function healModel(
+  deps: ReviewWorkflowDeps,
+  org: string,
+  failure: string,
+  log: WorkflowLogger,
+): Promise<string> {
+  if (!deps.suggestModels) return "";
+  try {
+    const available = await deps.suggestModels(org);
+    if (available.length === 0) return "";
+    // The dead id is in the provider's error; fall back to "" so ranking still
+    // works off the available list alone.
+    const dead = /models\/([\w.\-]+)/.exec(failure)?.[1] ?? /`([\w.\-]+)`/.exec(failure)?.[1] ?? "";
+    const replacement = pickBestModel(dead, available);
+    if (!replacement || replacement === dead) return "";
+    const saved = deps.saveModel ? await deps.saveModel(org, replacement) : false;
+    log.info("auto-healed an unavailable model", { org, from: dead, to: replacement, persisted: saved });
+    return replacement;
+  } catch (err) {
+    log.error("model auto-heal failed", { org, err: (err as Error).message });
+    return "";
+  }
 }
 
 /** Wrap runReview as a WorkflowEngine handler (fire-and-forget per job). */
@@ -220,14 +264,39 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       }
     }
 
+    let healedTo = "";
     try {
-      const outcome = await runReview(job, deps, { org });
+      let outcome;
+      try {
+        outcome = await runReview(job, deps, { org, model: healedTo });
+      } catch (err) {
+        // SELF-HEAL: providers retire models, so the model saved months ago can
+        // stop working with no change on our side. Rather than fail and wait for
+        // a human, switch to a model this key can actually call, persist it, and
+        // finish the review now. Anything else still throws.
+        const first = (err as Error).message;
+        if (!isModelUnavailable(first)) throw err;
+        healedTo = await healModel(deps, org ?? job.org, first, log);
+        if (!healedTo) throw err;
+        outcome = await runReview(job, deps, { org, model: healedTo });
+      }
       await react(deps, job, ref, "rocket");
+      if (healedTo && isCommandJob(job)) {
+        await say(
+          deps,
+          job,
+          ref,
+          `**Review posted.** The model this workspace had saved is no longer available from your ` +
+            `provider, so Cavix switched to \`${healedTo}\` and carried on. Change it any time under ` +
+            `**AI & BYOK**.`,
+        );
+      }
       log.info("job complete", {
         repo: job.repo,
         pr: job.pr_number,
         findings: outcome.findingCount,
         url: outcome.posted.htmlUrl,
+        ...(healedTo ? { healed_model: healedTo } : {}),
       });
     } catch (err) {
       const message = (err as Error).message;
@@ -241,11 +310,21 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       });
       await react(deps, job, ref, "confused");
       if (isCommandJob(job)) {
+        // A retired model is the one failure where we can name the fix exactly,
+        // so fetch the org's real options instead of pointing at the dashboard.
+        let extra = "";
+        if (isModelUnavailable(message) && deps.suggestModels) {
+          try {
+            extra = renderSuggestions(await deps.suggestModels(org ?? job.org));
+          } catch {
+            /* diagnostics only — never turn this into a second failure */
+          }
+        }
         await say(
           deps,
           job,
           ref,
-          `**Cavix could not finish this review.**\n\n${explain(message)}\n\n` +
+          `**Cavix could not finish this review.**\n\n${explain(message)}${extra}\n\n` +
             `<details><summary>Technical detail</summary>\n\n\`\`\`\n${cleanUp(message)}\n\`\`\`\n\n</details>`,
         );
       }
@@ -288,6 +367,23 @@ export function cleanUp(message: string): string {
 }
 
 /**
+ * Did the provider reject the MODEL (retired, gated, or misspelled) rather than
+ * the request?
+ *
+ * Deliberately scoped to provider-prefixed errors: GitHub also returns 404, and
+ * conflating the two once told a user their App was not installed when really
+ * their Gemini model had been retired.
+ */
+export function isModelUnavailable(message: string): boolean {
+  if (/^github:/.test(message)) return false;
+  if (!/^(google|openai|anthropic|selfhosted):/.test(message)) return false;
+  return (
+    /HTTP 404/.test(message) ||
+    /no longer available|does not exist|not found|NOT_FOUND|unknown model|invalid model/i.test(message)
+  );
+}
+
+/**
  * Turn the failure into something a non-engineer can act on. These are the
  * misconfigurations that actually happen in practice.
  */
@@ -320,14 +416,25 @@ function explain(message: string): string {
   if (/returned no content/i.test(message)) {
     return "The model returned nothing, usually a safety filter on the diff. Try `@cavixcode review` again, or switch model under **AI & BYOK**.";
   }
+  if (isModelUnavailable(message)) {
+    return (
+      "The AI model saved for this workspace is not available to your API key. Providers retire models and " +
+      "restrict others to existing users, so a model that worked before can stop working. " +
+      "Open **AI & BYOK** in the dashboard and pick a model from the list, it now shows only the models your " +
+      "key can actually call."
+    );
+  }
   if (/installation token|static token is empty|installation id/i.test(message)) {
     return "That is a GitHub App credential problem. Check `CAVIX_APP_ID` and `CAVIX_APP_PRIVATE_KEY` on the orchestrator service, and that the Cavix App is installed on this repository.";
   }
-  if (/HTTP 401|HTTP 403/.test(message)) {
+  if (/^github:/.test(message) && /HTTP 401|HTTP 403/.test(message)) {
     return "Cavix was not allowed to read or write on this repository. Re-check the App's permissions (Pull requests: Read & write, Contents: Read).";
   }
-  if (/HTTP 404/.test(message)) {
+  if (/^github:/.test(message) && /HTTP 404/.test(message)) {
     return "Cavix could not see that pull request. The App may not be installed on this repository.";
+  }
+  if (/HTTP 401|HTTP 403/.test(message)) {
+    return "Your AI provider rejected the API key. Re-paste it under **AI & BYOK** in the dashboard.";
   }
   return "Check the orchestrator service logs for the full error.";
 }

@@ -356,6 +356,45 @@ async function apiRoute(
     return void sendJson(res, 200, { provider: s.llmProvider, model: s.llmModel, apiKey: store.getApiKey(org) ?? "" });
   }
 
+  // Internal: the models an org's key can call. The orchestrator uses this to name
+  // real alternatives on the pull request when a review fails because the saved
+  // model was retired — far more useful than "go look at the dashboard".
+  im = /^\/api\/internal\/orgs\/([^/]+)\/models$/.exec(p);
+  if (m === "GET" && im) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(im[1]);
+    const s = store.getSettings(org);
+    const apiKey = store.getApiKey(org);
+    if (!apiKey) return void sendJson(res, 200, { provider: s.llmProvider, models: [] });
+    try {
+      const models = await listModelsForProvider(s.llmProvider, apiKey);
+      return void sendJson(res, 200, { provider: s.llmProvider, models });
+    } catch {
+      // Best effort: the caller only uses this to enrich an error message.
+      return void sendJson(res, 200, { provider: s.llmProvider, models: [] });
+    }
+  }
+
+  // Internal: persist a model the orchestrator auto-selected after the saved one
+  // turned out to be retired. Keeping it here means the next review and the
+  // dashboard agree, and the user never has to intervene.
+  im = /^\/api\/internal\/orgs\/([^/]+)\/model$/.exec(p);
+  if (m === "POST" && im) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(im[1]);
+    const body = await readJson(req);
+    const llmModel = String(body.llmModel ?? "");
+    if (!llmModel) return void sendJson(res, 400, { error: "llmModel required" });
+    const updated = store.updateSettings(org, { llmModel });
+    return void sendJson(res, 200, { llmModel: updated.llmModel });
+  }
+
   // Execution gatekeeper: is this "owner/repo" enabled for review in the dashboard?
   if (m === "GET" && p === "/api/internal/repos/enabled") {
     const token = process.env.CAVIX_INTERNAL_TOKEN;
