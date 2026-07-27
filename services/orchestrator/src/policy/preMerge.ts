@@ -159,6 +159,6 @@ export function runPreMergeChecks(
  */
 function preExisting(ignored: number): string {
   return ignored > 0
-    ? `pass — this change adds none (${ignored} pre-existing, not attributed to this PR)`
-    : "pass — nothing in the added lines";
+    ? `Pass. This change adds none (${ignored} pre-existing, not attributed to this PR).`
+    : "Pass. Nothing in the added lines.";
 }

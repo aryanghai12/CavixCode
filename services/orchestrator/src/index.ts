@@ -11,12 +11,21 @@ export { REVIEW_SYSTEM_PROMPT, buildUserMessage } from "./reviewer/prompt.ts";
 export {
   buildReviewSubmission,
   buildPullDescription,
+  plain,
   SUMMARY_START,
   SUMMARY_END,
   type BuiltReview,
   type PosterOptions,
   type ReviewLinkRef,
 } from "./poster/poster.ts";
+
+export {
+  makeReviewRecorder,
+  toWireFinding,
+  type RecordReviewInput,
+  type ReviewRecorder,
+  type RecorderOptions,
+} from "./report/recorder.ts";
 
 export {
   makeVerifyStep,

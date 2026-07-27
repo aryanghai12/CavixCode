@@ -50,7 +50,12 @@ GitHub ──pull_request webhook──▶ [Stage 0: edge, Go]
                           4. write summary + walkthrough into the PR description
                           5. post the review: findings anchored to their lines,
                              each verified one carrying its sandbox transcript
+                          6. RECORD to the control-plane (best-effort, last)
+                               the dashboard, the accept/reject learning signal
+                               and the proven-catches feed all read from this.
+                               A failure here costs a dashboard row, never a review.
                                    │
+                                   ├──────────────▶ control-plane  POST /api/reviews
                                    ▼
                           GitHub PR review  (verified-comment shape)
 ```
@@ -61,13 +66,23 @@ Three surfaces, deliberately separated:
 
 | Surface | Carries | Why there |
 | --- | --- | --- |
-| PR **description** | summary, size, review effort, per-file walkthrough | describes the PR itself, read first, never scrolls away under comments. Cavix owns only the block between its `<!-- cavix:summary:* -->` markers — the author's text is preserved byte-for-byte, and a re-review replaces the block instead of stacking a new one. |
+| PR **description** | verdict callout, summary, size, review effort, per-file walkthrough | describes the PR itself, read first, never scrolls away under comments. Cavix owns only the block between its `<!-- cavix:summary:* -->` markers — the author's text is preserved byte-for-byte, and a re-review replaces the block instead of stacking a new one. |
 | Review **comment** | findings grouped by file, with line, severity, category | one scannable index of what to fix, plus what was suppressed and why |
 | **Inline** comments | the explanation, the sandbox proof, the one-click suggestion | anchored to the line at fault |
+| **Dashboard** | every review, its findings, and the accept/reject control | what the org looks at between pull requests, and where the learning signal is captured |
 
 If the description cannot be written (fork PRs, revoked permission), the summary
 falls back into the review comment rather than being lost — which is why the
 description update is attempted *before* the review is posted.
+
+**House style for all three GitHub surfaces** (`services/orchestrator/src/poster/poster.ts`):
+one H2 per surface, H3 per section, H4 per file, and nothing larger, so a review never
+shouts over the human conversation around it. The verdict is a GitHub alert callout
+(`TIP` clean / `NOTE` minor / `WARNING` high or above / `CAUTION` blocking), so its colour
+states the outcome before a word is read. Dense facts go in tables, each row at most two
+lines with the second one small and dim. Punctuation is plain ASCII throughout: `plain()`
+rewrites em dashes, en dashes, smart quotes and ellipses out of everything the model
+wrote, because that typography is what makes a comment read as machine-written.
 
 ## Why a Redis Stream *between* Stage 0 and Stage 1
 

@@ -886,7 +886,17 @@ pattern extends to each once you add that provider's OAuth (the code is structur
 - **BYOK keys are encrypted** (AES‑256‑GCM) before storage, and the raw key is *never*
   sent back to the browser — only a short fingerprint like `sk-…demo (f909ad28)`.
 - **The API is the same one the orchestrator uses.** When a real review finishes, the
-  orchestrator `POST`s it to `/api/reviews`, and it shows up on the dashboard instantly.
+  orchestrator `POST`s it to `/api/reviews`
+  ([src/report/recorder.ts](services/orchestrator/src/report/recorder.ts)) and it shows up
+  on the dashboard immediately. That call is the *only* thing that puts a review on the
+  site, so an orchestrator without `CAVIX_CONTROL_PLANE_URL` and `CAVIX_INTERNAL_TOKEN`
+  reviews pull requests perfectly and leaves the dashboard empty. It authenticates with
+  the shared internal token (there is no human session when a webhook-driven review
+  finishes), it runs *after* the review is posted, and it never fails a review: if the
+  site is asleep the org loses a dashboard row, not their review.
+- **Reviews are private to a workspace.** Reading them (`GET /api/reviews`) and deciding
+  on a finding both require a session in the owning org, and a decision is attributed to
+  the signed-in user rather than to whatever name the request asked for.
 
 > **Security note for going live:** two secrets protect the app. Set them in production
 > (they have insecure dev defaults):

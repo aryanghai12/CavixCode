@@ -599,32 +599,53 @@ async function apiRoute(
   }
 
   // ----- reviews -----
+  //
+  // This is the endpoint the orchestrator calls after it posts a review, and it
+  // is the only reason the dashboard has anything on it. It authenticates as the
+  // service (the shared internal token) rather than as a user, because no human
+  // session exists at the moment a webhook-driven review finishes.
   if (m === "POST" && p === "/api/reviews") {
     const body = await readJson(req);
-    const org = String(body.org);
+    const org = String(body.org ?? "");
+    if (!org) return void sendJson(res, 400, { error: "org required" });
+    if (!canWriteReview(req, org)) {
+      return void sendJson(res, 401, { error: "authentication required to record a review" });
+    }
     const tier = store.getOrg(org)?.tier ?? "paid";
     const limit = store.effectiveReviewsPerDay(org);
     if (store.reviewCountSince(org, 24 * 3600_000) >= limit) {
       const reason = limit === 0 ? "organization is suspended" : `rate limit reached for ${tier} tier (${limit}/day)`;
       return void sendJson(res, 429, { error: reason });
     }
+    // Only ever an https link. An attacker-controlled URL here would otherwise
+    // become a javascript: link rendered inside the dashboard.
+    const link = safeReviewUrl(body.url);
     const record = store.saveReview({
       org,
       repo: String(body.repo),
       pr: Number(body.pr),
       title: String(body.title ?? ""),
+      ...(link ? { url: link } : {}),
       findings: Array.isArray(body.findings) ? body.findings : [],
     });
     return void sendJson(res, 201, record);
   }
+  // A workspace's reviews are its own. Without the session check any visitor
+  // could read every finding Cavix has ever raised on a private repo by guessing
+  // an org name.
   if (m === "GET" && p === "/api/reviews") {
-    return void sendJson(res, 200, store.listReviews(url.searchParams.get("org") ?? undefined));
+    const scope = reviewScope(req, url.searchParams.get("org"));
+    if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
+    return void sendJson(res, 200, store.listReviews(scope.org));
   }
 
   mm = /^\/api\/reviews\/([^/]+)$/.exec(p);
   if (m === "GET" && mm) {
     const r = store.getReview(mm[1]);
-    return r ? void sendJson(res, 200, r) : void sendJson(res, 404, { error: "not found" });
+    if (!r) return void sendJson(res, 404, { error: "not found" });
+    const scope = reviewScope(req, r.org);
+    if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
+    return void sendJson(res, 200, r);
   }
 
   // ----- findings & decisions -----
@@ -634,6 +655,10 @@ async function apiRoute(
     return f ? void sendJson(res, 200, f) : void sendJson(res, 404, { error: "not found" });
   }
 
+  // Accepting or rejecting a finding is what the learning loop trains on, so the
+  // decision has to belong to a real person in the workspace that owns it. The
+  // name is taken from the session, never from the request body: a client that
+  // can name anyone can attribute a rejection to a colleague.
   mm = /^\/api\/findings\/([^/]+)\/decision$/.exec(p);
   if (m === "POST" && mm) {
     const body = await readJson(req);
@@ -641,12 +666,15 @@ async function apiRoute(
     if (state !== "accepted" && state !== "rejected") {
       return void sendJson(res, 400, { error: "state must be accepted|rejected" });
     }
-    try {
-      const updated = store.recordDecision(mm[1], state, String(body.user ?? "unknown"));
-      return void sendJson(res, 200, updated);
-    } catch {
-      return void sendJson(res, 404, { error: "no such finding" });
+    const finding = store.getFinding(mm[1]);
+    if (!finding) return void sendJson(res, 404, { error: "no such finding" });
+    const review = store.getReview(finding.reviewId);
+    const s = sessionFromRequest(req);
+    if (!s) return void sendJson(res, 401, { error: "authentication required" });
+    if (review && review.org !== s.org && !isPlatformAdmin(s.email)) {
+      return void sendJson(res, 403, { error: "forbidden: not a member of this organization" });
     }
+    return void sendJson(res, 200, store.recordDecision(mm[1], state, s.email));
   }
 
   if (m === "GET" && p === "/api/decisions") return void sendJson(res, 200, store.listDecisions());
@@ -658,6 +686,69 @@ async function apiRoute(
 // ---------------------------------------------------------------------------
 // Auth guard
 // ---------------------------------------------------------------------------
+
+/**
+ * Does this request carry the shared service token?
+ *
+ * False whenever no token is configured: a deployment that never set one has no
+ * service identity to check against, and treating "no token" as "any token" is
+ * how an internal API becomes a public one.
+ */
+function internalAuthorized(req: http.IncomingMessage): boolean {
+  const token = process.env.CAVIX_INTERNAL_TOKEN;
+  if (!token) return false;
+  const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+  return constantTimeEqual(bearer, token);
+}
+
+/**
+ * May this request record a review against `org`?
+ *
+ * The orchestrator authenticates as a service (no human session exists when a
+ * webhook-driven review finishes); a signed-in user may record against their own
+ * workspace. A deployment with no CAVIX_INTERNAL_TOKEN at all is a local or
+ * self-hosted one with no service identity to check, so the endpoint stays open
+ * there rather than becoming impossible to call.
+ */
+function canWriteReview(req: http.IncomingMessage, org: string): boolean {
+  if (internalAuthorized(req)) return true;
+  const s = sessionFromRequest(req);
+  if (s && s.org === org) return true;
+  return !process.env.CAVIX_INTERNAL_TOKEN;
+}
+
+/** Which org's reviews a request may read, or why it may not read any. */
+type ReviewScope = { org: string | undefined } | { error: string; status: number };
+
+/**
+ * Reviews carry findings from private repositories, so reading them is scoped to
+ * the caller's own workspace. Platform admins (and the service token) may name
+ * another org; nobody else can.
+ */
+function reviewScope(req: http.IncomingMessage, requested: string | null): ReviewScope {
+  const s = sessionFromRequest(req);
+  if (!s) {
+    return internalAuthorized(req)
+      ? { org: requested ?? undefined }
+      : { error: "authentication required", status: 401 };
+  }
+  if (isPlatformAdmin(s.email)) return { org: requested ?? undefined };
+  if (requested && requested !== s.org) {
+    return { error: "forbidden: not a member of this organization", status: 403 };
+  }
+  return { org: s.org };
+}
+
+/**
+ * Accept a review link only if it is a plain https URL. The dashboard renders it
+ * as an href, so `javascript:` and friends never get stored in the first place.
+ */
+function safeReviewUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const url = value.trim();
+  if (url.length > 500 || !/^https:\/\/[^\s"'<>]+$/i.test(url)) return null;
+  return url;
+}
 
 /** Require a valid session whose org matches `org` (and optionally a role). */
 function requireOrg(

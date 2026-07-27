@@ -32,6 +32,7 @@ import { makeControlPlaneResolver } from "./byok/resolver.ts";
 import { makeRepoGate } from "./byok/gate.ts";
 import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
 import { makeReviewConfigFetcher } from "./byok/reviewConfig.ts";
+import { makeReviewRecorder } from "./report/recorder.ts";
 import { preflight, formatPreflight } from "./preflight.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -210,6 +211,22 @@ async function main() {
     : undefined;
   if (reviewConfig) log("info", "per-org review settings come from the dashboard");
 
+  // The other half of that conversation: every finished review is written back
+  // so the dashboard, the accept/reject learning signal and the proven-catches
+  // feed have something to show. Without a control-plane there is nowhere to
+  // record to, and reviews simply live on the pull request.
+  const recordReview = cpUrl && internalToken
+    ? makeReviewRecorder({
+        url: cpUrl,
+        token: internalToken,
+        logger: { info: (m, meta) => log("info", m, meta), warn: (m, meta) => log("warn", m, meta) },
+      })
+    : undefined;
+  if (recordReview) log("info", "reviews are recorded to the dashboard as they are posted");
+  else log("warn", "no control-plane configured: reviews will NOT appear on the dashboard", {
+    fix: "set CAVIX_CONTROL_PLANE_URL and CAVIX_INTERNAL_TOKEN on the orchestrator",
+  });
+
   const handler = makeReviewHandler({
     github,
     reviewer,
@@ -218,6 +235,7 @@ async function main() {
     saveModel,
     verify,
     reviewConfig,
+    recordReview,
     // The summary belongs in the PR description; opt out with =off.
     summaryInDescription: process.env.CAVIX_SUMMARY_IN_DESCRIPTION !== "off",
     logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },

@@ -20,6 +20,7 @@ import {
 } from "../byok/reviewConfig.ts";
 import type { ReviewHandler } from "./engine.ts";
 import { rankModels, renderSuggestions } from "../byok/models.ts";
+import type { ReviewRecorder } from "../report/recorder.ts";
 
 /** How many alternative models to try before giving up. Each try is a real call. */
 const MAX_HEAL_ATTEMPTS = 5;
@@ -82,6 +83,12 @@ export interface ReviewWorkflowDeps {
    * may block a merge. Absent = the safe defaults in DEFAULT_REVIEW_CONFIG.
    */
   reviewConfig?: ReviewConfigFetcher;
+  /**
+   * Report the finished review to the control-plane so it shows on the
+   * dashboard. Best-effort and always last: the review is already on the pull
+   * request by then, so nothing here may fail (or retry) the job.
+   */
+  recordReview?: ReviewRecorder;
 }
 
 export interface ReviewOutcome {
@@ -100,6 +107,8 @@ export interface ReviewOutcome {
   preMerge?: PreMergeResult;
   /** Was the review posted as REQUEST_CHANGES (the owner's blocking setting)? */
   blocked: boolean;
+  /** Did this review make it onto the dashboard? False when nothing recorded it. */
+  recorded: boolean;
   costUsd: number;
   model: string;
 }
@@ -358,6 +367,30 @@ export async function runReview(
     suppressed: suppressedCount,
   });
 
+  // Step 6 — record it on the dashboard. This is what the org actually looks at
+  // between pull requests, and it is where accept/reject decisions (the learning
+  // signal) are made. It runs last and swallows its own failures: the review is
+  // already published, so a control-plane hiccup must not undo it or make the
+  // queue retry a review that succeeded.
+  let recorded = false;
+  if (deps.recordReview) {
+    try {
+      recorded = await deps.recordReview({
+        org,
+        repo: job.repo,
+        pr: job.pr_number,
+        title: job.title ?? "",
+        url: posted.htmlUrl,
+        findings: result.findings,
+      });
+    } catch (err) {
+      log.error("could not record the review on the dashboard", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
   return {
     posted,
     summary: result.summary,
@@ -369,6 +402,7 @@ export async function runReview(
     descriptionUpdated,
     preMerge,
     blocked: requestChanges,
+    recorded,
     costUsd: result.costUsd + verifyCost,
     model: result.model,
   };
@@ -526,6 +560,7 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         verified: outcome.verifiedCount,
         suppressed: outcome.suppressedCount,
         description_updated: outcome.descriptionUpdated,
+        recorded: outcome.recorded,
         url: outcome.posted.htmlUrl,
         ...(healedTo ? { healed_model: healedTo } : {}),
       });

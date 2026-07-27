@@ -79,7 +79,7 @@ test("runPreMergeChecks: a clean file passes", () => {
   const out = runPreMergeChecks(["Disallow calls to console.log"], [{ path: "a.ts", content: "export const x = 1;\n" }]);
   assert.equal(out.passed, 1);
   assert.equal(out.failed, 0);
-  assert.match(out.checks[0].detail, /pass — nothing in the added lines/);
+  assert.match(out.checks[0].detail, /Pass\. Nothing in the added lines\./);
 });
 
 // The rule that decides whether anyone keeps the gate switched on: an author who
@@ -160,8 +160,8 @@ test("the gate runs over the changed files and blocks when the owner asked for i
   assert.equal(outcome.blocked, true);
   const review = github.lastReview()!;
   assert.equal(review.event, "REQUEST_CHANGES");
-  assert.match(review.body, /Changes requested — 1 pre-merge check failed/);
-  assert.match(review.body, /### Pre-merge checks · \*\*1 check failing\*\*/);
+  assert.match(review.body, /Changes requested: 1 pre-merge check failed/);
+  assert.match(review.body, /### Pre-merge checks\n\n\*\*1 check failing\*\*/);
   assert.match(review.body, /\| ❌ \| Disallow calls to console\.log \|/);
 });
 
@@ -178,7 +178,7 @@ test("the same failing gate only reports when blocking is off", async () => {
   assert.equal(outcome.preMerge?.failed, 1);
   assert.equal(outcome.blocked, false);
   assert.equal(github.lastReview()!.event, "COMMENT");
-  assert.match(github.lastReview()!.body, /Reporting only; blocking is off/);
+  assert.match(github.lastReview()!.body, /Reporting only, blocking is off/);
 });
 
 // A gate that silently does not run is indistinguishable from a gate that
@@ -202,7 +202,7 @@ test("a gate that cannot run says so on the PR instead of quietly passing", asyn
   assert.equal(outcome.preMerge?.skipped, 1);
   assert.equal(outcome.blocked, false, "never claim a failure that was not measured");
   const body = github.lastReview()!.body;
-  assert.match(body, /### Pre-merge checks · \*\*no checks ran\*\*/);
+  assert.match(body, /### Pre-merge checks\n\n\*\*No checks ran\*\*/);
   assert.match(body, /Cavix could not run this check/);
 });
 
@@ -293,7 +293,7 @@ test("turning inline findings off moves every explanation into the comment", asy
   assert.equal(github.lastReview()!.comments.length, 0);
   const body = github.lastReview()!.body;
   assert.match(body, /Debug logging left in/, "the finding is still listed");
-  assert.match(body, /full detail for 1 finding/, "and its explanation is here instead");
+  assert.match(body, /Full detail for 1 finding/, "and its explanation is here instead");
   assert.match(body, /inline comments are off for this workspace/);
 });
 

@@ -142,7 +142,7 @@ test("a real bug is reproduced in the sandbox and posted with its proof", async 
   const review = github.lastReview()!;
   const inline = review.comments[0].body;
   assert.match(inline, /✅ verified/);
-  assert.match(inline, /\*\*Proof\*\* — reproduced in a sealed sandbox/);
+  assert.match(inline, /\*\*Proof\.\*\* Reproduced in a sealed sandbox/);
   // The transcript is real: the repro FAILED before the fix and PASSED after it.
   assert.match(inline, /\[repro\].*→ exit 1 +bug reproduced/);
   assert.match(inline, /\[after-fix\].*→ exit 0 +suggested fix resolves it/);

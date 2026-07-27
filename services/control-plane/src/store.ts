@@ -193,6 +193,8 @@ export interface ReviewRecord {
   repo: string;
   pr: number;
   title: string;
+  /** Link to the posted review, so a dashboard row opens the pull request. */
+  url?: string;
   createdAt: string;
   findings: StoredFinding[];
 }
@@ -202,6 +204,7 @@ export interface SaveReviewInput {
   repo: string;
   pr: number;
   title: string;
+  url?: string;
   findings: Array<Finding & { verified?: boolean }>;
 }
 
@@ -412,6 +415,7 @@ export class InMemoryStore implements Store {
       repo: input.repo,
       pr: input.pr,
       title: input.title,
+      ...(input.url ? { url: input.url } : {}),
       createdAt: new Date().toISOString(),
       findings,
     };

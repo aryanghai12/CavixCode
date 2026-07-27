@@ -119,6 +119,55 @@ test("e2e: runReview returns a structured outcome with the posted url", async ()
   assert.match(outcome.posted.htmlUrl, /pull\/42#pullrequestreview-/);
 });
 
+// The dashboard is fed from here and nowhere else. A review that is posted but
+// never recorded is exactly the bug that made the site show "No reviews yet"
+// while reviews were landing on pull requests all day.
+test("e2e: a posted review is recorded for the dashboard, under the workspace that owns the repo", async () => {
+  // The gate says this repo belongs to the "acme-workspace" dashboard workspace,
+  // which is where both the BYOK key and the recorded review have to land.
+  const gateway = new Gateway({
+    providers: new Map([["fake", new FakeProvider(responder)]]),
+    config: { orgs: { "acme-workspace": { provider: "fake", apiKey: "byok", model: "m" } } },
+  });
+  const reviewer = new Reviewer({ gateway });
+  const github = new FakeGitHubClient({ diff: DIFF });
+  const recorded: Array<Record<string, unknown>> = [];
+  const outcome = await runReview(
+    makeJob(),
+    {
+      github,
+      reviewer,
+      recordReview: async (input) => {
+        recorded.push(input as unknown as Record<string, unknown>);
+        return true;
+      },
+    },
+    { org: "acme-workspace" },
+  );
+
+  assert.equal(outcome.recorded, true);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].org, "acme-workspace", "the dashboard workspace, not the GitHub owner login");
+  assert.equal(recorded[0].repo, "acme/widget");
+  assert.equal(recorded[0].pr, 42);
+  assert.equal(recorded[0].title, "Add DB lookup on login");
+  assert.equal(recorded[0].url, outcome.posted.htmlUrl);
+  assert.equal((recorded[0].findings as unknown[]).length, 1);
+});
+
+test("e2e: a control-plane that cannot be reached costs a dashboard row, not the review", async () => {
+  const { reviewer, github } = wire();
+  const outcome = await runReview(makeJob(), {
+    github,
+    reviewer,
+    recordReview: async () => {
+      throw new Error("ECONNREFUSED");
+    },
+  });
+  assert.equal(outcome.recorded, false);
+  assert.equal(github.submissions.length, 1, "the review is still on the pull request");
+});
+
 test("e2e: a clean diff posts a no-issues summary and no inline comments", async () => {
   const config: GatewayConfigData = {
     orgs: { acme: { provider: "fake", apiKey: "byok-acme", model: "claude-sonnet-4-6" } },

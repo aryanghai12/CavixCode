@@ -97,7 +97,7 @@
 
     content.innerHTML = `
       <div class="stat-grid">
-        <div class="stat"><div class="label">${ic("reviews")} Reviews run</div><div class="value">${s.reviews}</div><div class="delta">last 30 days</div></div>
+        <div class="stat"><div class="label">${ic("reviews")} Reviews run</div><div class="value">${s.reviews}</div><div class="delta">all time</div></div>
         <div class="stat"><div class="label">${ic("check")} Verified findings</div><div class="value grad">${s.verified}</div><div class="delta">proven in a sandbox</div></div>
         <div class="stat"><div class="label">${ic("target")} Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div><div class="delta">accepted of decided</div></div>
         <div class="stat"><div class="label">${ic("clock")} Reviewer-hours saved</div><div class="value">${s.hoursSaved}</div><div class="delta">est. this period</div></div>
@@ -125,21 +125,46 @@
   }
 
   // ---------- REVIEWS ----------
+  //
+  // One card per reviewed pull request, newest first. Findings are ordered worst
+  // first inside a card, the same order the PR comment uses, so the two surfaces
+  // read the same way round.
+  const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+  const rel = (iso) => {
+    const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    if (!Number.isFinite(mins)) return "";
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+    if (mins < 20160) return `${Math.round(mins / 1440)}d ago`;
+    return new Date(iso).toLocaleDateString();
+  };
+
   async function renderReviews() {
-    const reviews = await api(`/api/reviews?org=${org}`);
+    const reviews = await api(`/api/reviews?org=${encodeURIComponent(org)}`);
     if (!reviews.length) {
-      content.innerHTML = `<div class="empty">No reviews yet. Connect a repository and open a pull request, findings will appear here.</div>`;
+      content.innerHTML = `
+        <div class="empty">
+          <div class="big">🔬</div>
+          <div><b>No reviews yet.</b></div>
+          <div style="margin-top:6px">Connect a repository and open a pull request. Every review Cavix posts shows up here with its findings.</div>
+          <div style="margin-top:16px"><button class="btn btn-soft btn-sm" onclick="location.hash='repos'">Connect a repository</button></div>
+        </div>`;
       return;
     }
+
     content.innerHTML = reviews.map((r) => {
-      const findings = r.findings.map((f) => {
+      const sorted = [...r.findings].sort(
+        (a, b) => (SEV_RANK[b.severity] ?? 0) - (SEV_RANK[a.severity] ?? 0) || a.line - b.line,
+      );
+      const findings = sorted.map((f) => {
         const source = f.immutable ? `<span class="badge badge-policy">policy</span>` : `<span class="badge">${esc(f.source)}</span>`;
-        const verified = f.verified ? `<span class="badge badge-verified">verified</span>` : "";
+        const verified = f.verified ? `<span class="badge badge-verified">✓ verified</span>` : "";
         const decided = f.decision ? `<span class="decided ${esc(f.decision.state)}">${esc(f.decision.state)} by ${esc(f.decision.user)}</span>` : "";
         const actions = f.decision ? decided : `
-          <button class="btn btn-soft btn-sm" onclick="cavixDecide('${f.id}','accepted',this)">Accept</button>
-          <button class="btn btn-danger btn-sm" onclick="cavixDecide('${f.id}','rejected',this)">Reject</button>`;
-        return `<div class="finding" data-fid="${f.id}">
+          <button class="btn btn-soft btn-sm" onclick="cavixDecide('${esc(f.id)}','accepted',this)">Accept</button>
+          <button class="btn btn-danger btn-sm" onclick="cavixDecide('${esc(f.id)}','rejected',this)">Reject</button>`;
+        return `<div class="finding" data-fid="${esc(f.id)}">
           ${sevBadge(f.severity)}
           <div class="f-body">
             <div class="f-title">${esc(f.title)}</div>
@@ -149,12 +174,29 @@
           <div class="f-actions">${actions}</div>
         </div>`;
       }).join("");
+
+      // A clean review is a result, not an empty card: say so rather than
+      // showing a heading with nothing under it.
+      const bodyHtml = findings || `<div class="finding"><span class="badge badge-verified">✓ clean</span>
+        <div class="f-body"><div class="f-title">No issues found</div>
+        <div class="f-loc">Cavix reviewed this pull request and had nothing to raise.</div></div></div>`;
+
+      const verified = r.findings.filter((f) => f.verified).length;
+      const meta = [
+        `${r.findings.length} finding${r.findings.length === 1 ? "" : "s"}`,
+        ...(verified ? [`${verified} verified in a sandbox`] : []),
+        rel(r.createdAt),
+      ].join(" · ");
+      const title = `${esc(r.repo)} <span style="color:var(--text-faint)">#${Number(r.pr)}</span> ${esc(r.title)}`;
+
       return `<div class="review">
         <div class="review-head">
-          <div><div class="r-title">${esc(r.repo)} #${r.pr}, ${esc(r.title)}</div>
-          <div class="r-meta">${esc(r.org)} · ${r.findings.length} finding${r.findings.length === 1 ? "" : "s"} · ${new Date(r.createdAt).toLocaleString()}</div></div>
-          <span class="badge">${new Date(r.createdAt).toLocaleDateString()}</span>
-        </div>${findings}
+          <div>
+            <div class="r-title">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer" style="color:inherit">${title}</a>` : title}</div>
+            <div class="r-meta">${esc(meta)}</div>
+          </div>
+          ${r.url ? `<a class="btn btn-soft btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open PR</a>` : `<span class="badge">${esc(new Date(r.createdAt).toLocaleDateString())}</span>`}
+        </div>${bodyHtml}
       </div>`;
     }).join("");
   }
@@ -162,9 +204,12 @@
   // exposed for inline onclick
   window.cavixDecide = async function (id, state, btn) {
     try {
-      await api(`/api/findings/${id}/decision`, { method: "POST", body: JSON.stringify({ state, user: me.email }) });
+      // The server attributes the decision to the signed-in session, so the
+      // label here comes back from it rather than being guessed client-side.
+      const updated = await api(`/api/findings/${id}/decision`, { method: "POST", body: JSON.stringify({ state }) });
       const row = btn.closest(".finding").querySelector(".f-actions");
-      row.innerHTML = `<span class="decided ${state}">${state} by ${esc(me.email)}</span>`;
+      const who = (updated && updated.decision && updated.decision.user) || me.email;
+      row.innerHTML = `<span class="decided ${esc(state)}">${esc(state)} by ${esc(who)}</span>`;
       toast(`Finding ${state}, Cavix will learn from this`);
     } catch (e) { toast(e.message); }
   };
@@ -194,20 +239,27 @@
 
     // Where the summary block lands is itself a setting.
     const target = s.summaryInDescription ? "pull request description" : "review comment";
-    const changesTable = rs.changedFiles ? `<h4>Changes</h4><table class="changes-table"><thead><tr><th>File</th><th>What changed</th><th>Lines</th><th>Findings</th></tr></thead><tbody>
-        <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td><td><code>+18 −6</code> · L86–L97</td><td>2</td></tr>
-        <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td><td><code>+31 −2</code> · L12–L42</td><td>—</td></tr>
-        <tr><td>test/refund.test.ts</td><td>New retry regression test</td><td><code>+24 −0</code> · L1–L24</td><td>—</td></tr></tbody></table>` : "";
+    const changesTable = rs.changedFiles ? `<h4>Changed files</h4><table class="changes-table"><thead><tr><th>File</th><th>What changed</th><th>Lines</th><th>Findings</th></tr></thead><tbody>
+        <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td><td><code>+18 / -6</code><div class="t-faint">L86-L97</div></td><td>2</td></tr>
+        <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td><td><code>+31 / -2</code><div class="t-faint">L12-L42</div></td><td>0</td></tr>
+        <tr><td>test/refund.test.ts</td><td>New retry regression test</td><td><code>+24 / -0</code><div class="t-faint">L1-L24</div></td><td>0</td></tr></tbody></table>` : "";
     const effort = rs.reviewEffort
-      ? `<div class="chip-row"><span class="badge">3 files changed · <code>+73 −8</code></span><span class="badge">Review effort <span class="effort" style="margin-left:6px"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> 3/5</span></div>`
+      ? `<table class="changes-table" style="margin-bottom:16px"><thead><tr><th>Scope</th><th>Review effort</th></tr></thead><tbody>
+          <tr><td style="font-family:var(--font)"><b>3 files</b> changed · <code>+73 / -8</code></td><td><span class="effort"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> <b>3 of 5</b></td></tr></tbody></table>`
       : "";
+
+    // The verdict callout, the same alert GitHub renders at the top of the post.
+    const verdict = `<div class="gh-alert warning">
+        <div class="ga-title">⚠ 2 findings across 1 file</div>
+        <div class="ga-body"><span class="badge badge-high">high</span> 1 · <span class="badge badge-low">low</span> 1${s.requestChangesOnFail ? ` · <b>changes requested</b>` : ""}</div>
+      </div>`;
 
     const summaryCard = (rs.summary || rs.changedFiles) ? `
       <div class="summary-card" style="margin-bottom:18px">
         <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">${esc(target)}</span> <span class="ago">preview</span></div>
         <div class="sc-body">
+          ${verdict}
           ${rs.summary ? `<h4>Summary</h4><p>${esc(toneBlurb[s.tone] || toneBlurb.concise)}</p>` : ""}
-          <p style="color:var(--text-dim)"><b>2 findings</b> across <b>1 file</b> — <span class="badge badge-high">high</span> 1 · <span class="badge badge-low">low</span> 1</p>
           ${effort}
           ${changesTable}
         </div>
@@ -238,10 +290,10 @@
       <div class="summary-card" style="margin-bottom:18px">
         <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">review comment</span> <span class="ago">preview</span></div>
         <div class="sc-body">
-          <h4>Findings</h4>
-          <table class="changes-table"><thead><tr><th>Line</th><th>Severity</th><th>Category</th><th>Finding</th><th>Detail</th></tr></thead><tbody>
-            <tr><td>87</td><td><span class="badge badge-high">high</span></td><td>correctness</td><td>${rs.proof ? "✅ " : ""}Refund can double-apply on retry</td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
-            <tr><td>12</td><td><span class="badge badge-low">low</span></td><td>maintainability</td><td>Duplicated retry constant</td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
+          <h4>🟧 services/payments/refund.ts · 2 findings</h4>
+          <table class="changes-table"><thead><tr><th></th><th>Line</th><th>Finding</th><th>Detail</th></tr></thead><tbody>
+            <tr><td>🟧</td><td>87</td><td style="font-family:var(--font)"><b>Refund can double-apply on retry</b>${rs.proof ? " ✅" : ""}<div class="t-faint">high · correctness · confidence 86%</div></td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
+            <tr><td>🟦</td><td>12</td><td style="font-family:var(--font)"><b>Duplicated retry constant</b><div class="t-faint">low · maintainability · confidence 52%</div></td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
           </tbody></table>
         </div>
       </div>`;
@@ -255,8 +307,12 @@
         </div>
         <div class="cr-comment">
           <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span>${rs.proof ? `<span class="badge badge-verified">✅ verified</span>` : ""}<span class="badge badge-high">high</span></div>
-          <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund.</div>
-          ${rs.proof ? `<div class="cc-proof"><span class="t-purple">[repro]</span>     node --test refund.retry.test.mjs → <span class="t-red">exit 1</span>  bug reproduced
+          <div class="cc-body"><b>🟧 Refund can double-apply on retry</b>
+            <div class="t-faint" style="margin:4px 0 8px">${rs.proof ? "✅ verified · " : ""}high · correctness · confidence 86%</div>
+            On a webhook re-delivery this path issues a second refund.</div>
+          ${rs.proof ? `<div class="cc-proof"><b style="font-family:var(--font)">Proof.</b> Reproduced in a sealed sandbox:
+
+<span class="t-purple">[repro]</span>     node --test refund.retry.test.mjs → <span class="t-red">exit 1</span>  bug reproduced
 <span class="t-purple">[after-fix]</span> node --test refund.retry.test.mjs → <span class="t-green">exit 0</span>  fix resolves it
 <span class="t-purple">[suite]</span>     node --test                      → <span class="t-green">exit 0</span>  suite still green</div>` : ""}
         </div>

@@ -558,6 +558,16 @@ select option { background: #0D1526; color: var(--text); }
 .changes-table td:first-child { font-family: var(--mono); color: var(--text); white-space: nowrap; }
 .changes-table td { color: var(--text-dim); }
 .chip-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+/* Secondary line inside a table cell or comment: the metadata under a headline. */
+.t-faint { color: var(--text-faint); font-size: 12px; margin-top: 3px; font-weight: 400; }
+/* The verdict callout, mirroring the alert GitHub renders at the top of a review. */
+.gh-alert { border-left: 3px solid var(--border); background: var(--bg-elev); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 13.5px; }
+.gh-alert .ga-title { font-weight: 700; margin-bottom: 6px; }
+.gh-alert .ga-body { color: var(--text-dim); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gh-alert.tip { border-left-color: var(--green); } .gh-alert.tip .ga-title { color: #a7f3d0; }
+.gh-alert.note { border-left-color: var(--brand); }
+.gh-alert.warning { border-left-color: #fbbf24; } .gh-alert.warning .ga-title { color: #fde68a; }
+.gh-alert.caution { border-left-color: var(--red); } .gh-alert.caution .ga-title { color: #fecaca; }
 .effort { display: inline-flex; gap: 3px; }
 .effort .dot2 { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
 .effort .dot2.on { background: var(--brand); }
