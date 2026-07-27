@@ -80,22 +80,105 @@ export function installUrl(): string {
   return `https://github.com/apps/${githubConfig().appSlug}/installations/new`;
 }
 
-export async function exchangeCode(code: string, redirectUri: string): Promise<string> {
-  const c = githubConfig();
+/**
+ * What GitHub hands back for a signed-in user.
+ *
+ * A GitHub App's user token EXPIRES (8 hours by default) and arrives with a
+ * refresh token that is good for six months. Keeping only the access token is
+ * why the dashboard started answering "GitHub API /user → 401" a working day
+ * after sign-in: the token had simply aged out and nothing renewed it.
+ *
+ * A classic OAuth App issues a non-expiring token and no refresh token, so both
+ * extra fields are optional and the code path is the same either way.
+ */
+export interface GitHubTokens {
+  accessToken: string;
+  refreshToken?: string;
+  /** Epoch ms. Absent means "does not expire" (classic OAuth App). */
+  expiresAt?: number;
+}
+
+/**
+ * GitHub rejected the credential itself: it expired, was revoked, or the user
+ * removed the app. Distinct from "GitHub is down", because the only cure is for
+ * the user to reconnect, and telling them to do that is the whole job.
+ */
+export class GitHubAuthError extends Error {
+  readonly status: number;
+  constructor(message: string, status = 401) {
+    super(message);
+    this.name = "GitHubAuthError";
+    this.status = status;
+  }
+}
+
+interface TokenPayload {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  refresh_token_expires_in?: number;
+  error_description?: string;
+  error?: string;
+}
+
+function toTokens(data: TokenPayload): GitHubTokens {
+  return {
+    accessToken: data.access_token!,
+    ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
+    // Renew a minute early: a token that expires mid-request is a 401 the user sees.
+    ...(data.expires_in ? { expiresAt: Date.now() + (data.expires_in - 60) * 1000 } : {}),
+  };
+}
+
+async function tokenRequest(body: Record<string, string>): Promise<TokenPayload> {
   const res = await fetch(`${GH_OAUTH}/access_token`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify({ client_id: c.clientId, client_secret: c.clientSecret, code, redirect_uri: redirectUri }),
+    body: JSON.stringify(body),
   });
-  const data = (await res.json()) as { access_token?: string; error_description?: string };
+  return (await res.json()) as TokenPayload;
+}
+
+export async function exchangeCode(code: string, redirectUri: string): Promise<GitHubTokens> {
+  const c = githubConfig();
+  const data = await tokenRequest({
+    client_id: c.clientId,
+    client_secret: c.clientSecret,
+    code,
+    redirect_uri: redirectUri,
+  });
   if (!data.access_token) throw new Error(data.error_description ?? "GitHub token exchange failed");
-  return data.access_token;
+  return toTokens(data);
+}
+
+/**
+ * Trade a refresh token for a fresh access token.
+ *
+ * Throws GitHubAuthError when the refresh token itself is spent (expired after
+ * six months, or revoked when the user uninstalled the app): there is no way
+ * back from that except signing in again.
+ */
+export async function refreshTokens(refreshToken: string): Promise<GitHubTokens> {
+  const c = githubConfig();
+  const data = await tokenRequest({
+    client_id: c.clientId,
+    client_secret: c.clientSecret,
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+  });
+  if (!data.access_token) {
+    throw new GitHubAuthError(data.error_description ?? "GitHub refused to refresh this session");
+  }
+  return toTokens(data);
 }
 
 async function ghGet<T>(token: string, path: string): Promise<T> {
   const res = await fetch(`${GH_API}${path}`, {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "cavix" },
   });
+  if (res.status === 401) {
+    throw new GitHubAuthError(`GitHub rejected this account's credentials (${path})`);
+  }
   if (!res.ok) throw new Error(`GitHub API ${path} → ${res.status}`);
   return (await res.json()) as T;
 }

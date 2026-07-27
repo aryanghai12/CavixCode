@@ -10,10 +10,18 @@
   const ic = (n, c) => (window.icon ? window.icon(n, c) : "");
   async function api(path, opts) {
     const res = await fetch(path, Object.assign({ headers: { "content-type": "application/json" } }, opts));
-    if (res.status === 401) { location.href = "/login"; throw new Error("unauthorized"); }
     const data = res.status === 204 ? null : await res.json().catch(() => null);
-    if (!res.ok) throw new Error((data && data.error) || `request failed (${res.status})`);
-    return data;
+    if (res.ok) return data;
+    // An expired GitHub connection is not an expired session. It arrives as a
+    // 401 too, so it has to be checked first: bouncing the user to /login over
+    // it would sign them out of Cavix because GitHub timed them out.
+    if (data && data.reconnect) {
+      const err = new Error(data.error || "Reconnect your GitHub account.");
+      err.reconnect = true;
+      throw err;
+    }
+    if (res.status === 401) { location.href = "/login"; throw new Error("unauthorized"); }
+    throw new Error((data && data.error) || `request failed (${res.status})`);
   }
   function toast(msg) {
     const t = $("toast");
@@ -81,7 +89,9 @@
     $("sidebar").classList.remove("open");
     content.innerHTML = `<div class="empty">Loading…</div>`;
     VIEWS[view].render().catch((err) => {
-      content.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+      // Any page that needed GitHub and found the connection dead offers the way
+      // back, rather than showing the raw API error it used to.
+      content.innerHTML = err.reconnect ? connectHero(err.message) : `<div class="empty">${esc(err.message)}</div>`;
     });
   }
 
@@ -333,18 +343,26 @@
   // ---------- REPOS (GitHub App installations → per-repo enable toggles) ----------
   const GH_SVG = '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
 
+  /**
+   * The one way back from "we have no working GitHub credential", whether that
+   * is a first-time connect or a token GitHub expired underneath us.
+   */
+  function connectHero(message) {
+    return `
+      <div class="panel"><div class="connect-hero">
+        <div class="gh-badge">${GH_SVG}</div>
+        <h2>Connect your GitHub account</h2>
+        <p>${esc(message || "Sign in with GitHub to see your organizations and repositories, then enable reviews on the ones you choose, all from here.")}</p>
+        <a class="btn btn-github" href="/api/auth/github/start">${GH_SVG} Continue with GitHub</a>
+      </div></div>`;
+  }
+
   async function renderRepos() {
     const status = await api(`/api/github/status`);
 
-    // Real mode but not signed in with GitHub → prompt to connect.
+    // Real mode but no usable credential → prompt to connect (or reconnect).
     if (status.configured && !status.connected) {
-      content.innerHTML = `
-        <div class="panel"><div class="connect-hero">
-          <div class="gh-badge">${GH_SVG}</div>
-          <h2>Connect your GitHub account</h2>
-          <p>Sign in with GitHub to see your organizations and repositories, then enable reviews on the ones you choose, all from here.</p>
-          <a class="btn btn-github" href="/api/auth/github/start">${GH_SVG} Continue with GitHub</a>
-        </div></div>`;
+      content.innerHTML = connectHero();
       return;
     }
 
@@ -766,7 +784,9 @@
 
   // ---------- INTEGRATIONS ----------
   async function renderIntegrations() {
-    const gh = await api(`/api/github/status`).catch(() => ({ connected: false, demo: true }));
+    // If status itself fails, say "not connected" rather than claiming a demo
+    // connection that does not exist.
+    const gh = await api(`/api/github/status`).catch(() => ({ connected: false, demo: false }));
     const row = (mono, name, desc, state, action) => `<div class="repo-row"><div class="mono-badge">${esc(mono)}</div><div class="r-main"><div class="r-name">${esc(name)}</div><div class="r-desc">${esc(desc)}</div></div>${state}${action || ""}</div>`;
     const connected = `<span class="badge badge-verified">connected</span>`;
     const soon = `<span class="badge">soon</span>`;
@@ -774,7 +794,17 @@
       <div class="panel">
         <div class="panel-head"><h2>Source control</h2><span class="sub">Where Cavix reviews pull requests</span></div>
         <div class="repo-list" style="border:none">
-          ${row("GH", "GitHub", gh.connected ? "Connected, reviews & checks active" : "Sign in to connect your orgs and repos", gh.connected ? connected : soon, gh.connected ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`)}
+          ${row(
+            "GH",
+            "GitHub",
+            gh.demo
+              ? "Sample data. Configure a GitHub App to connect real repositories."
+              : gh.connected
+                ? "Connected, reviews & checks active"
+                : "Sign in to connect your orgs and repos",
+            gh.demo ? `<span class="badge">demo data</span>` : gh.connected ? connected : soon,
+            gh.connected && !gh.demo ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`,
+          )}
           ${row("GL", "GitLab", "Merge-request reviews (adapter ready)", soon)}
           ${row("BB", "Bitbucket", "PR reviews incl. Server (adapter ready)", soon)}
           ${row("AZ", "Azure DevOps", "PR reviews (adapter ready)", soon)}

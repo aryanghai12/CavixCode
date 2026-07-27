@@ -1037,6 +1037,22 @@ like CodeRabbit. Create it (~5 min):
 > Email/password sign‑up works with or without the GitHub App — the App only adds the
 > one‑click GitHub login, real repo listing, and PR reviews.
 
+**About the sign‑in credential (why "GitHub API /user → 401" used to appear).** A GitHub
+*App* hands out a user token that **expires after 8 hours**, along with a refresh token
+good for six months. Cavix stores both and renews the access token silently the first
+time a page needs it after it has aged out, so a signed‑in user stays signed in
+([`liveGitHubToken`](services/control-plane/src/server.ts)). Two things follow:
+
+- If the refresh also fails — six months of no visits, or the user uninstalled the App —
+  the dead credential is **dropped** and the Repositories page shows **Connect your
+  GitHub account** instead of an error. Reconnecting is one click and fixes it.
+- `CAVIX_SECRET_KEY` encrypts these tokens at rest. **Changing it invalidates every
+  stored token**, and every user is asked to reconnect. Set it once and keep it.
+
+A live deployment never falls back to sample repositories. If there is no usable
+credential you get the reconnect prompt; if the App is not configured at all, the page
+names the missing environment variable rather than showing a button that cannot work.
+
 ---
 
 ### Path A — Managed hosting by hand (Render/Railway/Fly)

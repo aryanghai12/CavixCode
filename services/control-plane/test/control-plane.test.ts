@@ -124,7 +124,7 @@ test("decisions: accept/reject is recorded (the learning-loop signal)", async ()
     const r2 = await post(base, `/api/findings/${rejected}/decision`, { state: "rejected" }, cookie);
     assert.equal(r2.status, 200);
 
-    const decisions = await (await fetch(base + "/api/decisions")).json();
+    const decisions = await (await fetch(base + "/api/decisions", { headers: { cookie } })).json();
     assert.equal(decisions.length, 2);
     const byFinding = Object.fromEntries(decisions.map((d: { findingId: string; state: string }) => [d.findingId, d.state]));
     assert.equal(byFinding[accepted], "accepted");
@@ -147,6 +147,42 @@ test("decisions: a decision needs a member of the workspace that owns the findin
     assert.equal((await post(base, `/api/findings/${id}/decision`, { state: "accepted" })).status, 401);
     const other = await signIn(base, "rival");
     assert.equal((await post(base, `/api/findings/${id}/decision`, { state: "accepted" }, other)).status, 403);
+  });
+});
+
+// Two pages read list endpoints that used to answer for the whole platform:
+// Billing (`/api/orgs`) and Learnings (`/api/decisions`). Both showed other
+// customers' data, and Learnings showed it under a heading calling it yours.
+
+test("billing: /api/orgs answers for your workspace, not every customer", async () => {
+  await withServer(async (base) => {
+    const acme = await signIn(base, "acme");
+    await signIn(base, "rival");
+
+    assert.equal((await fetch(base + "/api/orgs")).status, 401);
+    const mine = await (await fetch(base + "/api/orgs", { headers: { cookie: acme } })).json();
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0].name, "acme");
+  });
+});
+
+test("learnings: /api/decisions answers for your workspace only", async () => {
+  await withServer(async (base) => {
+    const acme = await signIn(base, "acme", "alice@acme.test");
+    const rival = await signIn(base, "rival", "bob@rival.test");
+
+    for (const [org, cookie] of [["acme", acme], ["rival", rival]] as const) {
+      const rev = await (await post(base, "/api/reviews", {
+        org, repo: "r", pr: 1, title: "t",
+        findings: [{ path: "a.js", line: 1, severity: "high", category: "security", title: `${org} finding`, body: "", source: "llm", confidence: 0.9 }],
+      }, cookie)).json();
+      await post(base, `/api/findings/${rev.findings[0].id}/decision`, { state: "accepted" }, cookie);
+    }
+
+    assert.equal((await fetch(base + "/api/decisions")).status, 401);
+    const mine = await (await fetch(base + "/api/decisions", { headers: { cookie: rival } })).json();
+    assert.equal(mine.length, 1, "one workspace, one decision: not the platform's");
+    assert.equal(mine[0].user, "bob@rival.test");
   });
 });
 

@@ -180,12 +180,12 @@ async function apiRoute(
     }
     try {
       let profile: { email: string; name: string; login: string };
-      let token: string | null = null;
+      let tokens: gh.GitHubTokens | null = null;
       if (gh.githubConfigured() && url.searchParams.get("code")) {
         const redirectUri = `${baseUrl(req)}/api/auth/github/callback`;
-        token = await gh.exchangeCode(url.searchParams.get("code")!, redirectUri);
-        const ghUser = await gh.getUser(token);
-        const email = (await gh.getPrimaryEmail(token)) ?? `${ghUser.login}@users.noreply.github.com`;
+        tokens = await gh.exchangeCode(url.searchParams.get("code")!, redirectUri);
+        const ghUser = await gh.getUser(tokens.accessToken);
+        const email = (await gh.getPrimaryEmail(tokens.accessToken)) ?? `${ghUser.login}@users.noreply.github.com`;
         profile = { email, name: ghUser.name ?? ghUser.login, login: ghUser.login };
       } else if (!gh.githubConfigured() && !gh.demoEnabled()) {
         res.writeHead(302, { location: "/login?error=github_unconfigured" });
@@ -197,7 +197,7 @@ async function apiRoute(
       const orgName = profile.login.toLowerCase();
       const isNew = !store.getUserByEmail(profile.email);
       const user = store.upsertOAuthUser({ email: profile.email, name: profile.name, org: orgName, provider: "github", login: profile.login });
-      if (token) store.setOAuthToken(user.id, token);
+      if (tokens) store.setOAuthToken(user.id, tokens);
       if (isNew) store.startTrial(orgName, 14); // new GitHub signups get a 14-day trial (can connect private repos)
       const session = signSession({ uid: user.id, email: user.email, org: user.org, role: user.role });
       res.writeHead(302, { location: "/app", "set-cookie": sessionCookie(session) });
@@ -227,15 +227,26 @@ async function apiRoute(
     if (!s) return void sendJson(res, 401, { error: "authentication required" });
     const user = store.getUser(s.uid);
     if (!user) return void sendJson(res, 401, { error: "authentication required" });
-    const token = store.getOAuthToken(user.id);
+
+    // A usable access token, renewed if it has aged out. Null means the user has
+    // to reconnect. Demo fixtures are served ONLY when demo mode is on: a live
+    // site showing invented repositories is worse than an honest error.
+    const token = await liveGitHubToken(store, user.id);
     const live = gh.githubConfigured() && !!token;
+    const demo = !live && gh.demoEnabled();
+    /** Neither a real connection nor demo data: the user must reconnect. */
+    const needsReconnect = !live && !demo;
 
     if (m === "GET" && p === "/api/github/status") {
       return void sendJson(res, 200, {
         configured: gh.githubConfigured(),
-        connected: user.provider === "github" || !!token,
+        // "Connected" means we hold a credential GitHub will accept right now,
+        // not that this account was once created through GitHub. Reporting the
+        // latter is what left the Repositories page trying live calls with a
+        // dead token and showing a raw 401.
+        connected: live || demo,
         login: user.githubLogin ?? null,
-        demo: !live,
+        demo,
         appSlug: gh.githubConfig().appSlug,
         installUrl: gh.installUrl(),
       });
@@ -243,6 +254,7 @@ async function apiRoute(
 
     // Which orgs have the Cavix GitHub App installed, their repos, and enabled state.
     if (m === "GET" && p === "/api/github/installations") {
+      if (needsReconnect) return void sendReconnect(res, user.githubLogin);
       try {
         const ghUser = live ? await gh.getUser(token!) : gh.DEMO_USER;
         const orgs = live ? await gh.getOrgs(token!, ghUser) : gh.demoOrgs();
@@ -262,22 +274,24 @@ async function apiRoute(
           }
           out.push({ login: o.login, isUser: (o.type ?? "Organization") === "User", installed, repos });
         }
-        return void sendJson(res, 200, { demo: !live, appSlug: gh.githubConfig().appSlug, installUrl: gh.installUrl(), orgs: out });
+        return void sendJson(res, 200, { demo, appSlug: gh.githubConfig().appSlug, installUrl: gh.installUrl(), orgs: out });
       } catch (err) {
-        return void sendJson(res, 502, { error: `GitHub: ${(err as Error).message}` });
+        return void sendGitHubError(res, store, user.id, err as Error, user.githubLogin);
       }
     }
 
     if (m === "GET" && p === "/api/github/orgs") {
+      if (needsReconnect) return void sendReconnect(res, user.githubLogin);
       try {
         const orgs = live ? await gh.getOrgs(token!, await gh.getUser(token!)) : gh.demoOrgs();
         return void sendJson(res, 200, orgs.map((o) => ({ login: o.login, description: o.description ?? "", isUser: (o.type ?? "Organization") === "User" })));
       } catch (err) {
-        return void sendJson(res, 502, { error: `GitHub: ${(err as Error).message}` });
+        return void sendGitHubError(res, store, user.id, err as Error, user.githubLogin);
       }
     }
 
     if (m === "GET" && p === "/api/github/repos") {
+      if (needsReconnect) return void sendReconnect(res, user.githubLogin);
       const owner = url.searchParams.get("org") ?? user.githubLogin ?? "";
       const isUser = owner.toLowerCase() === (user.githubLogin ?? "").toLowerCase();
       try {
@@ -288,7 +302,7 @@ async function apiRoute(
           enabled: enabled.has(r.full_name),
         })));
       } catch (err) {
-        return void sendJson(res, 502, { error: `GitHub: ${(err as Error).message}` });
+        return void sendGitHubError(res, store, user.id, err as Error, user.githubLogin);
       }
     }
 
@@ -445,7 +459,16 @@ async function apiRoute(
     const tier = body.tier === "free" ? "free" : "paid";
     return void sendJson(res, 201, store.createOrg(String(body.name), { tier, provenFeedOptIn: body.provenFeedOptIn === true }));
   }
-  if (m === "GET" && p === "/api/orgs") return void sendJson(res, 200, store.listOrgs());
+  // Your own workspace, which is what the Billing page needs. Listing every org
+  // on the platform here told any visitor who all the customers were, and what
+  // tier each of them was on.
+  if (m === "GET" && p === "/api/orgs") {
+    const s = sessionFromRequest(req);
+    if (!s) return void sendJson(res, 401, { error: "authentication required" });
+    if (isPlatformAdmin(s.email)) return void sendJson(res, 200, store.listOrgs());
+    const own = store.getOrg(s.org);
+    return void sendJson(res, 200, own ? [own] : []);
+  }
 
   let mm = /^\/api\/orgs\/([^/]+)\/repos$/.exec(p);
   if (mm) {
@@ -677,7 +700,20 @@ async function apiRoute(
     return void sendJson(res, 200, store.recordDecision(mm[1], state, s.email));
   }
 
-  if (m === "GET" && p === "/api/decisions") return void sendJson(res, 200, store.listDecisions());
+  // The Learnings page: what THIS workspace has taught Cavix. Unscoped, it showed
+  // other customers' decisions and their reviewers' email addresses, under a
+  // heading claiming they were your team's.
+  if (m === "GET" && p === "/api/decisions") {
+    const s = sessionFromRequest(req);
+    if (!s) {
+      // The learning loop reads this as a service, across every workspace.
+      if (!internalAuthorized(req)) return void sendJson(res, 401, { error: "authentication required" });
+      return void sendJson(res, 200, store.listDecisions());
+    }
+    if (isPlatformAdmin(s.email)) return void sendJson(res, 200, store.listDecisions());
+    const mine = new Set(store.listReviews(s.org, Number.MAX_SAFE_INTEGER).map((r) => r.id));
+    return void sendJson(res, 200, store.listDecisions().filter((d) => mine.has(d.reviewId)));
+  }
   if (m === "GET" && p === "/api/feed/proven") return void sendJson(res, 200, store.provenFeed());
 
   sendJson(res, 404, { error: `no route for ${m} ${p}` });
@@ -686,6 +722,91 @@ async function apiRoute(
 // ---------------------------------------------------------------------------
 // Auth guard
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// GitHub session credentials
+// ---------------------------------------------------------------------------
+
+/**
+ * An access token GitHub will accept right now, or null if the user has to
+ * reconnect.
+ *
+ * A GitHub App's user token lives 8 hours. Cavix uses one App for both sign-in
+ * and installs, so every GitHub-backed page started failing with
+ * "GitHub API /user → 401" a working day after sign-in, and the dashboard
+ * reported it as a 502 as though GitHub were down. Renewing here, in the one
+ * place every route reads the token from, keeps that invisible to the user:
+ * they stay signed in for as long as the refresh token lives (six months).
+ */
+async function liveGitHubToken(store: Store, userId: string): Promise<string | null> {
+  const tokens = store.getOAuthToken(userId);
+  if (!tokens) return null;
+
+  const expired = typeof tokens.expiresAt === "number" && tokens.expiresAt <= Date.now();
+  if (!expired) return tokens.accessToken;
+  // Expired with nothing to renew from (a classic OAuth App token, or one saved
+  // before refresh support): it is spent, and only the user can fix that.
+  if (!tokens.refreshToken || !gh.githubConfigured()) {
+    store.clearOAuthToken(userId);
+    return null;
+  }
+  try {
+    const fresh = await gh.refreshTokens(tokens.refreshToken);
+    // GitHub rotates the refresh token on use, so keep whichever it just gave us.
+    store.setOAuthToken(userId, { ...fresh, refreshToken: fresh.refreshToken ?? tokens.refreshToken });
+    return fresh.accessToken;
+  } catch {
+    // The refresh token is spent too (six months old, or the user uninstalled
+    // the app). Forget it so the UI offers "Connect" instead of failing forever.
+    store.clearOAuthToken(userId);
+    return null;
+  }
+}
+
+/**
+ * Ask the user to reconnect, in the shape the dashboard knows how to render.
+ *
+ * Unless there is nothing to reconnect TO: a deployment with no GitHub App
+ * configured cannot complete the flow, so offering the button would send the
+ * user in a circle. Name the missing configuration instead, because on a
+ * self-hosted Cavix the person reading this is the one who can fix it.
+ */
+function sendReconnect(res: http.ServerResponse, login?: string): void {
+  if (!gh.githubConfigured()) {
+    return void sendJson(res, 503, {
+      error:
+        "GitHub is not configured on this deployment. Set CAVIX_GITHUB_CLIENT_ID and " +
+        "CAVIX_GITHUB_CLIENT_SECRET (or CAVIX_DEMO=true for sample data).",
+    });
+  }
+  sendJson(res, 401, {
+    error: login
+      ? `Your GitHub connection for @${login} has expired. Reconnect to see your repositories.`
+      : "Connect your GitHub account to see your repositories.",
+    reconnect: true,
+  });
+}
+
+/**
+ * Report a failed GitHub call honestly.
+ *
+ * A rejected credential is the user's to fix and says so (and the dead token is
+ * dropped, so the next page load offers Connect rather than failing the same way
+ * again). Anything else really is GitHub being unavailable, and stays a 502.
+ */
+function sendGitHubError(
+  res: http.ServerResponse,
+  store: Store,
+  userId: string,
+  err: Error,
+  login?: string,
+): void {
+  if (err instanceof gh.GitHubAuthError) {
+    store.clearOAuthToken(userId);
+    return void sendReconnect(res, login);
+  }
+  sendJson(res, 502, { error: `GitHub is not responding: ${err.message}` });
+}
 
 /**
  * Does this request carry the shared service token?

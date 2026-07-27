@@ -80,6 +80,18 @@ export interface OrgSettings {
   apiKeySetAt?: string;
 }
 
+/**
+ * A provider sign-in credential. GitHub App user tokens expire after 8 hours and
+ * come with a refresh token, so the refresh half has to be stored or the user is
+ * signed out of their own repositories every working day.
+ */
+export interface OAuthTokens {
+  accessToken: string;
+  refreshToken?: string;
+  /** Epoch ms. Absent means the token does not expire (classic OAuth App). */
+  expiresAt?: number;
+}
+
 export interface Decision {
   state: DecisionState;
   user: string;
@@ -255,8 +267,10 @@ export interface Store {
   setRole(org: string, userId: string, role: Role): PublicUser;
   /** Create or update a user signed in via an OAuth provider (GitHub/GitLab). */
   upsertOAuthUser(input: { email: string; name: string; org: string; provider: "github" | "gitlab"; login: string }): PublicUser;
-  setOAuthToken(userId: string, token: string): void;
-  getOAuthToken(userId: string): string | null;
+  setOAuthToken(userId: string, tokens: OAuthTokens): void;
+  getOAuthToken(userId: string): OAuthTokens | null;
+  /** Forget a dead credential, so the UI stops pretending the user is connected. */
+  clearOAuthToken(userId: string): void;
 
   // --- BYOK / settings ---
   getSettings(org: string): OrgSettings;
@@ -534,12 +548,28 @@ export class InMemoryStore implements Store {
     this.usersByEmail.set(email, user);
     return toPublic(user);
   }
-  setOAuthToken(userId: string, token: string): void {
-    this.oauthTokens.set(userId, encryptSecret(token));
+  setOAuthToken(userId: string, tokens: OAuthTokens): void {
+    this.oauthTokens.set(userId, encryptSecret(JSON.stringify(tokens)));
   }
-  getOAuthToken(userId: string): string | null {
+  getOAuthToken(userId: string): OAuthTokens | null {
     const blob = this.oauthTokens.get(userId);
-    return blob ? decryptSecret(blob) : null;
+    if (!blob) return null;
+    const plain = decryptSecret(blob);
+    // Null means the blob will not decrypt, which in practice means
+    // CAVIX_SECRET_KEY changed between deploys. Treat it as "no credential" so
+    // the user is asked to reconnect, rather than as a hard error on every page.
+    if (!plain) return null;
+    try {
+      const parsed = JSON.parse(plain) as OAuthTokens;
+      return parsed.accessToken ? parsed : null;
+    } catch {
+      // Tokens saved before refresh support were a bare access-token string.
+      // They still work until they expire, and the next refresh upgrades them.
+      return { accessToken: plain };
+    }
+  }
+  clearOAuthToken(userId: string): void {
+    this.oauthTokens.delete(userId);
   }
 
   // ---------- BYOK / settings ----------
