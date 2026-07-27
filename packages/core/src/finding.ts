@@ -20,8 +20,13 @@ export interface Evidence {
 }
 
 /**
- * One executed step of a verification run, as it will be shown to a human:
- * what ran, and what the machine said. This is the receipt.
+ * One executed step of a verification run: what ran and how it exited. This is
+ * the receipt a reader checks.
+ *
+ * Deliberately no captured stdout/stderr. The full output lives in the
+ * verifier's own StepLog for debugging; carrying it here would push kilobytes of
+ * build noise into every finding, through every consumer, to render a line that
+ * says "exit 1" either way.
  */
 export interface VerificationStep {
   /** "install" | "repro" | "after-fix" | "suite". */

@@ -42,8 +42,10 @@ class CloudflareSandboxInstance implements Sandbox {
     return (await this.handle.readFile(`${this.workdir}/${relPath}`)).content;
   }
   async removeFile(relPath: string): Promise<void> {
-    // The SDK has no delete primitive, so go through the shell it does expose.
-    await this.handle.exec(`rm -f ${this.workdir}/${relPath}`);
+    // The SDK has no delete primitive, so go through the shell it does expose —
+    // which means the path has to be quoted. Paths come from a model-written
+    // test filename, so spaces and shell metacharacters are entirely possible.
+    await this.handle.exec(`rm -f ${shellQuote(`${this.workdir}/${relPath}`)}`);
   }
   async exec(cmd: string, args: string[], _opts?: ExecOptions): Promise<ExecResult> {
     const start = Date.now();
@@ -77,4 +79,10 @@ export class CloudflareSandboxBackend implements SandboxBackend {
     const handle = sdk.getSandbox(this.env, id);
     return new CloudflareSandboxInstance(id, handle);
   }
+}
+
+/** POSIX single-quoting: safe for spaces and shell metacharacters alike. */
+function shellQuote(s: string): string {
+  // A quote inside single quotes must close, escape, and reopen: '\''
+  return "'" + s.split("'").join("'\\''") + "'";
 }

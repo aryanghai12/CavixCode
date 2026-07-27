@@ -79,7 +79,7 @@ const responder = () =>
       },
       {
         path: "src/auth.mjs",
-        line: 3,
+        line: 2,
         severity: "medium",
         category: "maintainability",
         title: "Comment restates the code",

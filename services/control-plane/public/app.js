@@ -195,7 +195,7 @@
     // Where the summary block lands is itself a setting.
     const target = s.summaryInDescription ? "pull request description" : "review comment";
     const changesTable = rs.changedFiles ? `<h4>Changes</h4><table class="changes-table"><thead><tr><th>File</th><th>What changed</th><th>Lines</th><th>Findings</th></tr></thead><tbody>
-        <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td><td><code>+18 −6</code> · L86–L97</td><td>1</td></tr>
+        <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td><td><code>+18 −6</code> · L86–L97</td><td>2</td></tr>
         <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td><td><code>+31 −2</code> · L12–L42</td><td>—</td></tr>
         <tr><td>test/refund.test.ts</td><td>New retry regression test</td><td><code>+24 −0</code> · L1–L24</td><td>—</td></tr></tbody></table>` : "";
     const effort = rs.reviewEffort
@@ -219,9 +219,18 @@
         <div class="pm-head"><div><b>Pre-merge checks</b> <span class="badge badge-policy">your org's rules</span></div>
           <span class="badge ${s.requestChangesOnFail ? "badge-high" : ""}">${s.requestChangesOnFail ? "a failure blocks merge" : "reporting only"}</span></div>
         ${pm.rules.slice(0, 4).map((r) => {
+          // Three states, not two: an unknown compile status means we have not
+          // heard back yet, and showing that as a pass is the one thing a gate
+          // preview must never do.
           const c = ruleCompile[r];
-          const skipped = c && !c.ok;
-          return `<div class="pm-row ${skipped ? "" : "pass"}"><span class="pm-ico">${skipped ? "⚠" : "✓"}</span><div class="pm-rule">${esc(r)}<div class="pm-sub">${skipped ? "does not compile into a check, it will not run" : "3 changed files scanned · pass"}</div></div><span class="badge ${skipped ? "" : "badge-verified"}">${skipped ? "skipped" : "pass"}</span></div>`;
+          const state = !c ? "pending" : c.ok ? "pass" : "skipped";
+          const ico = { pending: "…", pass: "✓", skipped: "⚠" }[state];
+          const sub = {
+            pending: "checking whether this compiles into a check…",
+            pass: "3 changed files scanned · pass",
+            skipped: "does not compile into a check, it will not run",
+          }[state];
+          return `<div class="pm-row ${state === "pass" ? "pass" : ""}"><span class="pm-ico">${ico}</span><div class="pm-rule">${esc(r)}<div class="pm-sub">${sub}</div></div><span class="badge ${state === "pass" ? "badge-verified" : ""}">${state === "pending" ? "checking…" : state}</span></div>`;
         }).join("")}
       </div>` : "";
 
@@ -742,7 +751,12 @@
 
     const maxDay = Math.max(1, ...stats.reviews.perDay14);
     const spark = stats.reviews.perDay14
-      .map((n, i) => `<div class="bar" style="height:${Math.round((n / maxDay) * 100)}%" title="${n} reviews, ${14 - i} day${14 - i === 1 ? "" : "s"} ago"></div>`)
+      // Buckets end at now, so the last one is the trailing 24h — i.e. today.
+      .map((n, i) => {
+        const daysAgo = 13 - i;
+        const when = daysAgo === 0 ? "today" : `${daysAgo} day${daysAgo === 1 ? "" : "s"} ago`;
+        return `<div class="bar" style="height:${Math.round((n / maxDay) * 100)}%" title="${n} reviews, ${when}"></div>`;
+      })
       .join("");
 
     // Things that need a human today, stated plainly rather than buried in a table.
@@ -818,7 +832,25 @@
       .map(adminRow)
       .join("");
     const el = $("adminRows");
-    if (el) el.innerHTML = rows || `<div class="empty" style="padding:32px">No organizations match “${esc(query)}”.</div>`;
+    if (!el) return;
+    el.innerHTML = rows || `<div class="empty" style="padding:32px">No organizations match “${esc(query)}”.</div>`;
+
+    // Handlers are bound here, not written into onclick attributes. The org name
+    // is user-chosen text: interpolating it into inline JS lets a workspace named
+    // with a quote run script in a platform admin's session.
+    el.querySelectorAll("[data-org-action]").forEach((node) => {
+      const org = node.dataset.org;
+      const action = node.dataset.orgAction;
+      if (action === "tier") {
+        node.addEventListener("change", () => window.cavixAdmin(org, { tier: node.value }));
+      } else if (action === "trial") {
+        node.addEventListener("click", () => window.cavixAdminTrial(org));
+      } else if (action === "limit") {
+        node.addEventListener("click", () => window.cavixAdminLimit(org));
+      } else if (action === "suspend") {
+        node.addEventListener("click", () => window.cavixAdmin(org, { suspended: node.dataset.suspend === "true" }));
+      }
+    });
   }
 
   function adminRow(o) {
@@ -842,13 +874,13 @@
     return `<div class="admin-org">
       <div class="ao-name"><span class="ao-av">${esc(o.name[0].toUpperCase())}</span><div>${esc(o.name)} ${flags}
         <div class="ao-meta">${o.members} member${o.members === 1 ? "" : "s"} · ${o.repos} repo${o.repos === 1 ? "" : "s"} · ${o.reviews} reviews · ${last}</div></div></div>
-      <div><select onchange="cavixAdmin('${esc(o.name)}',{tier:this.value})"><option value="free"${o.tier === "free" ? " selected" : ""}>Free</option><option value="paid"${o.tier === "paid" ? " selected" : ""}>Paid</option></select></div>
+      <div><select data-org-action="tier" data-org="${esc(o.name)}"><option value="free"${o.tier === "free" ? " selected" : ""}>Free</option><option value="paid"${o.tier === "paid" ? " selected" : ""}>Paid</option></select></div>
       <div>${status}</div>
       <div style="display:flex;flex-direction:column;gap:4px;min-width:96px">${usage}</div>
       <div class="admin-actions">
-        <button class="btn btn-soft btn-sm" onclick="cavixAdminTrial('${esc(o.name)}')">Trial…</button>
-        <button class="btn btn-soft btn-sm" onclick="cavixAdminLimit('${esc(o.name)}')">Limit</button>
-        <button class="btn ${o.suspended ? "btn-soft" : "btn-danger"} btn-sm" onclick="cavixAdmin('${esc(o.name)}',{suspended:${!o.suspended}})">${o.suspended ? "Unsuspend" : "Suspend"}</button>
+        <button class="btn btn-soft btn-sm" data-org-action="trial" data-org="${esc(o.name)}">Trial…</button>
+        <button class="btn btn-soft btn-sm" data-org-action="limit" data-org="${esc(o.name)}">Limit</button>
+        <button class="btn ${o.suspended ? "btn-soft" : "btn-danger"} btn-sm" data-org-action="suspend" data-org="${esc(o.name)}" data-suspend="${!o.suspended}">${o.suspended ? "Unsuspend" : "Suspend"}</button>
       </div>
     </div>`;
   }

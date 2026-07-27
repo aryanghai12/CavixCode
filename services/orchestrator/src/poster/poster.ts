@@ -313,12 +313,13 @@ function renderReviewComment(
   head.push("");
   head.push(provenanceLine(all, opts));
 
-  const findingSections: string[] = [];
+  // Each entry is one whole section, so truncation can drop them atomically.
+  const findingSections: string[][] = [];
   const gate = renderPreMerge(opts.preMerge, opts.requestChanges === true);
-  if (gate.length > 0) findingSections.push("", ...gate);
+  if (gate.length > 0) findingSections.push(["", ...gate]);
   if (groups.length > 0) {
-    findingSections.push("", "### Findings");
-    for (const g of groups) findingSections.push("", ...renderFileSection(g, offDiff, ref, sections));
+    findingSections.push(["", "### Findings"]);
+    for (const g of groups) findingSections.push(["", ...renderFileSection(g, offDiff, ref, sections)]);
   }
 
   const legend = all.length > 0 ? legendLine(offDiff.size, all.length - offDiff.size, all, sections) : "";
@@ -436,16 +437,20 @@ function provenanceLine(all: Finding[], opts: PosterOptions): string {
  * GitHub accepts. A review with hundreds of findings must still post, so whole
  * finding sections are trimmed only as a last resort.
  */
-function assemble(head: string[], findingSections: string[], legend: string, foot: string): string {
+function assemble(head: string[], findingSections: string[][], legend: string, foot: string): string {
   const tail = (extra: string[]) => [...extra, "", ...(legend ? [legend, ""] : []), foot].join("\n");
+  const flat = (sections: string[][]) => sections.flat();
 
-  let body = tail([...head, ...findingSections]);
+  let body = tail([...head, ...flat(findingSections)]);
   if (body.length <= MAX_BODY) return body;
 
-  const kept: string[] = [];
+  // Sections are dropped WHOLE. Trimming line by line would leave a heading with
+  // no table, or a table header with no rows — mangled markdown that reads like
+  // a bug rather than a truncation.
+  const kept: string[][] = [];
   let dropped = 0;
   for (const section of findingSections) {
-    if (tail([...head, ...kept, section]).length + 80 > MAX_BODY) {
+    if (tail([...head, ...flat([...kept, section])]).length + 120 > MAX_BODY) {
       dropped++;
       continue;
     }
@@ -453,7 +458,7 @@ function assemble(head: string[], findingSections: string[], legend: string, foo
   }
   return tail([
     ...head,
-    ...kept,
+    ...flat(kept),
     "",
     `_… ${dropped} more section${dropped === 1 ? "" : "s"} omitted — this review is too large for one GitHub comment._`,
   ]);
@@ -687,7 +692,10 @@ function diffTotals(files: DiffFile[]): DiffTotals {
  * to tell a rename from a rewrite without opening either.
  */
 function statsLine(result: ReviewResult, files: DiffFile[], totals: DiffTotals): string {
-  const effort = result.effort ?? estimateEffort(files.length, totals.added + totals.removed);
+  // Clamped: `effort` may come from any producer of a ReviewResult, and a value
+  // outside 1..5 would make repeat() throw on a negative count.
+  const raw = result.effort ?? estimateEffort(files.length, totals.added + totals.removed);
+  const effort = Math.min(5, Math.max(1, Math.round(raw)));
   const dots = "●".repeat(effort) + "○".repeat(5 - effort);
   const size = files.length > 0 ? `${plural(files.length, "file")} changed · \`+${totals.added} −${totals.removed}\` · ` : "";
   return `<sub>${size}review effort ${dots} ${effort}/5</sub>`;

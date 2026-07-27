@@ -64,23 +64,38 @@ export interface ReviewConfigOptions {
   token: string;
   /** Config changes mid-flight are rare; a short cache saves a hop per review. */
   cacheMs?: number;
+  /** Give up on an unresponsive control-plane rather than stalling the review. */
+  timeoutMs?: number;
   logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
   fetchImpl?: typeof fetch;
 }
+
+/**
+ * Cap on cached orgs. A hosted deployment sees an unbounded set of workspace
+ * ids over time, and this map would otherwise only ever grow. Entries are cheap
+ * and short-lived, so the oldest is simply evicted.
+ */
+const MAX_CACHED_ORGS = 500;
 
 export function makeReviewConfigFetcher(opts: ReviewConfigOptions): ReviewConfigFetcher {
   const base = opts.url.replace(/\/$/, "");
   const doFetch = opts.fetchImpl ?? fetch;
   const cacheMs = opts.cacheMs ?? 30_000;
+  const timeoutMs = opts.timeoutMs ?? 5_000;
   const cache = new Map<string, { at: number; config: OrgReviewConfig }>();
 
   return async (org: string): Promise<OrgReviewConfig> => {
     const hit = cache.get(org);
     if (hit && Date.now() - hit.at < cacheMs) return hit.config;
 
+    // A control-plane that accepts the connection and then never answers would
+    // otherwise stall every review behind it indefinitely.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
     try {
       const res = await doFetch(`${base}/api/internal/orgs/${encodeURIComponent(org)}/review-config`, {
         headers: { authorization: `Bearer ${opts.token}` },
+        signal: abort.signal,
       });
       if (!res.ok) {
         opts.logger?.warn("review config: control-plane rejected the request, using defaults", {
@@ -90,14 +105,20 @@ export function makeReviewConfigFetcher(opts: ReviewConfigOptions): ReviewConfig
         return DEFAULT_REVIEW_CONFIG;
       }
       const config = coerce(await res.json());
+      if (cache.size >= MAX_CACHED_ORGS && !cache.has(org)) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
       cache.set(org, { at: Date.now(), config });
       return config;
     } catch (err) {
       opts.logger?.warn("review config: control-plane unreachable, using defaults", {
         org,
-        err: (err as Error).message,
+        err: abort.signal.aborted ? `timed out after ${timeoutMs}ms` : (err as Error).message,
       });
       return DEFAULT_REVIEW_CONFIG;
+    } finally {
+      clearTimeout(timer);
     }
   };
 }

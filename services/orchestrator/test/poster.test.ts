@@ -167,12 +167,25 @@ test("buildReviewSubmission: clean review still posts a comment saying so", () =
 });
 
 test("buildReviewSubmission: a huge review is trimmed to fit GitHub's comment limit", () => {
+  // Spread across many files so there are many sections to drop — a single
+  // enormous file section cannot be trimmed without losing every finding.
   const many = Array.from({ length: 400 }, (_, i) =>
-    finding({ line: 12, title: `Issue ${i}`, body: "x".repeat(600), suggestion: undefined }),
+    finding({
+      path: `src/module-${i % 120}/handler.ts`,
+      line: 12,
+      title: `Issue ${i} with a fairly long headline so the table rows carry weight`,
+      body: "x".repeat(600),
+      suggestion: undefined,
+    }),
   );
   const built = buildReviewSubmission(resultWith(...many), DIFF, { ref: REF });
-  assert.ok(built.submission.body.length <= 65536, "body fits in a GitHub comment");
-  assert.match(built.submission.body, /## 🔬 Cavix review/);
+  const body = built.submission.body;
+  assert.ok(body.length <= 60000, `body stays under the poster's own cap (was ${body.length})`);
+  assert.match(body, /## 🔬 Cavix review/);
+  // Prove the truncation path actually ran, rather than the fixture just fitting.
+  assert.match(body, /more sections? omitted — this review is too large/);
+  // Sections are dropped whole: no heading may be left with its table missing.
+  assert.doesNotMatch(body, /#### [^\n]*\n\n\| Line \| Severity \| Category \| Finding \| Detail \|\n\| ---: \| :--- \| :--- \| :--- \| :--- \|\n\n/);
 });
 
 // ── verification: the proof a reader can check ────────────────────────────────

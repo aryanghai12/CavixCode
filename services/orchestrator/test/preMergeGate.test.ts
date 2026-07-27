@@ -206,6 +206,36 @@ test("a gate that cannot run says so on the PR instead of quietly passing", asyn
   assert.match(body, /Cavix could not run this check/);
 });
 
+// Cavix reads a bounded number of files. Scanning part of a change and calling
+// it a pass is the same silent lie as never running.
+test("a PR wider than the file budget marks the gate unavailable rather than partially passing", async () => {
+  const { reviewer } = wire();
+  const wide = Array.from({ length: 20 }, (_, i) =>
+    `diff --git a/src/f${i}.ts b/src/f${i}.ts\n--- a/src/f${i}.ts\n+++ b/src/f${i}.ts\n@@ -1,1 +1,2 @@\n const a = 1;\n+const b = ${i};\n`,
+  ).join("");
+  const github = new FakeGitHubClient({ diff: wide, headSha: "headsha", files: {} });
+
+  const outcome = await runReview(job(), {
+    github,
+    reviewer,
+    reviewConfig: async () => config({
+      requestChangesOnFail: true,
+      preMergeChecks: { enabled: true, rules: ["Disallow calls to console.log"] },
+    }),
+  });
+
+  assert.equal(outcome.preMerge?.skipped, 1);
+  assert.equal(outcome.blocked, false, "never block on a check that could not see the whole change");
+  assert.match(github.lastReview()!.body, /changes 20 files, more than the 12 Cavix reads/);
+});
+
+test("runPreMergeChecks: rules with nothing to scan report unavailable, not empty", () => {
+  const out = runPreMergeChecks(["Disallow calls to console.log"], []);
+  assert.equal(out.skipped, 1);
+  assert.equal(out.passed, 0);
+  assert.match(out.checks[0].detail, /could not run/);
+});
+
 test("all rules skipped is never reported as 'all checks passing'", () => {
   const out = runPreMergeChecks(["be nice", "be tidy"], [{ path: "a.ts", content: "x" }]);
   assert.equal(out.skipped, 2);
@@ -344,6 +374,23 @@ test("coerce: missing fields take the safe default, never undefined-as-false", (
   assert.equal(coerce({ verifyFindings: false }).verifyFindings, false);
   assert.equal(coerce({ requestChangesOnFail: "yes" }).requestChangesOnFail, false, "only a real true counts");
   assert.deepEqual(coerce({ preMergeChecks: { enabled: true, rules: ["a", "", "  "] } }).preMergeChecks.rules, ["a"]);
+});
+
+// A control-plane that accepts the connection and then never answers would
+// otherwise stall every review queued behind it.
+test("a hung control-plane times out instead of stalling the review", async () => {
+  const fetcher = makeReviewConfigFetcher({
+    url: "http://cp",
+    token: "t",
+    timeoutMs: 40,
+    fetchImpl: ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      })) as unknown as typeof fetch,
+  });
+  const started = Date.now();
+  assert.deepEqual(await fetcher("acme"), DEFAULT_REVIEW_CONFIG);
+  assert.ok(Date.now() - started < 2000, "gave up quickly rather than hanging");
 });
 
 test("an unreachable control-plane falls back to the safe defaults", async () => {

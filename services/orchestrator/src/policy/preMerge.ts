@@ -51,7 +51,10 @@ export interface SourceFile {
  */
 const FILE_SCOPED = new Set(["max-file-length", "require-license-header"]);
 
-const EMPTY: PreMergeResult = { checks: [], findings: [], failed: 0, passed: 0, skipped: 0 };
+/** A fresh empty result. Never share one instance — the arrays are mutable. */
+function emptyResult(): PreMergeResult {
+  return { checks: [], findings: [], failed: 0, passed: 0, skipped: 0 };
+}
 
 /**
  * The gate could not run at all (the repo's files were unreadable, say).
@@ -88,7 +91,10 @@ export function runPreMergeChecks(
   files: SourceFile[],
   addedLines?: Map<string, Set<number>>,
 ): PreMergeResult {
-  if (rules.length === 0 || files.length === 0) return EMPTY;
+  if (rules.length === 0) return emptyResult();
+  // Rules the owner is relying on, but nothing to scan: that is a gate that did
+  // not run, not a gate that passed.
+  if (files.length === 0) return preMergeUnavailable(rules, "no readable files in this change");
 
   const checks: PreMergeCheck[] = [];
   const allFindings: Finding[] = [];

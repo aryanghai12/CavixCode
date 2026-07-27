@@ -12,7 +12,7 @@ import type { Reviewer } from "../reviewer/reviewer.ts";
 import { buildPullDescription, buildReviewSubmission } from "../poster/poster.ts";
 import type { VerifyStep } from "../verify/verify.ts";
 import { preMergeUnavailable, runPreMergeChecks, type PreMergeResult } from "../policy/preMerge.ts";
-import { changedPaths, fetchSources } from "../sources.ts";
+import { changedPaths, fetchSources, MAX_SOURCE_FILES } from "../sources.ts";
 import {
   DEFAULT_REVIEW_CONFIG,
   type OrgReviewConfig,
@@ -242,13 +242,26 @@ export async function runReview(
   let preMerge: PreMergeResult | undefined;
   if (config.preMergeChecks.enabled && config.preMergeChecks.rules.length > 0) {
     try {
-      const files = await fetchSources(deps.github, ref, changedPaths(diff));
-      // fetchSources swallows per-file failures by design, so "no files" is the
-      // likely shape of a broken gate — not an exception. Scanning nothing and
-      // reporting a pass would be the same silent lie as never running.
-      preMerge = files.length > 0
-        ? runPreMergeChecks(config.preMergeChecks.rules, files, commentableLines(parseUnifiedDiff(diff)))
-        : preMergeUnavailable(config.preMergeChecks.rules, "none of the changed files could be read");
+      const paths = changedPaths(diff);
+      // Cavix reads a bounded number of files per review. If this PR touches
+      // more than that, the gate can only see part of it — and a check that
+      // scanned half a change and reported "pass" is the same silent lie as one
+      // that never ran. Say so instead.
+      if (paths.length > MAX_SOURCE_FILES) {
+        preMerge = preMergeUnavailable(
+          config.preMergeChecks.rules,
+          `this pull request changes ${paths.length} files, more than the ${MAX_SOURCE_FILES} Cavix reads per review`,
+        );
+      } else {
+        const files = await fetchSources(deps.github, ref, paths);
+        // fetchSources swallows per-file failures by design, so "no files" is
+        // the likely shape of a broken gate — not an exception.
+        preMerge = runPreMergeChecks(
+          config.preMergeChecks.rules,
+          files,
+          commentableLines(parseUnifiedDiff(diff)),
+        );
+      }
       result.findings = [...preMerge.findings, ...result.findings];
       log.info("pre-merge checks complete", {
         ...base,

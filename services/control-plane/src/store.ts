@@ -726,7 +726,9 @@ export class InMemoryStore implements Store {
       orgs.filter(pick).reduce((sum, o) => sum + this.listTeam(o.name).length, 0);
     const onTrial = (o: Org) => (trialEnd(o) ?? 0) > now;
     const paidSeats = seatsIn((o) => o.tier === "paid" && !o.suspended && !onTrial(o));
-    const trialSeats = seatsIn((o) => onTrial(o));
+    // Suspended orgs are excluded here for the same reason as paidSeats: they
+    // are not running reviews, so counting them as pipeline overstates it.
+    const trialSeats = seatsIn((o) => onTrial(o) && !o.suspended);
 
     return {
       generatedAt: new Date().toISOString(),

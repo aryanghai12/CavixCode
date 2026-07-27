@@ -807,8 +807,9 @@ add it, because a rule that silently never runs is worse than no rule at all.
 **Only what the PR adds is attributed to it.** Rules are evaluated against the whole file
 (they need the surrounding code to be accurate), but a violation is only reported if it
 sits on a line this pull request *added*. Someone who touches one line of a file with
-fifty pre‑existing `console.log` calls is not answerable for the other forty‑nine — the
-check passes and says `1 pre-existing, not attributed to this PR`. Whole‑file rules
+three pre‑existing `console.log` calls is not answerable for those three — if their added
+line is clean the check passes and says
+`pass — this change adds none (3 pre-existing, not attributed to this PR)`. Whole‑file rules
 ("files must be under 500 lines", "every file requires a license header") are the
 exception: they describe the file being shipped, so they apply either way.
 

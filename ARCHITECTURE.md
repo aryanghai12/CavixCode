@@ -39,6 +39,10 @@ GitHub ──pull_request webhook──▶ [Stage 0: edge, Go]
                                    ▼  durable workflow steps:
                           1. fetch diff          (GitHubClient port)
                           2. single LLM pass     (Gateway → LLMProvider port)
+                          2c. PRE-MERGE GATE     (Stage 3c, off by default)
+                               the org's plain-English rules, compiled to
+                               deterministic checks over the added lines.
+                               Violations join the findings as immutable facts.
                           3. VERIFY              (Stage 10: Verifier → Sandbox port)
                                fetch the real source, reproduce the bug by
                                running it, apply the fix, re-run, run the suite.
