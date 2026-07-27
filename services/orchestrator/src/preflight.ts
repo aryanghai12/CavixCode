@@ -73,7 +73,8 @@ export async function preflight(deps: PreflightDeps): Promise<CheckResult[]> {
       ok: false,
       required: true,
       detail: "CAVIX_CONTROL_PLANE_URL and/or CAVIX_INTERNAL_TOKEN not set — " +
-        "repo gating, per-org API keys and model self-heal are all disabled",
+        "repo gating, per-org API keys, per-org review settings (verification, " +
+        "pre-merge checks, blocking) and model self-heal are all disabled",
     });
   } else {
     const base = deps.controlPlaneUrl.replace(/\/$/, "");

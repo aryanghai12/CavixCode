@@ -52,6 +52,36 @@ test("parseModelReview: drops malformed findings but keeps good ones", () => {
   assert.equal(parsed.findings[0].confidence, 1); // clamped to [0,1]
 });
 
+test("parseModelReview: reads the per-file walkthrough and the effort dial", () => {
+  const text = JSON.stringify({
+    summary: "Refactors refunds.",
+    walkthrough: [
+      { path: "refund.ts", summary: "Add idempotency guard before issuing a refund" },
+      { path: "", summary: "no path" }, // invalid → dropped
+      { path: "webhook.ts", summary: "  " }, // empty summary → dropped
+      "not an object", // invalid → dropped
+    ],
+    effort: 3,
+    findings: [],
+  });
+  const parsed = parseModelReview(text);
+  assert.deepEqual(parsed.walkthrough, [
+    { path: "refund.ts", summary: "Add idempotency guard before issuing a refund" },
+  ]);
+  assert.equal(parsed.effort, 3);
+});
+
+test("parseModelReview: an out-of-range or missing effort is discarded, not guessed", () => {
+  assert.equal(parseModelReview(JSON.stringify({ summary: "x", effort: 9, findings: [] })).effort, undefined);
+  assert.equal(parseModelReview(JSON.stringify({ summary: "x", findings: [] })).effort, undefined);
+  assert.equal(parseModelReview(JSON.stringify({ summary: "x", effort: 2.4, findings: [] })).effort, 2);
+});
+
+test("parseModelReview: a reply with no walkthrough is still a valid review", () => {
+  const parsed = parseModelReview(JSON.stringify({ summary: "ok", findings: [] }));
+  assert.deepEqual(parsed.walkthrough, []);
+});
+
 test("parseModelReview: throws on totally non-JSON reply", () => {
   assert.throws(() => parseModelReview("I could not analyze this."), /no JSON object/);
 });

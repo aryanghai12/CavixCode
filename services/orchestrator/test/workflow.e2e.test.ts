@@ -211,6 +211,8 @@ function withFailure(github: FakeGitHubClient, fail: () => never): GitHubClient 
   return {
     fetchPullDiff: async () => fail(),
     getPull: (ref) => github.getPull(ref),
+    fetchFile: (ref, path) => github.fetchFile(ref, path),
+    updatePullBody: (ref, body) => github.updatePullBody(ref, body),
     postReview: (ref, review) => github.postReview(ref, review),
     addReaction: (ref, id, content) => github.addReaction(ref, id, content),
     createComment: (ref, body) => github.createComment(ref, body),
@@ -227,6 +229,8 @@ test("command job: a failure reacts 😕 and explains the cause in a comment", a
   const broken: GitHubClient = {
     fetchPullDiff: async () => { throw new Error("github: fetch diff HTTP 404 Not Found"); },
     getPull: (ref) => github.getPull(ref),
+    fetchFile: (ref, path) => github.fetchFile(ref, path),
+    updatePullBody: (ref, body) => github.updatePullBody(ref, body),
     postReview: (ref, review) => github.postReview(ref, review),
     addReaction: (ref, id, content) => github.addReaction(ref, id, content),
     createComment: (ref, body) => github.createComment(ref, body),

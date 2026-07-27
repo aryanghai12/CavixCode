@@ -1,8 +1,23 @@
-import { isCommandJob, type ReviewJob } from "@cavix/core";
+import {
+  commentableLines,
+  isCommandJob,
+  parseUnifiedDiff,
+  SEVERITY_RANK,
+  type ReviewJob,
+  type Severity,
+} from "@cavix/core";
 import type { GitHubClient, PostedReview, PullRef } from "../github/client.ts";
 import { refFromJob } from "../github/client.ts";
 import type { Reviewer } from "../reviewer/reviewer.ts";
-import { buildReviewSubmission } from "../poster/poster.ts";
+import { buildPullDescription, buildReviewSubmission } from "../poster/poster.ts";
+import type { VerifyStep } from "../verify/verify.ts";
+import { preMergeUnavailable, runPreMergeChecks, type PreMergeResult } from "../policy/preMerge.ts";
+import { changedPaths, fetchSources } from "../sources.ts";
+import {
+  DEFAULT_REVIEW_CONFIG,
+  type OrgReviewConfig,
+  type ReviewConfigFetcher,
+} from "../byok/reviewConfig.ts";
 import type { ReviewHandler } from "./engine.ts";
 import { rankModels, renderSuggestions } from "../byok/models.ts";
 
@@ -46,6 +61,27 @@ export interface ReviewWorkflowDeps {
   suggestModels?: (org: string) => Promise<string[]>;
   /** Persist an auto-selected model so the next review and the dashboard agree. */
   saveModel?: (org: string, model: string) => Promise<boolean>;
+  /**
+   * Stage 10. Reproduces findings in a sandbox before they are posted, and
+   * suppresses the ones it disproves. Absent = post the model's findings as-is
+   * (what Phase 0 did), so verification can be rolled out without a code change.
+   */
+  verify?: VerifyStep;
+  /**
+   * Write the summary + walkthrough into the PR description. On by default: the
+   * description is where a reviewer looks first, and it does not scroll away
+   * under later comments. Set false to keep everything in the review comment.
+   *
+   * This is the DEPLOYMENT-level switch. The repo owner's dashboard choice is
+   * fetched per review and can only narrow it, never widen it.
+   */
+  summaryInDescription?: boolean;
+  /**
+   * The org's own settings, as chosen on the dashboard: verification on/off,
+   * where the summary goes, the pre-merge gate and its rules, and whether Cavix
+   * may block a merge. Absent = the safe defaults in DEFAULT_REVIEW_CONFIG.
+   */
+  reviewConfig?: ReviewConfigFetcher;
 }
 
 export interface ReviewOutcome {
@@ -54,6 +90,16 @@ export interface ReviewOutcome {
   findingCount: number;
   inlineCount: number;
   offDiffCount: number;
+  /** Findings Cavix reproduced in a sandbox before posting them. */
+  verifiedCount: number;
+  /** Findings the sandbox disproved. They were never posted. */
+  suppressedCount: number;
+  /** Did the summary make it into the PR description? */
+  descriptionUpdated: boolean;
+  /** Pre-merge gate results, when the org enabled it. */
+  preMerge?: PreMergeResult;
+  /** Was the review posted as REQUEST_CHANGES (the owner's blocking setting)? */
+  blocked: boolean;
   costUsd: number;
   model: string;
 }
@@ -185,15 +231,118 @@ export async function runReview(
     model: result.model,
   });
 
-  // Step 3 — synthesize and post the review.
-  const built = buildReviewSubmission(result, diff);
+  // Step 2b — what did the repo owner ask for? Verification, summary placement,
+  // the pre-merge gate and blocking are all their call, made on the dashboard.
+  const config = deps.reviewConfig ? await deps.reviewConfig(org) : DEFAULT_REVIEW_CONFIG;
+
+  // Step 2c — the org's pre-merge gate. Deterministic checks over the files this
+  // PR changes, compiled from the owner's own plain-English rules. These run
+  // before verification because policy findings are facts, not claims: they skip
+  // the sandbox entirely and cannot be dropped downstream.
+  let preMerge: PreMergeResult | undefined;
+  if (config.preMergeChecks.enabled && config.preMergeChecks.rules.length > 0) {
+    try {
+      const files = await fetchSources(deps.github, ref, changedPaths(diff));
+      // fetchSources swallows per-file failures by design, so "no files" is the
+      // likely shape of a broken gate — not an exception. Scanning nothing and
+      // reporting a pass would be the same silent lie as never running.
+      preMerge = files.length > 0
+        ? runPreMergeChecks(config.preMergeChecks.rules, files, commentableLines(parseUnifiedDiff(diff)))
+        : preMergeUnavailable(config.preMergeChecks.rules, "none of the changed files could be read");
+      result.findings = [...preMerge.findings, ...result.findings];
+      log.info("pre-merge checks complete", {
+        ...base,
+        rules: config.preMergeChecks.rules.length,
+        passed: preMerge.passed,
+        failed: preMerge.failed,
+        skipped: preMerge.skipped,
+      });
+    } catch (err) {
+      // A gate that cannot run must not silently pass — that is indistinguishable
+      // from a gate that passed. Surface every rule as skipped on the PR so a
+      // human sees it, and never claim a failure we did not actually measure.
+      const reason = (err as Error).message;
+      preMerge = preMergeUnavailable(config.preMergeChecks.rules, reason);
+      log.error("pre-merge checks could not run", { ...base, err: reason });
+    }
+  }
+
+  // Step 3 — Stage 10: prove them. Findings the sandbox reproduces get a receipt
+  // attached; ones it DISPROVES are dropped here and never reach the pull
+  // request. This is the difference between a reviewer that gets trusted and one
+  // that gets muted, so it runs before anything is posted.
+  let suppressedCount = 0;
+  let verifyCost = 0;
+  if (deps.verify && config.verifyFindings && result.findings.length > 0) {
+    try {
+      const outcome = await deps.verify(result.findings, ref, org);
+      result.findings = outcome.surfaced;
+      suppressedCount = outcome.suppressed.length;
+      verifyCost = outcome.costUsd;
+      for (const s of outcome.suppressed) {
+        log.info("finding suppressed by verification", {
+          ...base,
+          path: s.finding.path,
+          line: s.finding.line,
+          title: s.finding.title,
+          reason: s.reason,
+        });
+      }
+    } catch (err) {
+      // Verification is an enhancement, never a gate on posting. A sandbox that
+      // is down must not cost the org its review — it costs them the receipts.
+      log.error("verification failed; posting unverified findings", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
+  const linkRef = { owner: ref.owner, repo: ref.repo, headSha: ref.headSha };
+
+  // Step 4 — the summary goes in the PR DESCRIPTION, where a reviewer reads it
+  // first and where it cannot scroll away. Attempted BEFORE the review is posted
+  // so that if it fails (fork PRs, revoked permission) the summary can fall back
+  // into the review comment instead of being lost.
+  let descriptionUpdated = false;
+  // With both the summary and the walkthrough switched off there is nothing to
+  // put there, and editing someone's description to add a heading is rude.
+  const summaryHasContent = config.sections.summary || config.sections.changedFiles;
+  if (deps.summaryInDescription !== false && config.summaryInDescription && summaryHasContent) {
+    try {
+      const meta = await deps.github.getPull(ref);
+      const body = buildPullDescription(meta.body ?? "", result, diff, linkRef, config.sections);
+      if (body !== (meta.body ?? "")) await deps.github.updatePullBody(ref, body);
+      descriptionUpdated = true;
+      log.info("summary written to the PR description", base);
+    } catch (err) {
+      log.error("could not update the PR description; summary stays in the comment", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
+  // Step 5 — post the review itself: findings, anchored to their lines.
+  const requestChanges = shouldRequestChanges(config, preMerge, result.findings.map((f) => f.severity));
+  const built = buildReviewSubmission(result, diff, {
+    ref: linkRef,
+    includeSummary: !descriptionUpdated && summaryHasContent,
+    suppressedCount,
+    preMerge,
+    requestChanges,
+    sections: config.sections,
+  });
   const posted = await deps.github.postReview(ref, built.submission);
   log.info("review posted", {
     ...base,
     review_id: posted.id,
     url: posted.htmlUrl,
+    event: built.submission.event,
     inline: built.inlineCount,
     off_diff: built.offDiffCount,
+    verified: built.verifiedCount,
+    suppressed: suppressedCount,
   });
 
   return {
@@ -202,9 +351,38 @@ export async function runReview(
     findingCount: result.findings.length,
     inlineCount: built.inlineCount,
     offDiffCount: built.offDiffCount,
-    costUsd: result.costUsd,
+    verifiedCount: built.verifiedCount,
+    suppressedCount,
+    descriptionUpdated,
+    preMerge,
+    blocked: requestChanges,
+    costUsd: result.costUsd + verifyCost,
     model: result.model,
   };
+}
+
+/**
+ * Should this review block the merge?
+ *
+ * Only ever when the owner switched blocking on. Two triggers, both theirs: a
+ * failing pre-merge rule, or a finding at/above the severity they nominated.
+ * Note that by this point the findings have already been through the sandbox —
+ * so nothing that failed to reproduce can block anyone's merge.
+ */
+export function shouldRequestChanges(
+  config: OrgReviewConfig,
+  preMerge: PreMergeResult | undefined,
+  severities: Severity[],
+): boolean {
+  if (!config.requestChangesOnFail) return false;
+  if (preMerge && preMerge.failed > 0) return true;
+  const bar = Math.min(
+    ...config.failOn
+      .map((s) => SEVERITY_RANK[s as Severity])
+      .filter((n): n is number => typeof n === "number"),
+  );
+  if (!Number.isFinite(bar)) return false;
+  return severities.some((s) => SEVERITY_RANK[s] >= bar);
 }
 
 /**
@@ -332,6 +510,9 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         repo: job.repo,
         pr: job.pr_number,
         findings: outcome.findingCount,
+        verified: outcome.verifiedCount,
+        suppressed: outcome.suppressedCount,
+        description_updated: outcome.descriptionUpdated,
         url: outcome.posted.htmlUrl,
         ...(healedTo ? { healed_model: healedTo } : {}),
       });

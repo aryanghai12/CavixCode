@@ -42,6 +42,8 @@ export class Reviewer {
     return {
       summary: parsed.summary,
       findings: parsed.findings,
+      walkthrough: parsed.walkthrough,
+      effort: parsed.effort,
       usage: response.usage,
       costUsd: cost.costUsd,
       model: response.model,

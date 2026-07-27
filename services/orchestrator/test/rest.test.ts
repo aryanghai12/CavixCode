@@ -120,3 +120,83 @@ test("a failed review post reports the status and GitHub's explanation", async (
   const { gh } = client(() => new Response('{"message":"Validation Failed"}', { status: 422 }));
   await assert.rejects(() => gh.postReview(REF, { body: "s", event: "COMMENT", comments: [] }), /422.*Validation Failed/s);
 });
+
+test("postReview sends a multi-line comment as a start_line..line range", async () => {
+  const { gh, calls } = client(() => ok({ id: 11, html_url: "u" }, 200));
+  await gh.postReview(REF, {
+    body: "s",
+    event: "COMMENT",
+    comments: [{ path: "a.ts", line: 20, startLine: 16, body: "spans a block" }],
+  });
+
+  const body = calls[0].body as { comments: Array<Record<string, unknown>> };
+  assert.deepEqual(body.comments[0], {
+    path: "a.ts",
+    line: 20,
+    side: "RIGHT",
+    start_line: 16,
+    start_side: "RIGHT",
+    body: "spans a block",
+  });
+});
+
+// ── fetchFile: the verifier cannot run code it cannot read ────────────────────
+
+test("fetchFile reads a file at the head commit and base64-decodes it", async () => {
+  const source = "export const x = 1;\n";
+  const { gh, calls } = client(() =>
+    ok({ type: "file", encoding: "base64", content: Buffer.from(source).toString("base64") }),
+  );
+  const got = await gh.fetchFile(REF, "src/nested path/x.ts");
+
+  assert.equal(got, source);
+  assert.equal(
+    calls[0].url,
+    "https://api.github.com/repos/aryan-ghai/my-repo/contents/src/nested%20path/x.ts?ref=c0ffee",
+    "path segments are encoded but the separators are not",
+  );
+});
+
+// Walking a diff routinely asks for paths that are not there (deleted, renamed,
+// generated). That is an ordinary outcome, not a failed review.
+test("fetchFile returns null for a missing path instead of throwing", async () => {
+  const { gh } = client(() => new Response('{"message":"Not Found"}', { status: 404 }));
+  assert.equal(await gh.fetchFile(REF, "gone.ts"), null);
+});
+
+// A directory listing is not a file, and over 1MB GitHub sends encoding "none"
+// with an empty body — passing that through as "" would let the sandbox verify
+// against an empty file and call the result proof.
+test("fetchFile returns null for a directory or an unreadable blob", async () => {
+  const dir = client(() => ok([{ name: "a.ts" }]));
+  assert.equal(await dir.gh.fetchFile(REF, "src"), null);
+  const huge = client(() => ok({ type: "file", encoding: "none", content: "" }));
+  assert.equal(await huge.gh.fetchFile(REF, "big.bin"), null);
+});
+
+test("fetchFile surfaces a real failure", async () => {
+  const { gh } = client(() => new Response("no", { status: 403 }));
+  await assert.rejects(() => gh.fetchFile(REF, "a.ts"), /403/);
+});
+
+// ── updatePullBody: where the summary lands ───────────────────────────────────
+
+test("updatePullBody PATCHes the pull request itself", async () => {
+  const { gh, calls } = client(() => ok({ id: 1 }));
+  await gh.updatePullBody(REF, "new description");
+
+  assert.equal(calls[0].url, "https://api.github.com/repos/aryan-ghai/my-repo/pulls/7");
+  assert.equal(calls[0].method, "PATCH");
+  assert.deepEqual(calls[0].body, { body: "new description" });
+});
+
+test("updatePullBody reports why GitHub refused", async () => {
+  const { gh } = client(() => new Response('{"message":"Resource not accessible by integration"}', { status: 403 }));
+  await assert.rejects(() => gh.updatePullBody(REF, "x"), /403.*not accessible/s);
+});
+
+test("getPull carries the author's description back for splicing", async () => {
+  const { gh } = client(() => ok({ title: "t", body: "Fixes #1.", head: { sha: "h" }, base: { sha: "b" }, state: "open" }));
+  const meta = await gh.getPull(REF);
+  assert.equal(meta.body, "Fixes #1.");
+});

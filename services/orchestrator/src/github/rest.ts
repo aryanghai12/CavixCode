@@ -80,6 +80,7 @@ export class RestGitHubClient implements GitHubClient {
     }
     const data = (await res.json()) as {
       title?: string;
+      body?: string | null;
       draft?: boolean;
       state?: string;
       head?: { sha?: string };
@@ -91,7 +92,55 @@ export class RestGitHubClient implements GitHubClient {
       title: data.title ?? "",
       draft: data.draft === true,
       state: data.state ?? "open",
+      body: data.body ?? "",
     };
+  }
+
+  /**
+   * Read a file at a commit via the contents API.
+   *
+   * Returns null rather than throwing on 404: asking for a path that isn't there
+   * (deleted in this PR, renamed, generated) is an ordinary outcome of walking a
+   * diff, and it must not fail a review. Binary and >1MB files also come back
+   * null — the API omits `content` for those, and neither is runnable anyway.
+   */
+  async fetchFile(ref: PullRef, path: string, sha?: string): Promise<string | null> {
+    const commit = sha ?? ref.headSha;
+    const url =
+      `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}` +
+      (commit ? `?ref=${encodeURIComponent(commit)}` : "");
+    const res = await this.fetchImpl(url, {
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      throw new Error(`github: fetch file HTTP ${res.status} ${res.statusText}`);
+    }
+    const data = (await res.json()) as { content?: string; encoding?: string; type?: string };
+    if (data.type !== "file" || typeof data.content !== "string") return null;
+    // Over 1MB GitHub answers with encoding "none" and an empty body. Returning
+    // "" there would hand the sandbox an empty file and let it "verify" against
+    // nothing, so say plainly that we could not read it.
+    if (data.encoding !== "base64") return null;
+    return Buffer.from(data.content, "base64").toString("utf8");
+  }
+
+  async updatePullBody(ref: PullRef, body: string): Promise<void> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`;
+    const res = await this.fetchImpl(url, {
+      method: "PATCH",
+      headers: {
+        ...(await this.headers(ref, "application/vnd.github+json")),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ body }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(
+        `github: update pull body HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`,
+      );
+    }
   }
 
   async addReaction(ref: PullRef, commentId: number, content: ReactionContent): Promise<void> {
@@ -209,6 +258,11 @@ export class RestGitHubClient implements GitHubClient {
           path: c.path,
           line: c.line,
           side: "RIGHT",
+          // start_line marks a multi-line comment; GitHub requires it to be
+          // strictly before `line` and on a side of its own.
+          ...(c.startLine !== undefined && c.startLine < c.line
+            ? { start_line: c.startLine, start_side: "RIGHT" }
+            : {}),
           body: c.body,
         })),
       }),

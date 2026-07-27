@@ -108,6 +108,8 @@ test("healing does not fire for failures that are not about the model", async ()
   const broken: GitHubClient = {
     fetchPullDiff: async () => { throw new Error("github: fetch diff HTTP 404 Not Found"); },
     getPull: (r) => github.getPull(r),
+    fetchFile: (r, p) => github.fetchFile(r, p),
+    updatePullBody: (r, b) => github.updatePullBody(r, b),
     postReview: (r, v) => github.postReview(r, v),
     addReaction: (r, i, c) => github.addReaction(r, i, c),
     createComment: (r, b) => github.createComment(r, b),

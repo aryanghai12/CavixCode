@@ -9,7 +9,10 @@
   "types": "./src/index.ts",
   "dependencies": {
     "@cavix/core": "*",
-    "@cavix/gateway": "*"
+    "@cavix/gateway": "*",
+    "@cavix/policy": "*",
+    "@cavix/sandbox": "*",
+    "@cavix/verifier": "*"
   },
   "optionalDependencies": {
     "bullmq": "^5.34.0"

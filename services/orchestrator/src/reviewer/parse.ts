@@ -1,4 +1,4 @@
-import type { Finding, Severity } from "@cavix/core";
+import type { FileChange, Finding, Severity } from "@cavix/core";
 
 // Parsing the model's reply into structured findings. LLMs occasionally wrap JSON
 // in prose or code fences, so we extract the first balanced JSON object before
@@ -16,6 +16,10 @@ const VALID_SEVERITIES: ReadonlySet<string> = new Set([
 
 export interface ParsedReview {
   summary: string;
+  /** Per-file walkthrough; empty when the model omitted or mangled it. */
+  walkthrough: FileChange[];
+  /** Review-effort estimate 1..5; undefined when the model gave none. */
+  effort?: number;
   findings: Finding[];
 }
 
@@ -42,7 +46,35 @@ export function parseModelReview(text: string): ParsedReview {
     const parsed = coerceFinding(f);
     if (parsed) findings.push(parsed);
   }
-  return { summary, findings };
+
+  // The walkthrough and effort are presentation, never load-bearing: a model that
+  // skips them (or returns junk) still produces a perfectly valid review, and the
+  // poster falls back to what it can derive from the diff itself.
+  const walkthrough: FileChange[] = [];
+  if (Array.isArray(obj.walkthrough)) {
+    for (const w of obj.walkthrough) {
+      const parsed = coerceFileChange(w);
+      if (parsed) walkthrough.push(parsed);
+    }
+  }
+
+  return { summary, walkthrough, effort: coerceEffort(obj.effort), findings };
+}
+
+function coerceFileChange(value: unknown): FileChange | null {
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Record<string, unknown>;
+  const path = typeof v.path === "string" ? v.path.trim() : "";
+  const summary = typeof v.summary === "string" ? v.summary.trim() : "";
+  if (!path || !summary) return null;
+  return { path, summary };
+}
+
+/** Effort is a 1..5 dial; anything else is discarded rather than guessed at. */
+function coerceEffort(value: unknown): number | undefined {
+  const n = typeof value === "number" ? Math.round(value) : NaN;
+  if (!Number.isFinite(n) || n < 1 || n > 5) return undefined;
+  return n;
 }
 
 function coerceFinding(value: unknown): Finding | null {
