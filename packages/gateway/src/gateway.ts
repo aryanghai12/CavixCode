@@ -105,7 +105,13 @@ export class Gateway {
     const orgCfg = await this.resolveConfig(org);
     const provider = this.providers.get(orgCfg.provider);
     if (!provider) {
-      throw new Error(`gateway: unknown provider "${orgCfg.provider}" for org "${org}"`);
+      // Name what IS available: this error reaches a human on their pull request,
+      // and "unknown provider" alone gives them nothing to act on.
+      const available = [...this.providers.keys()].filter((p) => p !== "fake").sort();
+      throw new Error(
+        `gateway: provider "${orgCfg.provider}" is not available (org "${org}"). ` +
+          `Available: ${available.join(", ") || "none"}.`,
+      );
     }
 
     const model = input.model ?? orgCfg.model;

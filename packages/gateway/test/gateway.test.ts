@@ -100,7 +100,7 @@ test("gateway: unknown provider and missing key fail loudly", async () => {
   });
   await assert.rejects(
     () => gwBadProvider.complete("acme", { messages: [{ role: "user", content: "x" }] }),
-    /unknown provider/,
+    /"ghost" is not available/,
   );
 
   const gwNoKey = new Gateway({

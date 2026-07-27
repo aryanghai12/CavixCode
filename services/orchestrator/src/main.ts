@@ -7,7 +7,15 @@
 //   CAVIX_GITHUB_TOKEN=... ANTHROPIC_API_KEY=... node services/orchestrator/src/main.ts
 
 import http from "node:http";
-import { AnthropicProvider, FakeProvider, Gateway, type LLMProvider } from "@cavix/gateway";
+import {
+  AnthropicProvider,
+  FakeProvider,
+  Gateway,
+  GoogleProvider,
+  OpenAIProvider,
+  SelfHostedProvider,
+  type LLMProvider,
+} from "@cavix/gateway";
 import { loadConfig } from "./config.ts";
 import { RestGitHubClient, StaticTokenProvider } from "./github/rest.ts";
 import { GitHubAppTokenProvider } from "./github/appAuth.ts";
@@ -48,11 +56,23 @@ function startHealthServer(status: { redis: string }): void {
 async function main() {
   const cfg = loadConfig();
 
-  // Providers registry — Claude default, fake available for dry runs.
+  // Provider registry. EVERY provider offered in the dashboard's AI & BYOK
+  // dropdown must be registered here — an org that picks one we did not register
+  // gets a failed review on every PR, which is exactly what "unknown provider
+  // google" was.
   const providers = new Map<string, LLMProvider>([
     ["anthropic", new AnthropicProvider()],
+    ["google", new GoogleProvider()],
+    ["openai", new OpenAIProvider()],
     ["fake", new FakeProvider(() => '{"summary":"dry run","findings":[]}')],
   ]);
+  // Self-hosted needs an endpoint; only offer it when one is configured.
+  const selfHostedUrl = process.env.CAVIX_SELFHOSTED_URL;
+  if (selfHostedUrl) {
+    providers.set("selfhosted", new SelfHostedProvider({ baseUrl: selfHostedUrl }));
+    log("info", "self-hosted model endpoint registered", { url: selfHostedUrl });
+  }
+  log("info", "providers registered", { providers: [...providers.keys()].join(",") });
   // BYOK from the site: if pointed at the control-plane, each review uses the org's
   // own key/model chosen on the dashboard (falls back to env config otherwise).
   const cpUrl = process.env.CAVIX_CONTROL_PLANE_URL;

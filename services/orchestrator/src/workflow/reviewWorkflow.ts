@@ -210,8 +210,24 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
  * misconfigurations that actually happen in practice.
  */
 function explain(message: string): string {
+  if (/is not available/i.test(message)) {
+    return (
+      "The AI provider selected for this workspace is not enabled on this Cavix deployment. " +
+      "Pick one of the listed providers in the dashboard under **AI & BYOK**, then comment " +
+      "`@cavixcode review` again."
+    );
+  }
   if (/api key is empty|BYOK/i.test(message)) {
     return "It looks like this workspace has no AI key saved. Add one in the dashboard under **AI & BYOK**.";
+  }
+  if (/google: HTTP 400|API_KEY_INVALID|api key not valid/i.test(message)) {
+    return "Google rejected the API key. Check the key saved under **AI & BYOK** is a valid Gemini API key from Google AI Studio.";
+  }
+  if (/HTTP 429|quota|rate limit/i.test(message)) {
+    return "Your AI provider rate-limited or ran out of quota. Wait a moment, or check the billing/quota on your provider account, then re-run.";
+  }
+  if (/returned no content/i.test(message)) {
+    return "The model returned nothing, usually a safety filter on the diff. Try `@cavixcode review` again, or switch model under **AI & BYOK**.";
   }
   if (/installation token|static token is empty|installation id/i.test(message)) {
     return "That is a GitHub App credential problem. Check `CAVIX_APP_ID` and `CAVIX_APP_PRIVATE_KEY` on the orchestrator service, and that the Cavix App is installed on this repository.";

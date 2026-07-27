@@ -23,6 +23,16 @@ export const DEFAULT_PRICING: Record<string, ModelPrice> = {
   "claude-sonnet-4-6": { inputPerMTok: 3, outputPerMTok: 15 },
   "claude-haiku-4-5": { inputPerMTok: 1, outputPerMTok: 5 },
   "claude-haiku-4-5-20251001": { inputPerMTok: 1, outputPerMTok: 5 },
+  // Google Gemini.
+  "gemini-2.5-pro": { inputPerMTok: 1.25, outputPerMTok: 10 },
+  "gemini-2.5-flash": { inputPerMTok: 0.3, outputPerMTok: 2.5 },
+  "gemini-2.0-flash": { inputPerMTok: 0.1, outputPerMTok: 0.4 },
+  // OpenAI.
+  "gpt-5": { inputPerMTok: 1.25, outputPerMTok: 10 },
+  "gpt-5-mini": { inputPerMTok: 0.25, outputPerMTok: 2 },
+  "gpt-4.1": { inputPerMTok: 2, outputPerMTok: 8 },
+  "gpt-4o": { inputPerMTok: 2.5, outputPerMTok: 10 },
+  "o4-mini": { inputPerMTok: 1.1, outputPerMTok: 4.4 },
   // Deterministic test provider — free.
   "fake-model": { inputPerMTok: 0, outputPerMTok: 0 },
 };
