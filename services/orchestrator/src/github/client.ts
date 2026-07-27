@@ -62,6 +62,20 @@ export interface GitHubClient {
   addReaction(ref: PullRef, commentId: number, content: ReactionContent): Promise<void>;
   /** Post a normal PR conversation comment (status, errors, help, answers). */
   createComment(ref: PullRef, body: string): Promise<{ id: number; htmlUrl: string }>;
+  /** Find our own earlier comment by hidden marker, so we can edit instead of repost. */
+  findComment(ref: PullRef, marker: string): Promise<{ id: number } | null>;
+  /** Edit a comment we posted earlier. */
+  updateComment(ref: PullRef, commentId: number, body: string): Promise<void>;
+  /** Who are we posting as? Used once at boot to prove the bot has its own identity. */
+  whoAmI(): Promise<AuthIdentity>;
+}
+
+/** The account Cavix's token belongs to. */
+export interface AuthIdentity {
+  /** "app" = posts as the GitHub App bot; "user" = posts as a human account. */
+  kind: "app" | "user" | "unknown";
+  /** Display name: the App slug, or the user login. */
+  login: string;
 }
 
 /**

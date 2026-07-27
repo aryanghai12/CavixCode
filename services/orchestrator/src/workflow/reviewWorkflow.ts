@@ -73,17 +73,59 @@ async function react(
   }
 }
 
-/** Best-effort PR comment; never fails the job. */
+/**
+ * Hidden marker identifying Cavix's own status comment on a PR. GitHub renders
+ * HTML comments as nothing, so this is invisible to readers but lets us find the
+ * comment again.
+ */
+const STATUS_MARKER = "<!-- cavix:status -->";
+
+/**
+ * Post Cavix's status comment, or EDIT the existing one.
+ *
+ * The queue retries a failed job three times. Creating a comment each attempt
+ * produced three identical comments per command, which is what users saw. Now a
+ * repeat updates one comment in place, so the PR carries a single, current
+ * status no matter how many attempts ran. Best-effort: never fails the job.
+ */
 async function say(deps: ReviewWorkflowDeps, job: ReviewJob, ref: PullRef, body: string): Promise<void> {
+  const withMarker = `${STATUS_MARKER}\n${body}`;
   try {
-    await deps.github.createComment(ref, body);
+    const existing = await deps.github.findComment(ref, STATUS_MARKER);
+    if (existing) {
+      await deps.github.updateComment(ref, existing.id, withMarker);
+      return;
+    }
+    await deps.github.createComment(ref, withMarker);
   } catch (err) {
-    deps.logger?.error("could not post comment", {
+    deps.logger?.error("could not post status comment", {
       repo: job.repo,
       pr: job.pr_number,
       err: (err as Error).message,
     });
   }
+}
+
+/**
+ * Is this failure worth retrying?
+ *
+ * Retrying a bad API key, an exhausted quota or an unregistered provider cannot
+ * succeed: it just burns the same quota twice more and delays the answer. Only
+ * genuinely transient faults (upstream 5xx, network blips, timeouts) get another
+ * attempt. Anything unrecognised is treated as transient, so a real outage still
+ * recovers on its own.
+ */
+export function isPermanentFailure(message: string): boolean {
+  return [
+    /is not available/i,             // provider not registered for this deployment
+    /api key is empty/i,             // nothing saved in the dashboard
+    /HTTP 401|HTTP 403/,             // bad credentials / no permission
+    /HTTP 404/,                      // app not installed, PR gone
+    /HTTP 429|quota|rate.?limit/i,   // out of quota: an instant retry cannot help
+    /API_KEY_INVALID|api key not valid/i,
+    /CAVIX_APP_ID|\.pem|installation token/i, // our own misconfiguration
+    /HTTP 400/,                      // malformed request (wrong model id, etc.)
+  ].some((re) => re.test(message));
 }
 
 /** Run the full review workflow for one job and return what was posted. */
@@ -189,24 +231,64 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       });
     } catch (err) {
       const message = (err as Error).message;
-      log.error("review failed", { repo: job.repo, pr: job.pr_number, err: message });
+      const permanent = isPermanentFailure(message);
+      log.error("review failed", {
+        repo: job.repo,
+        pr: job.pr_number,
+        permanent,
+        retrying: !permanent,
+        err: message,
+      });
       await react(deps, job, ref, "confused");
       if (isCommandJob(job)) {
         await say(
           deps,
           job,
           ref,
-          `**Cavix could not finish this review.**\n\n\`\`\`\n${message.slice(0, 500)}\n\`\`\`\n\n` +
-            explain(message),
+          `**Cavix could not finish this review.**\n\n${explain(message)}\n\n` +
+            `<details><summary>Technical detail</summary>\n\n\`\`\`\n${cleanUp(message)}\n\`\`\`\n\n</details>`,
         );
       }
-      throw err; // let the engine record/retry the failure
+      // Permanent faults are reported and closed out. Rethrowing would make the
+      // queue retry twice more, re-running the same doomed call and (before the
+      // status comment became an edit) posting the same message three times.
+      if (permanent) return;
+      throw err; // transient: let the engine retry with backoff
     }
   };
 }
 
 /**
- * Turn the failure into something a non-engineer can act on. These are the four
+ * Providers return their error as a wall of raw JSON. Pull the human sentence out
+ * of it so the PR shows one readable line instead of a truncated blob.
+ */
+export function cleanUp(message: string): string {
+  const jsonStart = message.indexOf("{");
+  if (jsonStart === -1) return message.slice(0, 400);
+
+  const prefix = message.slice(0, jsonStart).trim();
+  const blob = message.slice(jsonStart);
+
+  const finish = (inner: string) =>
+    // Keep the first line only: the rest is quota tables and doc links.
+    `${prefix} ${inner.split("\\n")[0].split("\n")[0].trim()}`.trim().slice(0, 400);
+
+  try {
+    const parsed = JSON.parse(blob) as { error?: { message?: string } | string };
+    const inner = typeof parsed.error === "string" ? parsed.error : parsed.error?.message;
+    if (inner) return finish(inner);
+  } catch {
+    // Very often the blob is TRUNCATED (we cap provider errors at 500 chars), so
+    // it will never parse. Pull the message field out textually instead — that is
+    // the whole point of this function, and the truncated case is the common one.
+    const m = /"message"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(blob);
+    if (m) return finish(m[1]);
+  }
+  return message.slice(0, 400);
+}
+
+/**
+ * Turn the failure into something a non-engineer can act on. These are the
  * misconfigurations that actually happen in practice.
  */
 function explain(message: string): string {
@@ -223,8 +305,17 @@ function explain(message: string): string {
   if (/google: HTTP 400|API_KEY_INVALID|api key not valid/i.test(message)) {
     return "Google rejected the API key. Check the key saved under **AI & BYOK** is a valid Gemini API key from Google AI Studio.";
   }
-  if (/HTTP 429|quota|rate limit/i.test(message)) {
-    return "Your AI provider rate-limited or ran out of quota. Wait a moment, or check the billing/quota on your provider account, then re-run.";
+  if (/HTTP 429|quota|rate.?limit/i.test(message)) {
+    // "limit: 0" means the key has no free-tier allowance for that model at all,
+    // which is a different problem from "you are going too fast".
+    if (/limit:\s*0\b/.test(message)) {
+      return (
+        "Your Google API key has **no quota for this model** (the free tier reports `limit: 0`), so waiting will not help. " +
+        "Either enable billing on the Google Cloud project behind the key, or switch to a model your key can use, " +
+        "under **AI & BYOK** in the dashboard. `gemini-2.5-flash` has the most generous free allowance."
+      );
+    }
+    return "Your AI provider rate-limited you or ran out of quota. Wait a minute, or check the quota and billing on your provider account, then comment `@cavixcode review` again.";
   }
   if (/returned no content/i.test(message)) {
     return "The model returned nothing, usually a safety filter on the diff. Try `@cavixcode review` again, or switch model under **AI & BYOK**.";

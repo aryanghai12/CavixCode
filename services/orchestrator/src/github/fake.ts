@@ -1,4 +1,5 @@
 import type {
+  AuthIdentity,
   GitHubClient,
   PullRef,
   PostedReview,
@@ -30,6 +31,9 @@ export class FakeGitHubClient implements GitHubClient {
   readonly reactions: Array<{ commentId: number; content: ReactionContent }> = [];
   /** Every conversation comment posted (status / error explanations). */
   readonly comments: string[] = [];
+  /** How many times an existing comment was EDITED rather than duplicated. */
+  commentEdits = 0;
+  private readonly commentIds = new Map<number, number>();
   private seq = 0;
 
   constructor(opts: FakeGitHubOptions) {
@@ -53,7 +57,26 @@ export class FakeGitHubClient implements GitHubClient {
   async createComment(ref: PullRef, body: string): Promise<{ id: number; htmlUrl: string }> {
     this.comments.push(body);
     const id = 5000 + this.comments.length;
+    this.commentIds.set(id, this.comments.length - 1);
     return { id, htmlUrl: `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}#issuecomment-${id}` };
+  }
+
+  async findComment(_ref: PullRef, marker: string): Promise<{ id: number } | null> {
+    for (const [id, idx] of this.commentIds) {
+      if (this.comments[idx]?.includes(marker)) return { id };
+    }
+    return null;
+  }
+
+  async updateComment(_ref: PullRef, commentId: number, body: string): Promise<void> {
+    const idx = this.commentIds.get(commentId);
+    if (idx === undefined) throw new Error(`fake github: no comment ${commentId}`);
+    this.comments[idx] = body;
+    this.commentEdits++;
+  }
+
+  async whoAmI(): Promise<AuthIdentity> {
+    return { kind: "app", login: "cavixcode[bot]" };
   }
 
   async postReview(ref: PullRef, review: ReviewSubmission): Promise<PostedReview> {

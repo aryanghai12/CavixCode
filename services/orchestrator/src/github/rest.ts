@@ -1,4 +1,5 @@
 import type {
+  AuthIdentity,
   GitHubClient,
   PullRef,
   PostedReview,
@@ -130,6 +131,63 @@ export class RestGitHubClient implements GitHubClient {
     }
     const data = (await res.json()) as { id: number; html_url: string };
     return { id: data.id, htmlUrl: data.html_url };
+  }
+
+  /**
+   * Find a comment of ours containing `marker` (a hidden HTML comment). This is
+   * what lets a repeated status update EDIT one comment instead of posting a new
+   * one each time — without it, three retries meant three identical comments.
+   */
+  async findComment(ref: PullRef, marker: string): Promise<{ id: number } | null> {
+    // Newest first: our status comment is almost always among the last few.
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/issues/${ref.number}/comments?per_page=100`;
+    const res = await this.fetchImpl(url, {
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    if (!res.ok) return null; // best-effort: fall back to posting a new comment
+    const data = (await res.json()) as Array<{ id: number; body?: string }>;
+    const found = [...data].reverse().find((c) => (c.body ?? "").includes(marker));
+    return found ? { id: found.id } : null;
+  }
+
+  async updateComment(ref: PullRef, commentId: number, body: string): Promise<void> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/issues/comments/${commentId}`;
+    const res = await this.fetchImpl(url, {
+      method: "PATCH",
+      headers: {
+        ...(await this.headers(ref, "application/vnd.github+json")),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ body }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`github: update comment HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`);
+    }
+  }
+
+  /**
+   * Identify the account behind the token. GET /app succeeds only for an App JWT
+   * (so comments will appear as "<slug>[bot]" with the App's own avatar); GET
+   * /user succeeds for a PAT, meaning Cavix would post under a HUMAN's name and
+   * profile picture. Worth stating clearly at boot rather than leaving to guesswork.
+   */
+  async whoAmI(): Promise<AuthIdentity> {
+    const probe = { owner: "", repo: "", number: 0, headSha: "", installationId: 0 };
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/user`, {
+        headers: await this.headers(probe, "application/vnd.github+json"),
+      });
+      if (res.ok) {
+        const u = (await res.json()) as { login?: string; type?: string };
+        if (u.login) {
+          return { kind: u.type === "Bot" ? "app" : "user", login: u.login };
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+    return { kind: "unknown", login: "" };
   }
 
   async postReview(ref: PullRef, review: ReviewSubmission): Promise<PostedReview> {

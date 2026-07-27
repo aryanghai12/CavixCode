@@ -520,6 +520,38 @@ $env:CAVIX_LLM_API_KEY = "sk-..."          # your AI key (or an offline self-hos
 > has no way to post anything and every review fails. Use `Get-Content ... -Raw` as
 > shown so the `.pem` keeps its line breaks.
 
+#### Giving Cavix its own identity (name + profile picture)
+
+Cavix should post as **itself**, not as you. Which one happens depends entirely on
+how the orchestrator authenticates:
+
+| Credentials set | Comments appear as | Avatar |
+|---|---|---|
+| `CAVIX_APP_ID` + `CAVIX_APP_PRIVATE_KEY` | `cavixcode[bot]` | the GitHub App's own logo |
+| `CAVIX_GITHUB_TOKEN` (a personal token) | **you** | **your profile picture** |
+
+So if reviews are showing up under your name and photo, the orchestrator is using
+a personal token. Fix it by setting the two App variables and **removing
+`CAVIX_GITHUB_TOKEN`** from the orchestrator service.
+
+The orchestrator now says which one it is on every boot, so you never have to guess:
+
+```
+posting to GitHub as the Cavix App   identity=cavixcode[bot]
+```
+or
+```
+WARN  posting to GitHub as the USER "aryanghai12" — reviews will carry that
+      person's name and avatar
+```
+
+**To set the profile picture:** GitHub App avatars are uploaded on GitHub, not set
+from code. Go to **Settings → Developer settings → GitHub Apps → Cavix → General →
+Display information**, and upload a square PNG of the Cavix mark
+(`services/control-plane/public/cavix-mark.svg`, exported at 512x512). That image
+becomes the avatar on every comment, review and reaction. The `@` handle is the
+App's **name/slug**, also set on that page, and is what `CAVIX_BOT_HANDLE` must match.
+
 #### Pasting the private key into a hosting dashboard
 
 A `.pem` is **multi-line**, and pasting multi-line text into an env-var box is the

@@ -13,7 +13,15 @@ export { buildReviewSubmission, type BuiltReview } from "./poster/poster.ts";
 export type { WorkflowEngine, ReviewHandler } from "./workflow/engine.ts";
 export { InlineEngine } from "./workflow/inline.ts";
 export { BullMqEngine } from "./workflow/bullmq.ts";
-export { runReview, makeReviewHandler, type ReviewOutcome, type ReviewWorkflowDeps } from "./workflow/reviewWorkflow.ts";
+export {
+  runReview,
+  makeReviewHandler,
+  isPermanentFailure,
+  cleanUp,
+  type ReviewOutcome,
+  type ReviewWorkflowDeps,
+  type GateDecision,
+} from "./workflow/reviewWorkflow.ts";
 
 export { FakeStreamSource, type StreamSource, type StreamEntry } from "./bridge/source.ts";
 export { RedisStreamSource } from "./bridge/redisSource.ts";

@@ -11,6 +11,8 @@ import {
   makeReviewHandler,
   pumpOnce,
   runReview,
+  isPermanentFailure,
+  cleanUp,
 } from "@cavix/orchestrator";
 
 const DIFF = `diff --git a/src/auth.js b/src/auth.js
@@ -202,6 +204,20 @@ test("command job: a disabled repo gets 👍 and a comment telling you how to en
   assert.match(github.comments[0], /Repositories/);
 });
 
+/** The fake, with one call swapped out for a failing one. */
+function withFailure(github: FakeGitHubClient, fail: () => never): GitHubClient {
+  return {
+    fetchPullDiff: async () => fail(),
+    getPull: (ref) => github.getPull(ref),
+    postReview: (ref, review) => github.postReview(ref, review),
+    addReaction: (ref, id, content) => github.addReaction(ref, id, content),
+    createComment: (ref, body) => github.createComment(ref, body),
+    findComment: (ref, marker) => github.findComment(ref, marker),
+    updateComment: (ref, id, body) => github.updateComment(ref, id, body),
+    whoAmI: () => github.whoAmI(),
+  };
+}
+
 test("command job: a failure reacts 😕 and explains the cause in a comment", async () => {
   const { github, reviewer } = wire();
   // Delegate everything to the fake except the diff fetch, which fails the way a
@@ -212,10 +228,15 @@ test("command job: a failure reacts 😕 and explains the cause in a comment", a
     postReview: (ref, review) => github.postReview(ref, review),
     addReaction: (ref, id, content) => github.addReaction(ref, id, content),
     createComment: (ref, body) => github.createComment(ref, body),
+    findComment: (ref, marker) => github.findComment(ref, marker),
+    updateComment: (ref, id, body) => github.updateComment(ref, id, body),
+    whoAmI: () => github.whoAmI(),
   };
   const handler = makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) });
 
-  await assert.rejects(() => handler(makeCommandJob()), /HTTP 404/);
+  // A 404 is permanent, so the handler reports and returns instead of throwing —
+  // rethrowing would make the queue retry a call that can never succeed.
+  await handler(makeCommandJob());
   assert.deepEqual(github.reactions.map((r) => r.content), ["eyes", "confused"]);
   assert.match(github.comments[0], /could not finish/i);
   assert.match(github.comments[0], /may not be installed on this repository/i);
@@ -238,4 +259,87 @@ test("command job: BYOK uses the dashboard workspace from the gate, not the GitH
   await handler(makeCommandJob());
   assert.equal(github.submissions.length, 1);
   assert.equal(gateway.costLog()[0].org, "acme-workspace", "cost is attributed to the workspace");
+});
+
+// ---- retry behaviour: the "three identical comments" bug ----
+//
+// The queue runs a failed job three times. The handler used to create a comment
+// on every attempt, so one "@cavixcode review" produced three identical failure
+// comments on the PR.
+
+test("a permanent failure is reported ONCE and never retried", async () => {
+  const { github, reviewer } = wire();
+  let attempts = 0;
+  const broken = withFailure(github, () => {
+    attempts++;
+    throw new Error('google: HTTP 429 : {"error":{"code":429,"message":"You exceeded your current quota"}}');
+  });
+  const handler = makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) });
+
+  // The queue would call the handler again only if it threw.
+  await handler(makeCommandJob());
+
+  assert.equal(attempts, 1, "a doomed call must not be repeated");
+  assert.equal(github.comments.length, 1, "exactly one comment, not three");
+  assert.match(github.comments[0], /quota/i);
+});
+
+test("even if the queue does retry, the status comment is EDITED, not duplicated", async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => { throw new Error("boom: upstream HTTP 503"); });
+  const handler = makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) });
+
+  // 503 is transient, so the handler rethrows and the queue retries: simulate all
+  // three attempts the way BullMQ would.
+  for (let i = 0; i < 3; i++) {
+    await assert.rejects(() => handler(makeCommandJob()));
+  }
+
+  assert.equal(github.comments.length, 1, "one status comment on the PR, however many attempts ran");
+  assert.equal(github.commentEdits, 2, "the later attempts edited it in place");
+});
+
+test("the status comment carries a hidden marker so it can be found again", async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => { throw new Error("github: HTTP 404 Not Found"); });
+  await makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) })(makeCommandJob());
+  assert.match(github.comments[0], /^<!-- cavix:status -->/);
+});
+
+test("transient failures still retry", () => {
+  assert.equal(isPermanentFailure("upstream HTTP 503"), false);
+  assert.equal(isPermanentFailure("socket hang up"), false);
+  assert.equal(isPermanentFailure("ETIMEDOUT"), false);
+});
+
+test("permanent failures are recognised", () => {
+  for (const m of [
+    'google: HTTP 429 : {"error":{"message":"quota"}}',
+    'provider "mistral" is not available',
+    "anthropic: BYOK api key is empty",
+    "github: fetch diff HTTP 404 Not Found",
+    "github: post review HTTP 403 Forbidden",
+    "google: HTTP 400 : API_KEY_INVALID",
+  ]) {
+    assert.equal(isPermanentFailure(m), true, `should be permanent: ${m}`);
+  }
+});
+
+// The raw provider error is a wall of JSON; the PR should show the sentence.
+test("cleanUp lifts the human message out of a provider's JSON error", () => {
+  const raw = 'google: HTTP 429 : {\n "error": {\n "code": 429,\n "message": "You exceeded your current quota, please check your plan and billing details.\n* Quota exceeded for metric: generate_content_free_tier_input_token_count, limit: 0"\n }\n}';
+  const out = cleanUp(raw);
+  assert.match(out, /google: HTTP 429/);
+  assert.match(out, /You exceeded your current quota/);
+  assert.ok(!out.includes('"code"'), "the JSON scaffolding should be gone");
+});
+
+test('a "limit: 0" quota error says waiting will not help', async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => {
+    throw new Error('google: HTTP 429 : {"error":{"message":"Quota exceeded for metric: x, limit: 0, model: gemini-2.0-flash"}}');
+  });
+  await makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) })(makeCommandJob());
+  assert.match(github.comments[0], /no quota for this model/i);
+  assert.match(github.comments[0], /billing|switch to a model/i);
 });

@@ -125,6 +125,26 @@ async function main() {
     tokens,
     baseUrl: cfg.github.baseUrl,
   });
+
+  // Say out loud WHO Cavix posts as. With App auth every comment, review and
+  // reaction comes from "<slug>[bot]" with the App's own avatar and profile. With
+  // a personal access token it posts as that human instead, wearing their name
+  // and picture, which is almost never what anyone wants.
+  void github
+    .whoAmI()
+    .then((id) => {
+      if (id.kind === "app") {
+        log("info", "posting to GitHub as the Cavix App", { identity: id.login });
+      } else if (id.kind === "user") {
+        log("warn", `posting to GitHub as the USER "${id.login}" — reviews will carry that person's name and avatar`, {
+          fix: "Set CAVIX_APP_ID + CAVIX_APP_PRIVATE_KEY (and remove CAVIX_GITHUB_TOKEN) so Cavix posts under its own bot identity.",
+        });
+      }
+    })
+    .catch(() => {
+      /* identity is diagnostic only; never block startup on it */
+    });
+
   const reviewer = new Reviewer({ gateway });
 
   // Execution gatekeeper: only review repos toggled ON in the dashboard.
