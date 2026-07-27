@@ -41,6 +41,10 @@ class LocalSandboxInstance implements Sandbox {
     return readFile(this.resolve(relPath), "utf8");
   }
 
+  async removeFile(relPath: string): Promise<void> {
+    await rm(this.resolve(relPath), { force: true });
+  }
+
   exec(cmd: string, args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     const timeoutMs = opts.timeoutMs ?? this.defaultTimeout;
     const start = Date.now();

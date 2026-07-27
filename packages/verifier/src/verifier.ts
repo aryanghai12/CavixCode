@@ -92,6 +92,12 @@ export class Verifier {
         const r2 = await sbx.exec(tcmd.cmd, tcmd.args);
         logs.push(step("after-fix", tcmd, r2));
         fixWorks = generated.semantics === "test-fails-on-bug" ? r2.code === 0 : r2.code !== 0;
+
+        // Take the generated test back out before running the repo's own suite.
+        // Otherwise the suite is judged on a test Cavix wrote — and for an
+        // exploit PoC that test is SUPPOSED to fail now that the fix is in, so
+        // every security verification would report "the suite broke".
+        await sbx.removeFile(generated.testPath);
         const scmd = setup.runSuite();
         const r3 = await sbx.exec(scmd.cmd, scmd.args);
         logs.push(step("suite", scmd, r3));
@@ -111,7 +117,15 @@ export class Verifier {
 }
 
 function step(name: string, c: { cmd: string; args: string[] }, r: { code: number; stdout: string; stderr: string; timedOut: boolean }): StepLog {
-  return { step: name, cmd: `${c.cmd} ${c.args.join(" ")}`, code: r.code, timedOut: r.timedOut, output: (r.stdout + r.stderr).slice(0, 2000) };
+  // Record the interpreter by name, not by the absolute path this machine
+  // happens to have it at ("C:\Program Files\nodejs\node.exe"). The log is shown
+  // to humans as evidence, and the path is noise that crowds out the command.
+  return { step: name, cmd: `${binName(c.cmd)} ${c.args.join(" ")}`.trim(), code: r.code, timedOut: r.timedOut, output: (r.stdout + r.stderr).slice(0, 2000) };
+}
+
+function binName(cmd: string): string {
+  const base = cmd.split(/[\\/]/).pop() ?? cmd;
+  return base.replace(/\.exe$/i, "");
 }
 
 function inconclusive(exploit: boolean, reason: string, logs: StepLog[], costUsd: number): VerificationResult {

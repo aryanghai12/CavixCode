@@ -92,6 +92,11 @@ class DockerSandboxInstance implements Sandbox {
     return r.stdout;
   }
 
+  async removeFile(relPath: string): Promise<void> {
+    // -f: a missing file is not an error, matching the port's contract.
+    await runDocker(["exec", this.id, "rm", "-f", posixJoin(this.workdir, relPath)]);
+  }
+
   exec(cmd: string, args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     const envArgs: string[] = [];
     for (const [k, v] of Object.entries(opts.env ?? {})) envArgs.push("-e", `${k}=${v}`);

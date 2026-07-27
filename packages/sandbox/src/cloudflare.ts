@@ -41,6 +41,10 @@ class CloudflareSandboxInstance implements Sandbox {
   async readFile(relPath: string): Promise<string> {
     return (await this.handle.readFile(`${this.workdir}/${relPath}`)).content;
   }
+  async removeFile(relPath: string): Promise<void> {
+    // The SDK has no delete primitive, so go through the shell it does expose.
+    await this.handle.exec(`rm -f ${this.workdir}/${relPath}`);
+  }
   async exec(cmd: string, args: string[], _opts?: ExecOptions): Promise<ExecResult> {
     const start = Date.now();
     const r = await this.handle.exec([cmd, ...args].join(" "));
