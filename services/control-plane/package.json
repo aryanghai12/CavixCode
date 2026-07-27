@@ -8,6 +8,7 @@
   "dependencies": {
     "@cavix/core": "*",
     "@cavix/gateway": "*",
+    "@cavix/policy": "*",
     "pg": "^8.13.1"
   }
 }

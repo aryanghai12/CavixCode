@@ -25,9 +25,13 @@ import { InlineEngine } from "./workflow/inline.ts";
 import { BullMqEngine } from "./workflow/bullmq.ts";
 import { RedisStreamSource } from "./bridge/redisSource.ts";
 import { runBridge } from "./bridge/bridge.ts";
+import { GatewayTestGenerator, Verifier } from "@cavix/verifier";
+import { selectBackend } from "@cavix/sandbox";
+import { makeVerifyStep } from "./verify/verify.ts";
 import { makeControlPlaneResolver } from "./byok/resolver.ts";
 import { makeRepoGate } from "./byok/gate.ts";
 import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
+import { makeReviewConfigFetcher } from "./byok/reviewConfig.ts";
 import { preflight, formatPreflight } from "./preflight.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -163,12 +167,59 @@ async function main() {
     : undefined;
   if (suggestModels) log("info", "model self-heal on: a retired model is replaced automatically");
 
+  // Stage 10 — execution-grounded verification. This is the product's moat, so it
+  // is ON unless explicitly disabled: findings get reproduced in a sealed,
+  // network-less sandbox before they are posted, and the ones that fail to
+  // reproduce are dropped rather than shown. Requires a sandbox backend; if the
+  // configured one cannot be constructed we log it and review without proofs
+  // rather than refusing to review at all.
+  let verify;
+  if (process.env.CAVIX_VERIFY !== "off") {
+    try {
+      const backend = selectBackend(process.env.CAVIX_SANDBOX_BACKEND ?? "docker", (m) =>
+        log("warn", m),
+      );
+      verify = makeVerifyStep({
+        github,
+        verifier: new Verifier({
+          sandbox: backend,
+          // The repro/exploit test is written by the org's own model through the
+          // BYOK gateway — no Cavix-side key, same cost attribution as the review.
+          testGen: new GatewayTestGenerator({ gateway }),
+        }),
+        logger: { info: (m, meta) => log("info", m, meta) },
+      });
+      log("info", "verification on: findings are reproduced in a sandbox before posting", {
+        backend: backend.name,
+      });
+    } catch (err) {
+      log("warn", "verification disabled: no usable sandbox backend", {
+        err: (err as Error).message,
+        hint: "Set CAVIX_SANDBOX_BACKEND=local|docker, or CAVIX_VERIFY=off to silence this.",
+      });
+    }
+  } else {
+    log("info", "verification off (CAVIX_VERIFY=off): findings post unproven");
+  }
+
+  // Every switch the repo owner flipped on the dashboard — verification, summary
+  // placement, the pre-merge gate, blocking. Without a control-plane the safe
+  // defaults apply, so a self-hosted run with no dashboard still behaves.
+  const reviewConfig = cpUrl && internalToken
+    ? makeReviewConfigFetcher({ url: cpUrl, token: internalToken, logger: { warn: (m, meta) => log("warn", m, meta) } })
+    : undefined;
+  if (reviewConfig) log("info", "per-org review settings come from the dashboard");
+
   const handler = makeReviewHandler({
     github,
     reviewer,
     gate,
     suggestModels,
     saveModel,
+    verify,
+    reviewConfig,
+    // The summary belongs in the PR description; opt out with =off.
+    summaryInDescription: process.env.CAVIX_SUMMARY_IN_DESCRIPTION !== "off",
     logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
   });
 

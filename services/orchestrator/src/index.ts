@@ -8,7 +8,40 @@ export { Reviewer, type ReviewInput } from "./reviewer/reviewer.ts";
 export { parseModelReview, extractJsonObject } from "./reviewer/parse.ts";
 export { REVIEW_SYSTEM_PROMPT, buildUserMessage } from "./reviewer/prompt.ts";
 
-export { buildReviewSubmission, type BuiltReview } from "./poster/poster.ts";
+export {
+  buildReviewSubmission,
+  buildPullDescription,
+  SUMMARY_START,
+  SUMMARY_END,
+  type BuiltReview,
+  type PosterOptions,
+  type ReviewLinkRef,
+} from "./poster/poster.ts";
+
+export {
+  makeVerifyStep,
+  type VerifyStep,
+  type VerifyStepOptions,
+  type VerifyStepResult,
+} from "./verify/verify.ts";
+
+export {
+  runPreMergeChecks,
+  type CheckStatus,
+  type PreMergeCheck,
+  type PreMergeResult,
+} from "./policy/preMerge.ts";
+
+export {
+  makeReviewConfigFetcher,
+  DEFAULT_REVIEW_CONFIG,
+  ALL_SECTIONS,
+  type OrgReviewConfig,
+  type ReviewConfigFetcher,
+  type ReviewSections,
+} from "./byok/reviewConfig.ts";
+
+export { fetchSources, changedPaths, type SourceFile } from "./sources.ts";
 
 export type { WorkflowEngine, ReviewHandler } from "./workflow/engine.ts";
 export { InlineEngine } from "./workflow/inline.ts";
@@ -16,6 +49,7 @@ export { BullMqEngine } from "./workflow/bullmq.ts";
 export {
   runReview,
   makeReviewHandler,
+  shouldRequestChanges,
   isPermanentFailure,
   isModelUnavailable,
   isZeroQuota,

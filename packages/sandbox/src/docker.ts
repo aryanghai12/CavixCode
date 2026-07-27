@@ -92,6 +92,15 @@ class DockerSandboxInstance implements Sandbox {
     return r.stdout;
   }
 
+  async removeFile(relPath: string): Promise<void> {
+    // -f makes a missing file a success, matching the port's contract. Anything
+    // else that fails must be reported: verification removes the generated test
+    // before running the repo's suite, and a silent failure there means the suite
+    // gets judged on a test Cavix wrote.
+    const r = await runDocker(["exec", this.id, "rm", "-f", posixJoin(this.workdir, relPath)]);
+    if (r.code !== 0) throw new Error(`docker removeFile failed: ${r.stderr}`);
+  }
+
   exec(cmd: string, args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     const envArgs: string[] = [];
     for (const [k, v] of Object.entries(opts.env ?? {})) envArgs.push("-e", `${k}=${v}`);

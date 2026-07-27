@@ -64,13 +64,28 @@ export async function verifyAndFilter(
   return { surfaced, suppressed, results, verifiedCount, costUsd };
 }
 
-// Stamp the proof onto a verified finding so the PR comment shows it's a fact.
+/**
+ * Stamp the proof onto a verified finding.
+ *
+ * Structured, not prose: the badge and the step log are rendered by whoever
+ * shows the finding (PR comment, dashboard, IDE), so the receipt survives in a
+ * form they can each present properly instead of being glued into the body as
+ * markdown that only GitHub understands.
+ */
 function annotate(f: Finding, r: VerificationResult): Finding {
-  const badge = r.exploit ? "✅ Verified (PoC exploit ran in sandbox)" : "✅ Verified (reproduced in sandbox)";
-  const fixNote = r.fixWorks ? " · suggested fix resolves it" : "";
   return {
     ...f,
+    // It ran. It happened. Confidence is no longer an estimate.
     confidence: Math.max(f.confidence, 0.99),
-    body: `${f.body}\n\n**${badge}${fixNote}.** ${r.reason}`,
+    verification: {
+      status: r.status,
+      exploit: r.exploit,
+      reproduced: r.reproduced,
+      fixWorks: r.fixWorks,
+      suitePasses: r.suitePasses,
+      reason: r.reason,
+      testPath: r.testPath,
+      steps: r.logs.map((l) => ({ step: l.step, cmd: l.cmd, code: l.code, timedOut: l.timedOut })),
+    },
   };
 }

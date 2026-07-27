@@ -47,6 +47,12 @@ export interface Sandbox {
   readonly workdir: string;
   writeFile(relPath: string, content: string): Promise<void>;
   readFile(relPath: string): Promise<string>;
+  /**
+   * Delete a file from the workspace. Verification needs it: the generated
+   * reproduction has to come back OUT before the repo's own suite is run, or
+   * the suite is judged on a test Cavix wrote. Missing files are not an error.
+   */
+  removeFile(relPath: string): Promise<void>;
   exec(cmd: string, args: string[], opts?: ExecOptions): Promise<ExecResult>;
   /** Tear down: kill processes, delete the workspace, release the backend. */
   destroy(): Promise<void>;

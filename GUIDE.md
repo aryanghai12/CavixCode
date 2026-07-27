@@ -775,12 +775,56 @@ brand‑new workspace — the first person to sign up for an organization become
 | **Reports** | ROI + quality at a glance: reviews, verified findings, action rate, reviewer‑hours saved, findings‑by‑severity, and decision counts. |
 | **Learnings** | What Cavix has learned from your accept/reject history — the personalization that makes it fit *your* team (and hard to switch away from). |
 | **AI & BYOK** | The heart of "bring your own key": pick the provider (Anthropic / OpenAI / Google / self‑hosted) and model, and paste your API key. The key is **encrypted at rest** and only a **fingerprint** is ever shown again. |
-| **Review settings** | Mirrors `.cavix.yaml`: auto‑review, review drafts, air‑gapped mode; **comment tone** (concise / detailed / educational / assertive / chill); **path filters** (include/exclude globs); severities that fail the check; and **Pre‑merge checks** — an optional gate, off by default, where an owner writes plain‑English rules that become non‑bypassable checks. |
+| **Review settings** | Everything the owner controls about how reviews run — see the table below. |
 | **Integrations** | Source control (GitHub connected; GitLab/Bitbucket/Azure adapters) plus chat/issue trackers (Slack/Jira/Linear). |
 | **Team** | Members and their roles (owner / admin / reviewer / member). Owners/admins can change roles. |
 | **Plan & billing** | The current plan and upgrade options, driven by the **single pricing source** shared with the marketing site (wire Stripe for real charging — see §8D). |
 | **Proven catches** | The public feed of execution‑verified findings that opted‑in public repos chose to share. |
 | **Docs** (`/docs`) | Public documentation: getting started, `@cavix` commands, PR summaries, tone, `.cavix.yaml`, pre‑merge checks, BYOK, self‑host, security. |
+
+### What the repo owner controls (Review settings)
+
+Every one of these is set **on the site**, by the owner, and the orchestrator fetches them
+before each review — nothing here is a deploy‑time decision or a file someone has to edit.
+
+| Control | Default | What it changes on your pull requests |
+|---------|---------|----------------------------------------|
+| **Auto‑review / review drafts** | on / off | Whether Cavix reviews on open + every push, and whether drafts count. |
+| **Execution‑grounded verification** | **on** | Reproduce each significant finding by running your code in a sealed, network‑less sandbox before posting it, and **drop the ones that don't reproduce**. Off is faster and cheaper, but every finding becomes a claim instead of a fact. |
+| **Summary in the PR description** | **on** | The summary + file‑by‑file walkthrough are written into the PR description, below whatever the author wrote. Off keeps them in the review comment. |
+| **Comment tone** | concise | How Cavix writes (concise / detailed / educational / assertive / chill). |
+| **Let Cavix request changes** | **off** | Post the review as **Request changes** instead of a comment, which blocks merge on a protected branch. Cavix never blocks your team unless you switch this on. |
+| **Blocking severities** | critical | Which severities count as a failure — only applies while the switch above is on. |
+| **Path filters** | exclude minified/generated/vendor | Which files get reviewed at all. |
+| **Pre‑merge checks** | **off** | Plain‑English org rules, compiled into deterministic checks that run over the files a PR changes. See below. |
+| **Review comment structure** | all on | Which parts get posted: summary, changed‑files walkthrough, size & review‑effort, inline findings (off moves every explanation into the review comment), and the verification proof block. **Sample review** previews the result live. Sequence diagrams and issue linking are marked *soon* — they are not built yet, so their switches are disabled rather than pretending. |
+
+**Pre‑merge checks** deserve a note. You type a sentence; Cavix compiles it into a
+deterministic check — no model gets a vote on whether it passed, which is the whole point
+of a gate. The dashboard shows **✓ compiles** or **✕ won't run** next to each rule as you
+add it, because a rule that silently never runs is worse than no rule at all.
+
+**Only what the PR adds is attributed to it.** Rules are evaluated against the whole file
+(they need the surrounding code to be accurate), but a violation is only reported if it
+sits on a line this pull request *added*. Someone who touches one line of a file with
+three pre‑existing `console.log` calls is not answerable for those three — if their added
+line is clean the check passes and says
+`pass — this change adds none (3 pre-existing, not attributed to this PR)`. Whole‑file rules
+("files must be under 500 lines", "every file requires a license header") are the
+exception: they describe the file being shipped, so they apply either way.
+
+Shapes that compile today:
+
+- Every new endpoint must have an authentication check
+- Disallow calls to `console.log`
+- Ban the `request` module / package
+- No TODO or FIXME markers in committed code
+- Files must be under 500 lines
+- Every file requires a license header
+
+Results appear as a **Pre‑merge checks** table in the review comment (✅ pass / ❌ fail /
+⚠️ skipped), and violations post as immutable `policy` findings that adjudication cannot
+drop. A failure only blocks the merge if "let Cavix request changes" is also on.
 
 ### Connect GitHub from the site (like CodeRabbit)
 
@@ -1242,20 +1286,38 @@ Owners/admins can promote or demote teammates; a `403` is returned if a mere mem
 
 ### Part 2 — The Admin console (control every org)
 
-Log in as a platform admin and click **🛡️ Admin console** in the sidebar. You see a table
-of **every organization** on your platform with its member/repo/review counts, and for
-each one you can:
+Log in as a platform admin and click **🛡️ Admin console** in the sidebar.
+
+**The top of the page answers "how is the business doing?"** — eight tiles: organizations
+(with new‑this‑week and how many are actually *active*), people (new this week, how many
+signed in via GitHub), active trials (how many end within 7 days, how many already
+lapsed), estimated MRR, reviews (today / this week), verified findings, repositories, and
+how many orgs have a working AI key. Under that, a 14‑day activity chart.
+
+> **MRR is an estimate, not billed revenue.** It is `seats × CAVIX_PRICE_PER_SEAT`
+> (default `$12`) across paid, non‑trial orgs, with trial seats shown separately as
+> pipeline. Connect Stripe for real numbers.
+
+**"Needs attention" tells you who to contact today** — it only appears when there is
+something to do: trials ending within a week, orgs that connected a repo but never saved
+an AI key (every review of theirs is failing), orgs at 90%+ of their daily limit, and
+anyone suspended.
+
+**Then every organization**, searchable and sortable (most recently active, most reviews,
+most members, trial ending soonest, name). Each row shows members, repos, lifetime
+reviews, when they last ran one, today's usage against their limit, and flags for
+`no key` / `unverified`. Per row you can:
 
 | Control | What it does | Effect |
 |---------|--------------|--------|
 | **Tier** dropdown (free ⇄ paid) | Move an org between plans | Changes their default review limit |
-| **Start 14‑day trial** | Give a free org paid‑level limits for 14 days | Auto‑expires; no cleanup needed |
-| **Set limit** | Override reviews/day for *that one org* (any number, or blank to clear) | Beats the tier default |
+| **Trial…** | Start/extend a trial of any length, or enter `0` to end it now | Auto‑expires; no cleanup needed |
+| **Limit** | Override reviews/day for *that one org* (any number, or blank to clear) | Beats the tier default |
 | **Suspend / Unsuspend** | Instantly stop (or resume) an org's reviews | Suspended = 0 reviews allowed |
 
 Every change takes effect **immediately** for that org's next review. Behind the scenes
-these call the admin API (`POST /api/admin/orgs/:org`), which only platform admins can
-reach.
+these call the admin API (`GET /api/admin/stats`, `GET /api/admin/orgs`,
+`POST /api/admin/orgs/:org`), which only platform admins can reach.
 
 ---
 
@@ -1437,6 +1499,9 @@ Key slots at a glance:
 | `ANTHROPIC_API_KEY` / `CAVIX_LLM_API_KEY` | gateway | Your AI key |
 | `CAVIX_LLM_MODEL` | gateway | Which AI model |
 | `CAVIX_SANDBOX_BACKEND` | orchestrator | Where code runs safely: `local`, `docker`, or `cloudflare` |
+| `CAVIX_VERIFY` | orchestrator | `off` = post findings without reproducing them first. Default **on**: every high‑signal finding is reproduced in a sealed sandbox before it is posted, and anything that fails to reproduce is dropped. This is a **deployment kill‑switch**; each org's own toggle lives in Review settings and can only narrow it. |
+| `CAVIX_SUMMARY_IN_DESCRIPTION` | orchestrator | `off` = keep the summary in the review comment. Default **on**: the summary + walkthrough are written into the PR description, below whatever the author wrote. Per‑org override lives in Review settings. |
+| `CAVIX_PRICE_PER_SEAT` | control‑plane | Per‑seat price used for the Admin console's **estimated** MRR (default `12`). Not billing — connect Stripe for that. |
 | `CAVIX_AIRGAPPED` | gateway | `true` = fully offline; only the in‑house AI is reachable |
 | `CAVIX_CONTROL_PLANE_PORT` | control‑plane | Dashboard web port (default 8088) |
 | `CAVIX_FREE_REVIEWS_PER_DAY` | control‑plane | Daily review limit for the free tier |

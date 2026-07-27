@@ -20,12 +20,21 @@ export interface FakeGitHubOptions {
   headSha?: string;
   /** PR title reported by getPull. */
   title?: string;
+  /** The PR description as the "author" wrote it. */
+  body?: string;
+  /** Repo contents at head, keyed by path — what the verifier reads. */
+  files?: Record<string, string>;
 }
 
 export class FakeGitHubClient implements GitHubClient {
   private readonly diff: string;
   private readonly headSha: string;
   private readonly title: string;
+  private readonly files: Record<string, string>;
+  /** The PR description, as Cavix has left it. Assertable in tests. */
+  pullBody: string;
+  /** How many times the description was rewritten. */
+  bodyWrites = 0;
   readonly submissions: Array<{ ref: PullRef; review: ReviewSubmission }> = [];
   /** Every reaction added, in order — the acknowledgment trail under test. */
   readonly reactions: Array<{ commentId: number; content: ReactionContent }> = [];
@@ -40,6 +49,8 @@ export class FakeGitHubClient implements GitHubClient {
     this.diff = opts.diff;
     this.headSha = opts.headSha ?? "resolvedheadsha";
     this.title = opts.title ?? "Fake pull request";
+    this.pullBody = opts.body ?? "";
+    this.files = { ...(opts.files ?? {}) };
   }
 
   async fetchPullDiff(_ref: PullRef): Promise<string> {
@@ -47,7 +58,23 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async getPull(_ref: PullRef): Promise<PullMeta> {
-    return { headSha: this.headSha, baseSha: "basesha", title: this.title, draft: false, state: "open" };
+    return {
+      headSha: this.headSha,
+      baseSha: "basesha",
+      title: this.title,
+      draft: false,
+      state: "open",
+      body: this.pullBody,
+    };
+  }
+
+  async fetchFile(_ref: PullRef, path: string): Promise<string | null> {
+    return this.files[path] ?? null;
+  }
+
+  async updatePullBody(_ref: PullRef, body: string): Promise<void> {
+    this.pullBody = body;
+    this.bodyWrites++;
   }
 
   async addReaction(_ref: PullRef, commentId: number, content: ReactionContent): Promise<void> {

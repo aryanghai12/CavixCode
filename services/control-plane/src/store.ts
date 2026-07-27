@@ -47,6 +47,20 @@ export interface OrgSettings {
   failOn: string[];      // severities that fail the check run
   policyEnabled: boolean;
   airgapped: boolean;
+  /**
+   * Stage 10. When on (the default), a finding is reproduced in a sandbox before
+   * it is posted and dropped if it cannot be. Owners can turn it off to trade
+   * proof for speed and cost.
+   */
+  verifyFindings: boolean;
+  /** Write the summary + walkthrough into the PR description instead of the comment. */
+  summaryInDescription: boolean;
+  /**
+   * Escalate the review from a comment to REQUEST_CHANGES when `failOn`
+   * severities are found or a pre-merge rule fails. OFF by default — blocking a
+   * team's merges is never something a tool should switch on for them.
+   */
+  requestChangesOnFail: boolean;
   /** Optional path filters (like .cavix.yaml). Empty include = review everything. */
   pathFilters: { include: string[]; exclude: string[] };
   /** Optional pre-merge gate (OFF by default). Owner writes plain-English rules. */
@@ -112,6 +126,47 @@ export interface OrgAdminView extends Org {
   reviews: number;
   effectiveReviewsPerDay: number;
   trialActive: boolean;
+  /** Days until the trial ends; negative once expired, undefined with no trial. */
+  trialDaysLeft?: number;
+  /** Reviews in the last 24h, and that as a percentage of the daily limit. */
+  reviewsToday: number;
+  usagePct: number;
+  /** When this org last had a review — the honest "are they actually using it" signal. */
+  lastActivityAt?: string;
+  /** Has a BYOK key been saved? Without one, every review fails — the #1 support case. */
+  apiKeySet: boolean;
+  /** Are findings being proven before posting for this org? */
+  verifyFindings: boolean;
+}
+
+/**
+ * Platform-wide numbers for the founder console: who is signed up, who is
+ * actually using it, whose trial is about to end, and what that is worth.
+ */
+export interface PlatformStats {
+  generatedAt: string;
+  users: { total: number; new7d: number; new30d: number; withGithub: number };
+  orgs: {
+    total: number;
+    free: number;
+    paid: number;
+    trialActive: number;
+    trialExpiring7d: number;
+    trialExpired: number;
+    suspended: number;
+    new7d: number;
+    activeLast7d: number;
+    withApiKey: number;
+  };
+  repos: { total: number; enabled: number; public: number; private: number };
+  reviews: { total: number; last24h: number; last7d: number; perDay14: number[] };
+  findings: { total: number; verified: number; accepted: number; rejected: number; bySeverity: Record<string, number> };
+  /**
+   * Estimated, not billed. Seats are members of paid orgs at the configured
+   * per-seat price; trial seats are the same sum for orgs still in trial, which
+   * is the pipeline if they convert. Labelled as an estimate everywhere it shows.
+   */
+  revenue: { pricePerSeat: number; paidSeats: number; estimatedMrr: number; trialSeats: number; pipelineMrr: number };
 }
 
 export interface Repo {
@@ -220,6 +275,8 @@ export interface Store {
   setSuspended(org: string, suspended: boolean): Org;
   /** Every org with computed operator fields (members, repos, reviews, effective limit). */
   listOrgsAdmin(): OrgAdminView[];
+  /** Platform-wide totals for the founder console. */
+  platformStats(): PlatformStats;
 }
 
 function defaultSettings(): OrgSettings {
@@ -232,6 +289,9 @@ function defaultSettings(): OrgSettings {
     failOn: ["critical"],
     policyEnabled: false,
     airgapped: process.env.CAVIX_AIRGAPPED === "true",
+    verifyFindings: true,
+    summaryInDescription: true,
+    requestChangesOnFail: false,
     pathFilters: { include: [], exclude: ["**/*.min.js", "**/generated/**", "**/vendor/**"] },
     preMergeChecks: { enabled: false, rules: [] },
     reviewSections: { summary: true, changedFiles: true, sequenceDiagram: true, reviewEffort: true, relatedIssues: true, inlineFindings: true, proof: true },
@@ -485,13 +545,22 @@ export class InMemoryStore implements Store {
     if (!s) {
       s = defaultSettings();
       this.settings.set(org, s);
+      return s;
     }
+    // Fill in keys added since this org's settings were written. Snapshots
+    // restored from Postgres predate every new field, and a missing toggle read
+    // as `undefined` would silently mean "off" — turning verification off for
+    // every existing org the moment it shipped. Patch in place so the object
+    // identity (and updateSettings' mutation) still works.
+    const defaults = defaultSettings() as Record<string, unknown>;
+    const cur = s as unknown as Record<string, unknown>;
+    for (const k of Object.keys(defaults)) if (cur[k] === undefined) cur[k] = defaults[k];
     return s;
   }
   updateSettings(org: string, patch: Partial<OrgSettings>): OrgSettings {
     const s = this.getSettings(org);
     // Only allow known, safe fields to be patched (never the fingerprint directly).
-    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped", "pathFilters", "preMergeChecks", "reviewSections"];
+    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped", "verifyFindings", "summaryInDescription", "requestChangesOnFail", "pathFilters", "preMergeChecks", "reviewSections"];
     for (const k of allowed) {
       if (patch[k] !== undefined) (s as Record<string, unknown>)[k] = patch[k];
     }
@@ -532,9 +601,10 @@ export class InMemoryStore implements Store {
     const hoursSaved = Math.round(findings.reduce((sum, f) => sum + (weight[f.severity] ?? 0.1), 0) * 10) / 10;
 
     // Reviews per day for the last 7 days (oldest → newest) for the sparkline.
+    // The last bucket ends at `now` — see the note in platformStats().
     const now = Date.now();
     const reviewsLast7Days = Array.from({ length: 7 }, (_, i) => {
-      const dayStart = now - (6 - i) * 86_400_000;
+      const dayStart = now - (7 - i) * 86_400_000;
       const dayEnd = dayStart + 86_400_000;
       return reviews.filter((r) => {
         const t = Date.parse(r.createdAt);
@@ -602,14 +672,120 @@ export class InMemoryStore implements Store {
     return o;
   }
   listOrgsAdmin(): OrgAdminView[] {
-    return [...this.orgs.values()].map((o) => ({
-      ...o,
-      members: this.listTeam(o.name).length,
-      repos: this.listRepos(o.name).length,
-      reviews: this.reviews.filter((r) => r.org === o.name).length,
-      effectiveReviewsPerDay: this.effectiveReviewsPerDay(o.name),
-      trialActive: !!o.trialEndsAt && Date.parse(o.trialEndsAt) > Date.now(),
-    }));
+    const now = Date.now();
+    return [...this.orgs.values()].map((o) => {
+      const reviews = this.reviews.filter((r) => r.org === o.name);
+      const limit = this.effectiveReviewsPerDay(o.name);
+      const reviewsToday = this.reviewCountSince(o.name, 86_400_000);
+      const trialEnds = o.trialEndsAt ? Date.parse(o.trialEndsAt) : undefined;
+      return {
+        ...o,
+        members: this.listTeam(o.name).length,
+        repos: this.listRepos(o.name).length,
+        reviews: reviews.length,
+        effectiveReviewsPerDay: limit,
+        trialActive: trialEnds !== undefined && trialEnds > now,
+        trialDaysLeft: trialEnds === undefined ? undefined : Math.ceil((trialEnds - now) / 86_400_000),
+        reviewsToday,
+        usagePct: limit > 0 ? Math.min(100, Math.round((reviewsToday / limit) * 100)) : 0,
+        // reviews are newest-first, so the head is the most recent activity.
+        lastActivityAt: reviews[0]?.createdAt,
+        apiKeySet: this.apiKeys.has(o.name),
+        verifyFindings: this.getSettings(o.name).verifyFindings,
+      };
+    });
+  }
+
+  platformStats(): PlatformStats {
+    const now = Date.now();
+    const day = 86_400_000;
+    const since = (ms: number, iso?: string) => !!iso && now - Date.parse(iso) <= ms;
+    const users = [...this.users.values()];
+    const orgs = [...this.orgs.values()];
+    const repos = [...this.repos.values()];
+
+    const activeOrgs = new Set(
+      this.reviews.filter((r) => now - Date.parse(r.createdAt) <= 7 * day).map((r) => r.org),
+    );
+    const trialEnd = (o: Org) => (o.trialEndsAt ? Date.parse(o.trialEndsAt) : undefined);
+
+    const findings = this.reviews.flatMap((r) => r.findings);
+    const bySeverity: Record<string, number> = {};
+    let verified = 0, accepted = 0, rejected = 0;
+    for (const f of findings) {
+      bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1;
+      if (f.verified) verified++;
+      if (f.decision?.state === "accepted") accepted++;
+      if (f.decision?.state === "rejected") rejected++;
+    }
+
+    // Estimated only — Cavix does not charge here. Seats are members, priced at
+    // the Team BYOK rate unless the deployment overrides it.
+    const pricePerSeat = Number(process.env.CAVIX_PRICE_PER_SEAT ?? "12");
+    const seatsIn = (pick: (o: Org) => boolean) =>
+      orgs.filter(pick).reduce((sum, o) => sum + this.listTeam(o.name).length, 0);
+    const onTrial = (o: Org) => (trialEnd(o) ?? 0) > now;
+    const paidSeats = seatsIn((o) => o.tier === "paid" && !o.suspended && !onTrial(o));
+    // Suspended orgs are excluded here for the same reason as paidSeats: they
+    // are not running reviews, so counting them as pipeline overstates it.
+    const trialSeats = seatsIn((o) => onTrial(o) && !o.suspended);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      users: {
+        total: users.length,
+        new7d: users.filter((u) => since(7 * day, u.createdAt)).length,
+        new30d: users.filter((u) => since(30 * day, u.createdAt)).length,
+        withGithub: users.filter((u) => !!u.githubLogin).length,
+      },
+      orgs: {
+        total: orgs.length,
+        free: orgs.filter((o) => o.tier === "free").length,
+        paid: orgs.filter((o) => o.tier === "paid").length,
+        trialActive: orgs.filter(onTrial).length,
+        trialExpiring7d: orgs.filter((o) => {
+          const t = trialEnd(o);
+          return t !== undefined && t > now && t - now <= 7 * day;
+        }).length,
+        trialExpired: orgs.filter((o) => {
+          const t = trialEnd(o);
+          return t !== undefined && t <= now;
+        }).length,
+        suspended: orgs.filter((o) => o.suspended === true).length,
+        new7d: orgs.filter((o) => since(7 * day, o.createdAt)).length,
+        activeLast7d: activeOrgs.size,
+        withApiKey: orgs.filter((o) => this.apiKeys.has(o.name)).length,
+      },
+      repos: {
+        total: repos.length,
+        enabled: repos.filter((r) => r.enabled !== false).length,
+        public: repos.filter((r) => r.visibility === "public").length,
+        private: repos.filter((r) => r.visibility === "private").length,
+      },
+      reviews: {
+        total: this.reviews.length,
+        last24h: this.reviews.filter((r) => now - Date.parse(r.createdAt) <= day).length,
+        last7d: this.reviews.filter((r) => now - Date.parse(r.createdAt) <= 7 * day).length,
+        // Buckets END at `now`, so the last one is the trailing 24h. Anchoring
+        // them to start at `now` instead puts today's reviews in yesterday's bar
+        // and leaves the final bar permanently empty.
+        perDay14: Array.from({ length: 14 }, (_, i) => {
+          const start = now - (14 - i) * day;
+          return this.reviews.filter((r) => {
+            const t = Date.parse(r.createdAt);
+            return t >= start && t < start + day;
+          }).length;
+        }),
+      },
+      findings: { total: findings.length, verified, accepted, rejected, bySeverity },
+      revenue: {
+        pricePerSeat,
+        paidSeats,
+        estimatedMrr: paidSeats * pricePerSeat,
+        trialSeats,
+        pipelineMrr: trialSeats * pricePerSeat,
+      },
+    };
   }
 
   // ---------- persistence (snapshot / restore whole state) ----------

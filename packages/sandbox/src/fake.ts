@@ -27,6 +27,9 @@ class FakeSandboxInstance implements Sandbox {
     if (v === undefined) throw new Error(`no such file: ${relPath}`);
     return v;
   }
+  async removeFile(relPath: string): Promise<void> {
+    this.files.delete(relPath);
+  }
   async exec(cmd: string, args: string[], _opts?: ExecOptions): Promise<ExecResult> {
     this.execLog.push({ cmd, args });
     const r = this.responder(cmd, args);

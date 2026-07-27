@@ -9,53 +9,82 @@
 
 import type { ReviewJob } from "@cavix/core";
 import { Gateway, FakeProvider, type GatewayConfigData } from "@cavix/gateway";
+import { LocalSandboxBackend } from "@cavix/sandbox";
+import { FakeTestGenerator, Verifier } from "@cavix/verifier";
 import { Reviewer } from "./reviewer/reviewer.ts";
 import { FakeGitHubClient } from "./github/fake.ts";
+import { makeVerifyStep } from "./verify/verify.ts";
 import { runReview, type WorkflowLogger } from "./workflow/reviewWorkflow.ts";
 
-const DIFF = `diff --git a/src/auth.js b/src/auth.js
---- a/src/auth.js
-+++ b/src/auth.js
-@@ -8,6 +8,11 @@ const db = require("./db");
- function login(req, res) {
-   const user = req.body.username;
-   const pass = req.body.password;
+const DIFF = `diff --git a/src/auth.mjs b/src/auth.mjs
+--- a/src/auth.mjs
++++ b/src/auth.mjs
+@@ -1,4 +1,7 @@ export function buildLoginQuery(user, pass) {
+ export function buildLoginQuery(user, pass) {
+-  return { sql: "SELECT * FROM users WHERE name = ? AND pass = ?", params: [user, pass] };
 +  // Look up the user
-+  const row = db.query(
-+    "SELECT * FROM users WHERE name = '" + user + "' AND pass = '" + pass + "'"
-+  );
-+  if (row) { res.cookie("session", user); return res.send("ok"); }
-   return res.status(401).send("denied");
++  return {
++    sql: "SELECT * FROM users WHERE name = '" + user + "' AND pass = '" + pass + "'",
++  };
  }
+`;
+
+// The file as it exists at the head commit — what Cavix fetches to RUN the code.
+const HEAD_SOURCE = `export function buildLoginQuery(user, pass) {
+  // Look up the user
+  return {
+    sql: "SELECT * FROM users WHERE name = '" + user + "' AND pass = '" + pass + "'",
+  };
+}
+`;
+
+const FIXED_SOURCE = `export function buildLoginQuery(user, pass) {
+  return { sql: "SELECT * FROM users WHERE name = ? AND pass = ?", params: [user, pass] };
+}
+`;
+
+// The PoC the test generator would write: it PASSES while the injection works,
+// which is what makes it proof rather than opinion.
+const EXPLOIT_TEST = `import { test } from "node:test";
+import assert from "node:assert/strict";
+import { buildLoginQuery } from "./src/auth.mjs";
+
+test("PoC: a crafted username rewrites the WHERE clause", () => {
+  const { sql } = buildLoginQuery("admin' OR '1'='1", "anything");
+  assert.match(sql, /OR '1'='1/);
+});
 `;
 
 // Deterministic stand-in for Claude: returns findings as the real model would.
 const responder = () =>
   JSON.stringify({
     summary:
-      "Adds a login path that builds a SQL query by concatenating untrusted request input, and sets a session cookie with no signing.",
+      "Replaces the parameterised login query with one built by string concatenation, so untrusted input reaches the SQL text.",
+    walkthrough: [
+      { path: "src/auth.mjs", summary: "Build the login query by concatenation instead of parameters" },
+    ],
+    effort: 3,
     findings: [
       {
-        path: "src/auth.js",
-        line: 12,
+        path: "src/auth.mjs",
+        line: 4,
         severity: "critical",
         category: "security",
         title: "SQL injection from concatenated request input",
         body:
-          "`user` and `pass` come straight from `req.body` and are concatenated into the SQL string, allowing authentication bypass and data exfiltration (e.g. `' OR '1'='1`). Use a parameterized query.",
+          "`user` and `pass` are concatenated into the SQL string, allowing authentication bypass and data exfiltration (e.g. `' OR '1'='1`). Use a parameterized query.",
         suggestion:
-          'const row = db.query("SELECT * FROM users WHERE name = ? AND pass = ?", [user, pass]);',
+          '    sql: "SELECT * FROM users WHERE name = ? AND pass = ?",',
         confidence: 0.97,
       },
       {
-        path: "src/auth.js",
-        line: 13,
-        severity: "high",
-        category: "security",
-        title: "Unsigned session cookie",
-        body:
-          "The session cookie stores the raw username with no signing/HMAC, so a client can forge a session for any user. Use a signed, httpOnly cookie or a server-side session id.",
-        confidence: 0.8,
+        path: "src/auth.mjs",
+        line: 2,
+        severity: "medium",
+        category: "maintainability",
+        title: "Comment restates the code",
+        body: "`// Look up the user` adds nothing over the function name.",
+        confidence: 0.35,
       },
     ],
   });
@@ -95,19 +124,46 @@ async function main() {
       warn: (msg, meta) => console.log(JSON.stringify({ level: "warn", service: "gateway", msg, ...meta })),
     },
   });
-  const github = new FakeGitHubClient({ diff: DIFF });
+  const github = new FakeGitHubClient({
+    diff: DIFF,
+    headSha: "a1b2c3d4",
+    body: "Speeds up the login lookup.\n\nCloses #17.",
+    files: { "src/auth.mjs": HEAD_SOURCE },
+  });
   const reviewer = new Reviewer({ gateway });
+
+  // Stage 10 for real: a LOCAL sandbox running actual `node --test` processes.
+  // Only the test-generation model is faked — everything it produces is executed.
+  const verify = makeVerifyStep({
+    github,
+    verifier: new Verifier({
+      sandbox: new LocalSandboxBackend(),
+      testGen: new FakeTestGenerator(() => ({
+        testPath: "auth.exploit.test.mjs",
+        testCode: EXPLOIT_TEST,
+        fix: { path: "src/auth.mjs", content: FIXED_SOURCE },
+        semantics: "exploit-passes-on-vuln",
+      })),
+    }),
+    logger: jsonLogger,
+  });
 
   console.log("── workflow logs ──────────────────────────────────────────────");
   const started = Date.now();
-  const outcome = await runReview(job, { github, reviewer, logger: jsonLogger });
+  const outcome = await runReview(job, { github, reviewer, verify, logger: jsonLogger });
   const elapsed = Date.now() - started;
 
   const review = github.lastReview()!;
+  console.log("\n── PR description (acme/widget#42) ───────────────────────────");
+  console.log(`PATCH /repos/acme/widget/pulls/42  → summary written: ${outcome.descriptionUpdated}`);
+  console.log("\n" + github.pullBody);
+
   console.log("\n── posted PR review (acme/widget#42) ─────────────────────────");
   console.log(`POST /repos/acme/widget/pulls/42/reviews  → ${outcome.posted.htmlUrl}`);
-  console.log(`event: ${review.event}   inline comments: ${review.comments.length}   latency: ${elapsed}ms`);
-  console.log("\n[summary body]\n" + review.body);
+  console.log(
+    `event: ${review.event}   inline: ${review.comments.length}   verified: ${outcome.verifiedCount}   suppressed: ${outcome.suppressedCount}   latency: ${elapsed}ms`,
+  );
+  console.log("\n[review comment]\n" + review.body);
   for (const c of review.comments) {
     console.log(`\n[inline] ${c.path}:${c.line}\n` + c.body);
   }

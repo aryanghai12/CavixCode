@@ -121,5 +121,14 @@ test("verifyAndFilter: surfaces VERIFIED, suppresses proven false alarms, keeps 
   assert.ok(titles.includes("real bug"), "verified bug surfaces");
   assert.ok(titles.includes("secret") && titles.includes("policy"), "facts surface without verification");
   assert.equal(out.verifiedCount, 1);
-  assert.match(out.surfaced.find((f) => f.title === "real bug")!.body, /Verified/);
+  // The proof rides on the finding as structured data, ready to render.
+  const proven = out.surfaced.find((f) => f.title === "real bug")!;
+  assert.equal(proven.verification?.status, "VERIFIED");
+  assert.equal(proven.verification?.reproduced, true);
+  assert.equal(proven.verification?.fixWorks, true);
+  assert.deepEqual(
+    proven.verification?.steps.map((s) => s.step),
+    ["repro", "after-fix", "suite"],
+  );
+  assert.equal(proven.body, "b", "the model's explanation is left alone");
 });

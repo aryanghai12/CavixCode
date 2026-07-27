@@ -93,28 +93,29 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
       </div>
     </div>
 
-    <!-- Panel: PR summary (posted as a comment, like CodeRabbit's walkthrough) -->
+    <!-- Panel: PR summary. This mirrors what services/orchestrator's poster
+         actually renders into the pull request DESCRIPTION — keep the two in
+         step; a sample that has drifted from the product is a broken promise. -->
     <div class="showcase-panel on" data-panel="summary">
       <div class="summary-card">
-        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">now</span></div>
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">pull request description</span> <span class="ago">now</span></div>
         <div class="sc-body">
           <h4>Summary</h4>
-          <p>This PR refactors the refund flow and adds retry handling to the payments service. It touches 3 files (+128 / −44). One high-severity correctness issue was <b>verified</b> (double-refund on webhook retry) and one nit was suppressed as unverifiable.</p>
-          <h4>Changes</h4>
-          <table class="changes-table">
-            <thead><tr><th>File</th><th>Summary</th></tr></thead>
-            <tbody>
-              <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td></tr>
-              <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td></tr>
-              <tr><td>test/refund.test.ts</td><td>New retry regression test</td></tr>
-            </tbody>
-          </table>
+          <p>Refactors the refund flow and adds Stripe retry handling. The refund path is no longer idempotent, so a webhook re-delivery can issue a second refund.</p>
+          <p style="color:var(--text-dim)"><b>2 findings</b> across <b>1 file</b> — <span class="badge badge-high">high</span> 1 · <span class="badge badge-low">low</span> 1</p>
           <div class="chip-row">
-            <span class="badge">sequence diagram generated</span>
-            <span class="badge">labels: payments, needs-review</span>
-            <span class="badge">linked: JIRA PAY-142</span>
+            <span class="badge">3 files changed · <code>+73 −8</code></span>
             <span class="badge">Review effort <span class="effort" style="margin-left:6px"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> 3/5</span>
           </div>
+          <h4>Changes</h4>
+          <table class="changes-table">
+            <thead><tr><th>File</th><th>What changed</th><th>Lines</th><th>Findings</th></tr></thead>
+            <tbody>
+              <tr><td>services/payments/refund.ts</td><td>Issue the refund against the original charge</td><td><code>+18 −6</code> · L86–L97</td><td>2</td></tr>
+              <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td><td><code>+31 −2</code> · L12–L42</td><td>—</td></tr>
+              <tr><td>test/refund.test.ts</td><td>New retry regression test</td><td><code>+24 −0</code> · L1–L24</td><td>—</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -132,9 +133,9 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
         <div class="cr-comment">
           <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
           <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund. I reproduced it and confirmed the guard fixes it:</div>
-          <div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts → <span class="t-red">exit 1</span>  <span class="t-dim">double refund</span>
-<span class="t-purple">[after-fix]</span> refund.retry.test.ts → <span class="t-green">exit 0</span>  <span class="t-dim">single refund</span>
-<span class="t-purple">[suite]</span>     42 tests             → <span class="t-green">exit 0</span></div>
+          <div class="cc-proof"><span class="t-purple">[repro]</span>     node --test refund.retry.test.mjs → <span class="t-red">exit 1</span>  <span class="t-dim">bug reproduced</span>
+<span class="t-purple">[after-fix]</span> node --test refund.retry.test.mjs → <span class="t-green">exit 0</span>  <span class="t-dim">fix resolves it</span>
+<span class="t-purple">[suite]</span>     node --test                       → <span class="t-green">exit 0</span>  <span class="t-dim">suite still green</span></div>
           <div class="cc-actions"><span class="btn btn-primary btn-sm">Commit suggestion</span><span class="btn btn-soft btn-sm">View proof</span></div>
         </div>
       </div>
@@ -144,10 +145,10 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
     <div class="showcase-panel" data-panel="premerge">
       <div class="premerge">
         <div class="pm-head"><div><b>Pre-merge checks</b> <span class="badge badge-policy">optional · org rules</span></div><span class="badge badge-high">1 failing</span></div>
-        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">Every new endpoint has an authentication check<div class="pm-sub">2 endpoints scanned · pass</div></div><span class="badge badge-verified">pass</span></div>
-        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">No secrets or credentials committed<div class="pm-sub">gitleaks + trufflehog · pass</div></div><span class="badge badge-verified">pass</span></div>
-        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">PR title follows Conventional Commits<div class="pm-sub">"feat(payments): …" · pass</div></div><span class="badge badge-verified">pass</span></div>
-        <div class="pm-row fail"><span class="pm-ico">✕</span><div class="pm-rule">Public API changes require a changelog entry<div class="pm-sub">refund.ts changed a public signature · missing CHANGELOG.md</div></div><span class="badge badge-critical">fail</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">Every new endpoint must have an authentication check<div class="pm-sub">pass — nothing in the added lines</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">No TODO or FIXME markers in committed code<div class="pm-sub">pass — nothing in the added lines</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">Files must be under 500 lines<div class="pm-sub">3 changed files scanned · pass</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-row fail"><span class="pm-ico">✕</span><div class="pm-rule">Disallow calls to console.log<div class="pm-sub">1 violation in this change · refund.ts:87</div></div><span class="badge badge-critical">fail</span></div>
       </div>
       <p style="color:var(--text-faint);font-size:13.5px;margin-top:16px;max-width:70ch">Pre-merge checks are <b>off by default</b>. An owner turns them on and writes rules in plain English, they compile into deterministic, non-bypassable gates.</p>
     </div>

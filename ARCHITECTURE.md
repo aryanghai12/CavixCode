@@ -39,11 +39,35 @@ GitHub ──pull_request webhook──▶ [Stage 0: edge, Go]
                                    ▼  durable workflow steps:
                           1. fetch diff          (GitHubClient port)
                           2. single LLM pass     (Gateway → LLMProvider port)
-                          3. post inline comments + summary (GitHubClient port)
+                          2c. PRE-MERGE GATE     (Stage 3c, off by default)
+                               the org's plain-English rules, compiled to
+                               deterministic checks over the added lines.
+                               Violations join the findings as immutable facts.
+                          3. VERIFY              (Stage 10: Verifier → Sandbox port)
+                               fetch the real source, reproduce the bug by
+                               running it, apply the fix, re-run, run the suite.
+                               Disproven findings are dropped here.
+                          4. write summary + walkthrough into the PR description
+                          5. post the review: findings anchored to their lines,
+                             each verified one carrying its sandbox transcript
                                    │
                                    ▼
                           GitHub PR review  (verified-comment shape)
 ```
+
+### Where the reader sees what (Stage 1 output surfaces)
+
+Three surfaces, deliberately separated:
+
+| Surface | Carries | Why there |
+| --- | --- | --- |
+| PR **description** | summary, size, review effort, per-file walkthrough | describes the PR itself, read first, never scrolls away under comments. Cavix owns only the block between its `<!-- cavix:summary:* -->` markers — the author's text is preserved byte-for-byte, and a re-review replaces the block instead of stacking a new one. |
+| Review **comment** | findings grouped by file, with line, severity, category | one scannable index of what to fix, plus what was suppressed and why |
+| **Inline** comments | the explanation, the sandbox proof, the one-click suggestion | anchored to the line at fault |
+
+If the description cannot be written (fork PRs, revoked permission), the summary
+falls back into the review comment rather than being lost — which is why the
+description update is attempted *before* the review is posted.
 
 ## Why a Redis Stream *between* Stage 0 and Stage 1
 
@@ -221,6 +245,24 @@ and policy facts) reach the PR; findings proven not to reproduce are dropped. Th
 is why Cavix's comments are facts: each non-trivial one was reproduced in an
 isolated sandbox. The two-backend sandbox rule still holds — verification only ever
 touches the `Sandbox` port, so Docker/Firecracker/Cloudflare are interchangeable.
+
+Two details that decide whether the proof is honest:
+
+- **The generated test is removed before the suite runs.** Otherwise the repo's
+  suite is judged on a test Cavix wrote — and an exploit PoC is *supposed* to
+  fail once the fix lands, so every security verification would report "the
+  suite broke".
+- **The proof is structured data, not prose.** The verifier stamps
+  `Finding.verification` (status, steps, exit codes, reason); the PR comment, the
+  dashboard and the IDE each render it their own way. Nothing downstream has to
+  parse a sentence to know whether something was proven.
+
+Wiring it into Stage 1 needs one thing only the orchestrator can do: **fetch the
+real source**. A diff is not runnable code, so `makeVerifyStep` reads each file a
+finding points at (plus the project manifest) at the reviewed commit before
+handing the sandbox something to run. It is best-effort throughout — if the
+sandbox is down or no toolchain is recognised, the review still posts, just
+without receipts. Verification never gates the review; it gates the *claim*.
 
 ### Stage 5 cross-repo impact (how one trace flows)
 

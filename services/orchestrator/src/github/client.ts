@@ -18,6 +18,12 @@ export interface InlineComment {
   path: string;
   /** 1-based line in the head (new) file; must be a line present in the diff. */
   line: number;
+  /**
+   * First line of a multi-line comment, so GitHub highlights the whole range
+   * instead of one line. Both ends must be in the diff — the poster only sets
+   * this when it has verified that, because a bad start_line 422s the review.
+   */
+  startLine?: number;
   body: string;
 }
 
@@ -49,6 +55,8 @@ export interface PullMeta {
   title: string;
   draft: boolean;
   state: string;
+  /** The PR description as the author wrote it. Cavix splices its summary in. */
+  body: string;
 }
 
 export interface GitHubClient {
@@ -58,6 +66,17 @@ export interface GitHubClient {
   postReview(ref: PullRef, review: ReviewSubmission): Promise<PostedReview>;
   /** Read the PR's current head/base/title — used when a command job has no commit. */
   getPull(ref: PullRef): Promise<PullMeta>;
+  /**
+   * Read one file at a commit. Stage 10 needs the real source to reproduce a
+   * finding in the sandbox — the diff alone is not runnable code. Returns null
+   * when the path does not exist at that commit (deleted, renamed, or binary).
+   */
+  fetchFile(ref: PullRef, path: string, sha?: string): Promise<string | null>;
+  /**
+   * Replace the PR description. Cavix owns only the block between its markers;
+   * the caller is responsible for preserving everything the author wrote.
+   */
+  updatePullBody(ref: PullRef, body: string): Promise<void>;
   /** React to an issue comment (the acknowledgment signal). */
   addReaction(ref: PullRef, commentId: number, content: ReactionContent): Promise<void>;
   /** Post a normal PR conversation comment (status, errors, help, answers). */

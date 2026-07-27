@@ -170,60 +170,108 @@
   };
 
   // ---------- SAMPLE REVIEW (live preview of the configured comment) ----------
+  //
+  // This has to match what the orchestrator's poster actually renders. If you
+  // change the shape of the posted review, change it here too — a preview that
+  // has drifted from reality is worse than no preview.
   async function renderSample() {
     const s = await api(`/api/orgs/${org}/settings`);
     const rs = s.reviewSections || {};
+    const pm = s.preMergeChecks || { enabled: false, rules: [] };
+    // Compile status is needed here too — landing on this page directly must not
+    // show an uncompilable rule as a passing check.
+    if (pm.enabled && pm.rules.length) {
+      settingsRules = [...pm.rules];
+      await checkRuleCompilation();
+    }
     const toneBlurb = {
       concise: "Refund flow refactor. One verified high-severity issue; one nit suppressed.",
-      detailed: "This PR refactors the refund flow and adds retry handling to the payments service. It touches 3 files (+128 / −44). One high-severity correctness issue was verified (double-refund on webhook retry) and one nit was suppressed as unverifiable.",
+      detailed: "This PR refactors the refund flow and adds retry handling to the payments service. One high-severity correctness issue was verified (double-refund on webhook retry) and one nit was suppressed as unverifiable.",
       educational: "This PR refactors the refund flow. Idempotency matters here because payment webhooks can be delivered more than once, so a non-guarded refund path can charge twice. One verified high-severity issue was found and one nit suppressed.",
       assertive: "Refactors the refund flow. There is a verified double-refund on webhook retry that must be fixed before merge. One nit was suppressed.",
       chill: "Nice refund flow cleanup! One thing worth a look: a double-refund on retries (verified). Skipped a tiny nit, nothing blocking.",
     };
-    const chips = [];
-    if (rs.sequenceDiagram) chips.push("sequence diagram generated");
-    if (rs.relatedIssues) chips.push("labels: payments, needs-review");
-    if (rs.relatedIssues) chips.push("linked: JIRA PAY-142");
-    const effort = rs.reviewEffort ? `<span class="badge">Review effort <span class="effort" style="margin-left:6px"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> 3/5</span>` : "";
 
-    const summaryCard = rs.summary ? `
+    // Where the summary block lands is itself a setting.
+    const target = s.summaryInDescription ? "pull request description" : "review comment";
+    const changesTable = rs.changedFiles ? `<h4>Changes</h4><table class="changes-table"><thead><tr><th>File</th><th>What changed</th><th>Lines</th><th>Findings</th></tr></thead><tbody>
+        <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td><td><code>+18 −6</code> · L86–L97</td><td>2</td></tr>
+        <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td><td><code>+31 −2</code> · L12–L42</td><td>—</td></tr>
+        <tr><td>test/refund.test.ts</td><td>New retry regression test</td><td><code>+24 −0</code> · L1–L24</td><td>—</td></tr></tbody></table>` : "";
+    const effort = rs.reviewEffort
+      ? `<div class="chip-row"><span class="badge">3 files changed · <code>+73 −8</code></span><span class="badge">Review effort <span class="effort" style="margin-left:6px"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> 3/5</span></div>`
+      : "";
+
+    const summaryCard = (rs.summary || rs.changedFiles) ? `
       <div class="summary-card" style="margin-bottom:18px">
-        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">summary</span> <span class="ago">preview</span></div>
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">${esc(target)}</span> <span class="ago">preview</span></div>
         <div class="sc-body">
-          <h4>Summary</h4>
-          <p>${esc((toneBlurb[s.tone] || toneBlurb.concise))}</p>
-          ${rs.changedFiles ? `<h4>Changes</h4><table class="changes-table"><thead><tr><th>File</th><th>Summary</th></tr></thead><tbody>
-            <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td></tr>
-            <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td></tr>
-            <tr><td>test/refund.test.ts</td><td>New retry regression test</td></tr></tbody></table>` : ""}
-          ${(chips.length || effort) ? `<div class="chip-row">${chips.map((c) => `<span class="badge">${esc(c)}</span>`).join("")}${effort}</div>` : ""}
+          ${rs.summary ? `<h4>Summary</h4><p>${esc(toneBlurb[s.tone] || toneBlurb.concise)}</p>` : ""}
+          <p style="color:var(--text-dim)"><b>2 findings</b> across <b>1 file</b> — <span class="badge badge-high">high</span> 1 · <span class="badge badge-low">low</span> 1</p>
+          ${effort}
+          ${changesTable}
         </div>
       </div>` : "";
 
+    // The gate panel only exists if the owner turned it on and wrote rules.
+    const gateCard = (pm.enabled && pm.rules.length) ? `
+      <div class="premerge" style="margin-bottom:18px">
+        <div class="pm-head"><div><b>Pre-merge checks</b> <span class="badge badge-policy">your org's rules</span></div>
+          <span class="badge ${s.requestChangesOnFail ? "badge-high" : ""}">${s.requestChangesOnFail ? "a failure blocks merge" : "reporting only"}</span></div>
+        ${pm.rules.slice(0, 4).map((r) => {
+          // Three states, not two: an unknown compile status means we have not
+          // heard back yet, and showing that as a pass is the one thing a gate
+          // preview must never do.
+          const c = ruleCompile[r];
+          const state = !c ? "pending" : c.ok ? "pass" : "skipped";
+          const ico = { pending: "…", pass: "✓", skipped: "⚠" }[state];
+          const sub = {
+            pending: "checking whether this compiles into a check…",
+            pass: "3 changed files scanned · pass",
+            skipped: "does not compile into a check, it will not run",
+          }[state];
+          return `<div class="pm-row ${state === "pass" ? "pass" : ""}"><span class="pm-ico">${ico}</span><div class="pm-rule">${esc(r)}<div class="pm-sub">${sub}</div></div><span class="badge ${state === "pass" ? "badge-verified" : ""}">${state === "pending" ? "checking…" : state}</span></div>`;
+        }).join("")}
+      </div>` : "";
+
+    const findingsCard = `
+      <div class="summary-card" style="margin-bottom:18px">
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">review comment</span> <span class="ago">preview</span></div>
+        <div class="sc-body">
+          <h4>Findings</h4>
+          <table class="changes-table"><thead><tr><th>Line</th><th>Severity</th><th>Category</th><th>Finding</th><th>Detail</th></tr></thead><tbody>
+            <tr><td>87</td><td><span class="badge badge-high">high</span></td><td>correctness</td><td>${rs.proof ? "✅ " : ""}Refund can double-apply on retry</td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
+            <tr><td>12</td><td><span class="badge badge-low">low</span></td><td>maintainability</td><td>Duplicated retry constant</td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
+          </tbody></table>
+        </div>
+      </div>`;
+
     const inlineCard = rs.inlineFindings ? `
       <div class="cr-window">
-        <div class="cr-head"><span class="fname">services/payments/refund.ts</span> <span class="pill-sm">✓ Cavix check passed with 1 verified finding</span></div>
+        <div class="cr-head"><span class="fname">services/payments/refund.ts</span> <span class="pill-sm">line 87</span></div>
         <div class="cr-code">
 <div class="cr-line del"><span class="ln">87</span><span class="k">  await</span> charge.<span class="f">refund</span>(amount)</div>
 <div class="cr-line add"><span class="ln">87</span><span class="k">  if</span> (!refund.<span class="f">isSettled</span>(id)) <span class="k">await</span> charge.<span class="f">refund</span>(amount)</div>
         </div>
         <div class="cr-comment">
-          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=8" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span>${rs.proof ? `<span class="badge badge-verified">✅ verified</span>` : ""}<span class="badge badge-high">high</span></div>
           <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund.</div>
-          ${rs.proof ? `<div class="cc-proof"><span class="t-purple">[repro]</span>     refund.retry.test.ts, <span class="t-red">exit 1</span>
-<span class="t-purple">[after-fix]</span> refund.retry.test.ts, <span class="t-green">exit 0</span>
-<span class="t-purple">[suite]</span>     42 tests, <span class="t-green">exit 0</span></div>` : ""}
+          ${rs.proof ? `<div class="cc-proof"><span class="t-purple">[repro]</span>     node --test refund.retry.test.mjs → <span class="t-red">exit 1</span>  bug reproduced
+<span class="t-purple">[after-fix]</span> node --test refund.retry.test.mjs → <span class="t-green">exit 0</span>  fix resolves it
+<span class="t-purple">[suite]</span>     node --test                      → <span class="t-green">exit 0</span>  suite still green</div>` : ""}
         </div>
       </div>` : "";
 
-    const empty = (!summaryCard && !inlineCard) ? `<div class="empty" style="padding:40px">Nothing enabled. Turn on sections in Review settings to see them here.</div>` : "";
+    const verifyNote = s.verifyFindings
+      ? `Findings are reproduced in a sandbox before posting; anything that can't be reproduced is dropped.`
+      : `Verification is <b>off</b>, so findings post unproven and nothing gets suppressed.`;
 
     content.innerHTML = `
       <div class="panel"><div class="panel-body" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
-        <div><div class="sr-label">This is exactly what Cavix posts on a pull request</div><div class="sr-desc">Built live from your Review settings. Tone: <b>${esc(s.tone)}</b>.</div></div>
+        <div><div class="sr-label">What Cavix will post on a pull request</div><div class="sr-desc">Built live from your Review settings. Tone: <b>${esc(s.tone)}</b> · summary goes in the <b>${esc(target)}</b>. ${verifyNote}</div></div>
         <a class="btn btn-soft btn-sm" onclick="location.hash='settings'">Edit structure &amp; tone</a>
       </div></div>
-      <div style="max-width:860px">${summaryCard}${inlineCard}${empty}</div>`;
+      <div style="max-width:860px">${summaryCard}${gateCard}${findingsCard}${inlineCard}</div>`;
   }
 
   // ---------- REPOS (GitHub App installations → per-repo enable toggles) ----------
@@ -420,6 +468,11 @@
     const rsToggle = (key, label, desc) => `
       <div class="settings-row"><div><div class="sr-label">${label}</div><div class="sr-desc">${desc}</div></div>
       <label class="switch"><input type="checkbox" data-rs="${key}"${rs[key] ? " checked" : ""}><span class="slider"></span></label></div>`;
+    // Not built yet. Showing a live switch for these would promise something the
+    // review does not do, so they are marked and disabled until they are real.
+    const rsSoon = (label, desc) => `
+      <div class="settings-row" style="opacity:.55"><div><div class="sr-label">${label} <span class="badge">soon</span></div><div class="sr-desc">${desc}</div></div>
+      <label class="switch"><input type="checkbox" disabled><span class="slider"></span></label></div>`;
 
     content.innerHTML = `
       <div class="panel">
@@ -432,24 +485,32 @@
         </div>
       </div>
       <div class="panel">
+        <div class="panel-head"><div><h2>Proof &amp; placement</h2><span class="sub">What Cavix does before it speaks, and where it speaks</span></div></div>
+        <div class="panel-body" style="padding-top:6px">
+          ${toggle("verifyFindings", "Execution-grounded verification", "Reproduce each significant finding by running your code in a sealed, network-less sandbox before posting it, and drop the ones that don't reproduce. Turning this off is faster and cheaper, but every finding becomes a claim instead of a fact.", s.verifyFindings)}
+          ${toggle("summaryInDescription", "Put the summary in the PR description", "The summary and file-by-file walkthrough are written into the pull request description, below whatever the author wrote. Off keeps them in the review comment instead.", s.summaryInDescription)}
+        </div>
+      </div>
+      <div class="panel">
         <div class="panel-head"><h2>Tone &amp; merge gate</h2></div>
         <div class="panel-body">
           <div class="settings-row"><div><div class="sr-label">Comment tone</div><div class="sr-desc">How Cavix writes its comments.</div></div>
             <select id="tone" style="min-width:280px">${tones.map(([v, l]) => `<option value="${v}"${s.tone === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
-          <div class="settings-row"><div><div class="sr-label">Fail the check on</div><div class="sr-desc">Severities that make the Cavix status check fail (and can block merge).</div></div>
+          ${toggle("requestChangesOnFail", "Let Cavix request changes", "When something below fails, post the review as <b>Request changes</b> instead of a comment, which blocks merge on a protected branch. Off by default, Cavix never blocks your team unless you say so.", s.requestChangesOnFail)}
+          <div class="settings-row"><div><div class="sr-label">Blocking severities</div><div class="sr-desc">Which severities count as a failure. Only applies while "request changes" is on.</div></div>
             <div>${sevChecks}</div></div>
         </div>
       </div>
       <div class="panel">
         <div class="panel-head"><div><h2>Review comment structure</h2><span class="sub">What the posted PR review includes</span></div><a class="btn btn-soft btn-sm" onclick="location.hash='sample'">Preview</a></div>
         <div class="panel-body" style="padding-top:6px">
-          ${rsToggle("summary", "Summary", "A plain-English walkthrough of the change.")}
-          ${rsToggle("changedFiles", "Changed-files table", "A table of files with one-line descriptions.")}
-          ${rsToggle("sequenceDiagram", "Sequence diagram", "A diagram of the new flow when relevant.")}
-          ${rsToggle("reviewEffort", "Review-effort estimate", "A 1 to 5 estimate of how much review this needs.")}
-          ${rsToggle("relatedIssues", "Labels &amp; linked issues", "Auto labels and linked tickets (Jira / Linear).")}
-          ${rsToggle("inlineFindings", "Inline findings", "Line-level comments with severity and suggestions.")}
-          ${rsToggle("proof", "Verification proof", "The failing test that proves a verified bug.")}
+          ${rsToggle("summary", "Summary", "A plain-English description of what the change does.")}
+          ${rsToggle("changedFiles", "Changed-files walkthrough", "A table of every changed file, what it now does, and the lines that moved.")}
+          ${rsToggle("reviewEffort", "Size &amp; review-effort", "Files changed, lines added/removed, and a 1 to 5 estimate of how much review this needs.")}
+          ${rsToggle("inlineFindings", "Inline findings", "Line-level comments with severity and one-click suggestions. Off moves every explanation into the review comment instead.")}
+          ${rsToggle("proof", "Verification proof", "The sandbox transcript, commands and exit codes, that proves a verified finding.")}
+          ${rsSoon("Sequence diagram", "A diagram of the new flow when relevant.")}
+          ${rsSoon("Labels &amp; linked issues", "Auto labels and linked tickets (Jira / Linear).")}
         </div>
       </div>
       <div class="panel">
@@ -471,16 +532,27 @@
         <div class="panel-head"><div><h2>Pre-merge checks</h2><span class="sub">Optional gate · off by default</span></div>
           <label class="switch"><input type="checkbox" id="pmEnabled"${pm.enabled ? " checked" : ""}><span class="slider"></span></label></div>
         <div class="panel-body">
-          <p class="sr-desc" style="margin-bottom:16px">Write rules in plain English. When enabled, each becomes a deterministic, non-bypassable check that runs before merge, a failing rule fails the Cavix status check.</p>
+          <p class="sr-desc" style="margin-bottom:16px">Write rules in plain English. Each one is compiled into a deterministic check that runs over the files a pull request changes, no model gets a vote on whether it passed. Cavix tells you below whether a rule compiled, because a rule that silently never runs is worse than no rule.</p>
           <div id="rulesList"></div>
           <div class="chip-input"><input id="ruleInput" placeholder="e.g. Every new endpoint must have an authentication check"><button class="btn btn-primary" id="addRule">Add rule</button></div>
+          <details style="margin-top:16px"><summary class="sr-desc" style="cursor:pointer">Rule shapes Cavix can compile today</summary>
+            <ul class="sr-desc" style="margin:10px 0 0 18px;line-height:1.9">
+              <li>Every new endpoint must have an authentication check</li>
+              <li>Disallow calls to <code>console.log</code></li>
+              <li>Ban the <code>request</code> module / package</li>
+              <li>No TODO or FIXME markers in committed code</li>
+              <li>Files must be under 500 lines</li>
+              <li>Every file requires a license header</li>
+            </ul>
+          </details>
         </div>
       </div>
       <button class="btn btn-primary" id="saveSettings">Save settings</button>`;
 
     pfInc = [...(pf.include || [])]; pfExc = [...(pf.exclude || [])]; settingsRules = [...(pm.rules || [])];
     repaintSettings();
-    const addFrom = (inputId, arr) => { const v = $(inputId).value.trim(); if (!v) return; arr.push(v); $(inputId).value = ""; repaintSettings(); };
+    checkRuleCompilation();
+    const addFrom = (inputId, arr) => { const v = $(inputId).value.trim(); if (!v) return; arr.push(v); $(inputId).value = ""; repaintSettings(); if (arr === settingsRules) checkRuleCompilation(); };
     $("pfIncAdd").addEventListener("click", () => addFrom("pfIncInput", pfInc));
     $("pfExcAdd").addEventListener("click", () => addFrom("pfExcInput", pfExc));
     $("addRule").addEventListener("click", () => addFrom("ruleInput", settingsRules));
@@ -488,7 +560,9 @@
       $(inp).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $(btn).click(); } }));
 
     $("saveSettings").addEventListener("click", async () => {
-      const reviewSections = {};
+      // Start from what is stored so the not-yet-built sections (which have no
+      // switch on the page) keep their values instead of being dropped.
+      const reviewSections = Object.assign({}, rs);
       document.querySelectorAll("[data-rs]").forEach((el) => { reviewSections[el.dataset.rs] = el.checked; });
       const patch = {
         tone: $("tone").value,
@@ -502,7 +576,23 @@
       catch (e) { toast(e.message); }
     });
   }
-  let pfInc = [], pfExc = [], settingsRules = [];
+
+  /**
+   * Ask the server which rules actually compiled into a runnable check. Shown
+   * per rule so an owner never believes a gate is protecting them when the
+   * sentence produced nothing.
+   */
+  async function checkRuleCompilation() {
+    if (!settingsRules.length) { ruleCompile = {}; return; }
+    try {
+      const results = await api(`/api/orgs/${org}/policy/compile`, { method: "POST", body: JSON.stringify({ rules: settingsRules }) });
+      ruleCompile = {};
+      results.forEach((r) => { ruleCompile[r.text] = r; });
+      repaintSettings();
+    } catch { /* status is an aid, never a blocker for editing rules */ }
+  }
+
+  let pfInc = [], pfExc = [], settingsRules = [], ruleCompile = {};
   function chipHtml(arr, kind, emptyMsg) {
     return arr.length ? arr.map((v, i) => `<span class="chip"><code>${esc(v)}</code><span class="x" onclick="cavixChipDel('${kind}',${i})">×</span></span>`).join("") : `<span class="chips-empty">${emptyMsg}</span>`;
   }
@@ -511,10 +601,22 @@
     if ($("pfExcList")) $("pfExcList").innerHTML = chipHtml(pfExc, "exc", "Nothing excluded.");
     const rl = $("rulesList");
     if (rl) rl.innerHTML = settingsRules.length
-      ? settingsRules.map((r, i) => `<div class="rule-row"><span class="mono-badge" style="width:24px;height:24px;font-size:11px">${i + 1}</span><span class="rule-txt">${esc(r)}</span><button class="btn btn-danger btn-sm" onclick="cavixChipDel('rule',${i})">Remove</button></div>`).join("")
+      ? settingsRules.map((r, i) => {
+          const c = ruleCompile[r];
+          const status = !c
+            ? `<span class="badge">checking…</span>`
+            : c.ok
+              ? `<span class="badge badge-verified" title="Compiles to ${esc(c.ruleId)}">✓ compiles</span>`
+              : `<span class="badge badge-critical" title="${esc(c.error || "")}">✕ won't run</span>`;
+          return `<div class="rule-row"><span class="mono-badge" style="width:24px;height:24px;font-size:11px">${i + 1}</span><span class="rule-txt">${esc(r)}</span>${status}<button class="btn btn-danger btn-sm" onclick="cavixChipDel('rule',${i})">Remove</button></div>`;
+        }).join("")
       : `<div class="chips-empty" style="padding:6px 0">No rules yet, add one below.</div>`;
   }
-  window.cavixChipDel = function (kind, i) { const a = kind === "inc" ? pfInc : kind === "exc" ? pfExc : settingsRules; a.splice(i, 1); repaintSettings(); };
+  window.cavixChipDel = function (kind, i) {
+    const a = kind === "inc" ? pfInc : kind === "exc" ? pfExc : settingsRules;
+    a.splice(i, 1);
+    repaintSettings();
+  };
 
   // ---------- TEAM ----------
   async function renderTeam() {
@@ -632,47 +734,163 @@
       </div>`;
   }
 
-  // ---------- ADMIN (founder / core team only), redesigned ----------
+  // ---------- ADMIN (founder / core team only) ----------
+  //
+  // The operator's whole picture on one page: who signed up, who is actually
+  // using it, whose trial is about to run out, what that is worth, and the
+  // controls to act on any of it without leaving the row.
+  let adminSort = "activity";
+
   async function renderAdmin() {
-    const orgs = await api(`/api/admin/orgs`);
-    const totals = {
-      orgs: orgs.length,
-      trials: orgs.filter((o) => o.trialActive).length,
-      suspended: orgs.filter((o) => o.suspended).length,
-      reviews: orgs.reduce((a, o) => a + o.reviews, 0),
-    };
-    const rows = orgs.map((o) => {
-      const status = o.suspended ? `<span class="badge badge-critical">suspended</span>` : o.trialActive ? `<span class="badge badge-verified">trial → ${new Date(o.trialEndsAt).toLocaleDateString()}</span>` : `<span class="badge">active</span>`;
-      const limit = o.effectiveReviewsPerDay >= 1000000 ? "∞" : o.effectiveReviewsPerDay;
-      return `<div class="admin-org">
-        <div class="ao-name"><span class="ao-av">${esc(o.name[0].toUpperCase())}</span><div>${esc(o.name)}<div class="ao-meta">${o.members} member${o.members===1?"":"s"} · ${o.repos} repo${o.repos===1?"":"s"} · ${o.reviews} reviews</div></div></div>
-        <div><select onchange="cavixAdmin('${esc(o.name)}',{tier:this.value})"><option value="free"${o.tier==="free"?" selected":""}>Free</option><option value="paid"${o.tier==="paid"?" selected":""}>Paid</option></select></div>
-        <div>${status}</div>
-        <div><b>${limit}</b> <span style="color:var(--text-faint);font-size:12px">/day</span></div>
-        <div class="admin-actions">
-          <button class="btn btn-soft btn-sm" onclick="cavixAdmin('${esc(o.name)}',{trialDays:14})">Trial 14d</button>
-          <button class="btn btn-soft btn-sm" onclick="cavixAdminLimit('${esc(o.name)}')">Limit</button>
-          <button class="btn ${o.suspended?"btn-soft":"btn-danger"} btn-sm" onclick="cavixAdmin('${esc(o.name)}',{suspended:${!o.suspended}})">${o.suspended?"Unsuspend":"Suspend"}</button>
-        </div>
-      </div>`;
-    }).join("");
+    const [stats, orgs] = await Promise.all([api(`/api/admin/stats`), api(`/api/admin/orgs`)]);
+    adminOrgs = orgs;
+
+    const money = (n) => `$${n.toLocaleString()}`;
+    const tile = (label, value, sub, cls) =>
+      `<div class="admin-tile${cls ? " " + cls : ""}"><div class="t-lbl">${label}</div><div class="t-val">${value}</div>${sub ? `<div class="t-sub">${sub}</div>` : ""}</div>`;
+
+    const maxDay = Math.max(1, ...stats.reviews.perDay14);
+    const spark = stats.reviews.perDay14
+      // Buckets end at now, so the last one is the trailing 24h — i.e. today.
+      .map((n, i) => {
+        const daysAgo = 13 - i;
+        const when = daysAgo === 0 ? "today" : `${daysAgo} day${daysAgo === 1 ? "" : "s"} ago`;
+        return `<div class="bar" style="height:${Math.round((n / maxDay) * 100)}%" title="${n} reviews, ${when}"></div>`;
+      })
+      .join("");
+
+    // Things that need a human today, stated plainly rather than buried in a table.
+    const attention = [];
+    if (stats.orgs.trialExpiring7d) attention.push(`<b>${stats.orgs.trialExpiring7d}</b> trial${stats.orgs.trialExpiring7d === 1 ? "" : "s"} end within 7 days`);
+    const noKey = orgs.filter((o) => !o.apiKeySet && o.repos > 0);
+    if (noKey.length) attention.push(`<b>${noKey.length}</b> org${noKey.length === 1 ? " has" : "s have"} repos connected but no AI key — every review fails until they add one`);
+    const atLimit = orgs.filter((o) => o.usagePct >= 90 && o.effectiveReviewsPerDay < 1000000);
+    if (atLimit.length) attention.push(`<b>${atLimit.length}</b> org${atLimit.length === 1 ? " is" : "s are"} at 90%+ of the daily review limit`);
+    if (stats.orgs.suspended) attention.push(`<b>${stats.orgs.suspended}</b> suspended`);
+
     content.innerHTML = `
       <div class="admin-tiles">
-        <div class="admin-tile accent"><div class="t-lbl">Organizations</div><div class="t-val">${totals.orgs}</div></div>
-        <div class="admin-tile"><div class="t-lbl">Active trials</div><div class="t-val">${totals.trials}</div></div>
-        <div class="admin-tile"><div class="t-lbl">Suspended</div><div class="t-val">${totals.suspended}</div></div>
-        <div class="admin-tile"><div class="t-lbl">Total reviews</div><div class="t-val">${totals.reviews}</div></div>
+        ${tile("Organizations", stats.orgs.total, `${stats.orgs.new7d} new this week · ${stats.orgs.activeLast7d} active`, "accent")}
+        ${tile("People", stats.users.total, `${stats.users.new7d} new this week · ${stats.users.withGithub} via GitHub`)}
+        ${tile("Active trials", stats.orgs.trialActive, `${stats.orgs.trialExpiring7d} ending in 7d · ${stats.orgs.trialExpired} expired`)}
+        ${tile("Est. MRR", money(stats.revenue.estimatedMrr), `${stats.revenue.paidSeats} paid seats @ ${money(stats.revenue.pricePerSeat)} · ${money(stats.revenue.pipelineMrr)} in trial`)}
       </div>
+      <div class="admin-tiles">
+        ${tile("Reviews", stats.reviews.total, `${stats.reviews.last24h} today · ${stats.reviews.last7d} this week`)}
+        ${tile("Verified findings", stats.findings.verified, `of ${stats.findings.total} total findings`)}
+        ${tile("Repositories", stats.repos.enabled, `${stats.repos.private} private · ${stats.repos.public} public`)}
+        ${tile("BYOK configured", `${stats.orgs.withApiKey}/${stats.orgs.total}`, "orgs with a working AI key")}
+      </div>
+
+      ${attention.length ? `<div class="panel"><div class="panel-head"><h2>Needs attention</h2></div><div class="panel-body" style="padding-top:6px">
+        ${attention.map((a) => `<div class="settings-row"><div class="sr-desc" style="font-size:14px">${a}</div></div>`).join("")}
+      </div></div>` : ""}
+
       <div class="panel">
-        <div class="panel-head"><div><h2>All organizations</h2><span class="sub">you are a platform admin</span></div><input id="adminSearch" placeholder="Search orgs…" style="max-width:220px"></div>
-        <div id="adminRows">${rows}</div>
+        <div class="panel-head"><div><h2>Platform activity</h2><span class="sub">reviews per day, last 14 days</span></div>
+          <span class="badge">${stats.findings.accepted} accepted · ${stats.findings.rejected} rejected</span></div>
+        <div class="panel-body"><div class="spark">${spark}</div>
+          <div style="display:flex;justify-content:space-between;color:var(--text-faint);font-size:12px;margin-top:10px"><span>14d ago</span><span>today</span></div>
+        </div>
       </div>
-      <div class="panel"><div class="panel-body"><div class="sr-desc">Only emails in <code>CAVIX_ADMIN_EMAILS</code> reach this console. Tier, trial, limit and suspend changes take effect immediately for that org's reviews. See GUIDE.md §8E.</div></div></div>`;
-    const search = $("adminSearch");
-    if (search) search.addEventListener("input", (e) => {
-      const q = e.target.value.toLowerCase();
-      document.querySelectorAll(".admin-org").forEach((el) => { el.style.display = el.querySelector(".ao-name").textContent.toLowerCase().includes(q) ? "" : "none"; });
+
+      <div class="panel">
+        <div class="panel-head"><div><h2>All organizations</h2><span class="sub">${orgs.length} total · you are a platform admin</span></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="adminSort" style="max-width:170px">
+              <option value="activity">Most recently active</option>
+              <option value="reviews">Most reviews</option>
+              <option value="members">Most members</option>
+              <option value="trial">Trial ending soonest</option>
+              <option value="name">Name (A→Z)</option>
+            </select>
+            <input id="adminSearch" placeholder="Search orgs…" style="max-width:200px">
+          </div></div>
+        <div id="adminRows"></div>
+      </div>
+      <div class="panel"><div class="panel-body"><div class="sr-desc">Only emails in <code>CAVIX_ADMIN_EMAILS</code> reach this console. Tier, trial, limit and suspend take effect on that org's very next review. MRR is an <b>estimate</b> (seats × <code>CAVIX_PRICE_PER_SEAT</code>), not billed revenue, connect Stripe for real numbers. See GUIDE.md §8E.</div></div></div>`;
+
+    $("adminSort").value = adminSort;
+    $("adminSort").addEventListener("change", (e) => { adminSort = e.target.value; paintAdminRows($("adminSearch").value); });
+    $("adminSearch").addEventListener("input", (e) => paintAdminRows(e.target.value));
+    paintAdminRows("");
+  }
+
+  let adminOrgs = [];
+  function paintAdminRows(query) {
+    const q = (query || "").toLowerCase();
+    const sorters = {
+      activity: (a, b) => (b.lastActivityAt || "").localeCompare(a.lastActivityAt || ""),
+      reviews: (a, b) => b.reviews - a.reviews,
+      members: (a, b) => b.members - a.members,
+      trial: (a, b) => (a.trialDaysLeft ?? 1e9) - (b.trialDaysLeft ?? 1e9),
+      name: (a, b) => a.name.localeCompare(b.name),
+    };
+    const rows = adminOrgs
+      .filter((o) => o.name.toLowerCase().includes(q))
+      .sort(sorters[adminSort] || sorters.activity)
+      .map(adminRow)
+      .join("");
+    const el = $("adminRows");
+    if (!el) return;
+    el.innerHTML = rows || `<div class="empty" style="padding:32px">No organizations match “${esc(query)}”.</div>`;
+
+    // Handlers are bound here, not written into onclick attributes. The org name
+    // is user-chosen text: interpolating it into inline JS lets a workspace named
+    // with a quote run script in a platform admin's session.
+    el.querySelectorAll("[data-org-action]").forEach((node) => {
+      const org = node.dataset.org;
+      const action = node.dataset.orgAction;
+      if (action === "tier") {
+        node.addEventListener("change", () => window.cavixAdmin(org, { tier: node.value }));
+      } else if (action === "trial") {
+        node.addEventListener("click", () => window.cavixAdminTrial(org));
+      } else if (action === "limit") {
+        node.addEventListener("click", () => window.cavixAdminLimit(org));
+      } else if (action === "suspend") {
+        node.addEventListener("click", () => window.cavixAdmin(org, { suspended: node.dataset.suspend === "true" }));
+      }
     });
+  }
+
+  function adminRow(o) {
+    const status = o.suspended
+      ? `<span class="badge badge-critical">suspended</span>`
+      : o.trialActive
+        ? `<span class="badge badge-verified">trial · ${o.trialDaysLeft}d left</span>`
+        : o.trialDaysLeft !== undefined && o.trialDaysLeft <= 0
+          ? `<span class="badge badge-high">trial ended</span>`
+          : `<span class="badge">${esc(o.tier)}</span>`;
+    const limit = o.effectiveReviewsPerDay >= 1000000 ? "∞" : o.effectiveReviewsPerDay;
+    const usage = o.effectiveReviewsPerDay >= 1000000
+      ? `<span style="color:var(--text-faint);font-size:12px">${o.reviewsToday} today</span>`
+      : `<div class="usage-bar" title="${o.reviewsToday} of ${limit} today"><span style="width:${o.usagePct}%"></span></div><span style="color:var(--text-faint);font-size:12px">${o.reviewsToday}/${limit}</span>`;
+    const flags = [
+      o.apiKeySet ? "" : `<span class="badge badge-high" title="No BYOK key saved, reviews will fail">no key</span>`,
+      o.verifyFindings ? "" : `<span class="badge" title="Verification is off for this org">unverified</span>`,
+    ].filter(Boolean).join(" ");
+    const last = o.lastActivityAt ? `last review ${timeAgo(o.lastActivityAt)}` : "never reviewed";
+
+    return `<div class="admin-org">
+      <div class="ao-name"><span class="ao-av">${esc(o.name[0].toUpperCase())}</span><div>${esc(o.name)} ${flags}
+        <div class="ao-meta">${o.members} member${o.members === 1 ? "" : "s"} · ${o.repos} repo${o.repos === 1 ? "" : "s"} · ${o.reviews} reviews · ${last}</div></div></div>
+      <div><select data-org-action="tier" data-org="${esc(o.name)}"><option value="free"${o.tier === "free" ? " selected" : ""}>Free</option><option value="paid"${o.tier === "paid" ? " selected" : ""}>Paid</option></select></div>
+      <div>${status}</div>
+      <div style="display:flex;flex-direction:column;gap:4px;min-width:96px">${usage}</div>
+      <div class="admin-actions">
+        <button class="btn btn-soft btn-sm" data-org-action="trial" data-org="${esc(o.name)}">Trial…</button>
+        <button class="btn btn-soft btn-sm" data-org-action="limit" data-org="${esc(o.name)}">Limit</button>
+        <button class="btn ${o.suspended ? "btn-soft" : "btn-danger"} btn-sm" data-org-action="suspend" data-org="${esc(o.name)}" data-suspend="${!o.suspended}">${o.suspended ? "Unsuspend" : "Suspend"}</button>
+      </div>
+    </div>`;
+  }
+
+  function timeAgo(iso) {
+    const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+    return `${Math.round(mins / 1440)}d ago`;
   }
   window.cavixAdmin = async function (org, patch) {
     try { await api(`/api/admin/orgs/${encodeURIComponent(org)}`, { method: "POST", body: JSON.stringify(patch) }); toast(`Updated ${org}`); go("admin"); }
@@ -684,5 +902,12 @@
     const n = v.trim() === "" ? null : Number(v);
     if (v.trim() !== "" && (isNaN(n) || n < 0)) return toast("Enter a non-negative number");
     window.cavixAdmin(org, { reviewsPerDay: n });
+  };
+  window.cavixAdminTrial = function (org) {
+    const v = prompt(`Trial length in days for ${org}\n(a number to start or extend, or 0 to end the trial now)`, "14");
+    if (v === null) return;
+    const n = Number(v);
+    if (isNaN(n) || n < 0) return toast("Enter a non-negative number of days");
+    window.cavixAdmin(org, n === 0 ? { endTrial: true } : { trialDays: n });
   };
 })();
