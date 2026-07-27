@@ -4,7 +4,10 @@ import { refFromJob } from "../github/client.ts";
 import type { Reviewer } from "../reviewer/reviewer.ts";
 import { buildReviewSubmission } from "../poster/poster.ts";
 import type { ReviewHandler } from "./engine.ts";
-import { pickBestModel, renderSuggestions } from "../byok/models.ts";
+import { rankModels, renderSuggestions } from "../byok/models.ts";
+
+/** How many alternative models to try before giving up. Each try is a real call. */
+const MAX_HEAL_ATTEMPTS = 5;
 
 // The review workflow body: the durable steps that turn a ReviewJob into a posted
 // PR review. Each step is a clean await so a future Temporal port can wrap them as
@@ -209,27 +212,37 @@ export async function runReview(
  * Returns the new model id, or "" if we could not determine a replacement (in
  * which case the caller reports the original failure).
  */
-async function healModel(
-  deps: ReviewWorkflowDeps,
-  org: string,
-  failure: string,
-  log: WorkflowLogger,
-): Promise<string> {
-  if (!deps.suggestModels) return "";
+/** The model id the provider rejected, parsed out of its error message. */
+export function deadModelFrom(failure: string): string {
+  return (
+    /models\/([\w.\-]+)/.exec(failure)?.[1] ??
+    /`([\w.\-]+)`/.exec(failure)?.[1] ??
+    /model[:\s]+"?([\w.\-]{3,})"?/i.exec(failure)?.[1] ??
+    ""
+  );
+}
+
+/**
+ * Candidates to try when the saved model is rejected, best first.
+ *
+ * The failed model is EXCLUDED even though the provider still lists it. Google's
+ * models.list is a global catalogue, not a per-key entitlement check: it happily
+ * returns `gemini-2.5-flash` while generateContent 404s it for keys created after
+ * the cutoff. Leaving it in made the ranker return the dead model as its own
+ * replacement, so healing silently gave up — which is exactly what happened.
+ */
+async function healCandidates(deps: ReviewWorkflowDeps, org: string, failure: string): Promise<string[]> {
+  if (!deps.suggestModels) return [];
   try {
     const available = await deps.suggestModels(org);
-    if (available.length === 0) return "";
-    // The dead id is in the provider's error; fall back to "" so ranking still
-    // works off the available list alone.
-    const dead = /models\/([\w.\-]+)/.exec(failure)?.[1] ?? /`([\w.\-]+)`/.exec(failure)?.[1] ?? "";
-    const replacement = pickBestModel(dead, available);
-    if (!replacement || replacement === dead) return "";
-    const saved = deps.saveModel ? await deps.saveModel(org, replacement) : false;
-    log.info("auto-healed an unavailable model", { org, from: dead, to: replacement, persisted: saved });
-    return replacement;
-  } catch (err) {
-    log.error("model auto-heal failed", { org, err: (err as Error).message });
-    return "";
+    const dead = deadModelFrom(failure).toLowerCase();
+    const usable = available.filter((m) => m.toLowerCase() !== dead);
+    return rankModels(dead, usable);
+  } catch {
+    // Healing is a best-effort recovery. If we cannot even find out what this key
+    // can call, fall back to reporting the ORIGINAL failure — never replace a
+    // clear provider error with an unrelated "control-plane unreachable".
+    return [];
   }
 }
 
@@ -268,17 +281,41 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
     try {
       let outcome;
       try {
-        outcome = await runReview(job, deps, { org, model: healedTo });
+        outcome = await runReview(job, deps, { org });
       } catch (err) {
-        // SELF-HEAL: providers retire models, so the model saved months ago can
-        // stop working with no change on our side. Rather than fail and wait for
-        // a human, switch to a model this key can actually call, persist it, and
-        // finish the review now. Anything else still throws.
-        const first = (err as Error).message;
-        if (!isModelUnavailable(first)) throw err;
-        healedTo = await healModel(deps, org ?? job.org, first, log);
-        if (!healedTo) throw err;
-        outcome = await runReview(job, deps, { org, model: healedTo });
+        // SELF-HEAL: providers retire models, so a model saved months ago can stop
+        // working with no change on our side. Rather than fail and wait for a
+        // human, switch to one this key can actually call and finish the review
+        // now. Anything that is not a model problem still throws.
+        if (!shouldTryAnotherModel((err as Error).message)) throw err;
+
+        const orgId = org ?? job.org;
+        // Try candidates in rank order: the provider's catalogue is global, so a
+        // listed model may also turn out to be closed to this key. Bounded, because
+        // each attempt is a real (billable) call.
+        const candidates = (await healCandidates(deps, orgId, (err as Error).message)).slice(0, MAX_HEAL_ATTEMPTS);
+        let lastErr = err;
+        for (const candidate of candidates) {
+          try {
+            outcome = await runReview(job, deps, { org, model: candidate });
+            healedTo = candidate;
+            const saved = deps.saveModel ? await deps.saveModel(orgId, candidate) : false;
+            log.info("auto-healed an unavailable model", {
+              org: orgId, from: deadModelFrom((err as Error).message), to: candidate, persisted: saved,
+            });
+            break;
+          } catch (retryErr) {
+            lastErr = retryErr;
+            // Keep walking only while the reason is model-specific. A real rate
+            // limit or a bad key affects every candidate equally, so stop there
+            // rather than burning quota proving it.
+            if (!shouldTryAnotherModel((retryErr as Error).message)) throw retryErr;
+            log.info("healing candidate unusable for this key, trying the next", {
+              org: orgId, candidate, err: (retryErr as Error).message.slice(0, 120),
+            });
+          }
+        }
+        if (!outcome) throw lastErr;
       }
       await react(deps, job, ref, "rocket");
       if (healedTo && isCommandJob(job)) {
@@ -315,7 +352,11 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         let extra = "";
         if (isModelUnavailable(message) && deps.suggestModels) {
           try {
-            extra = renderSuggestions(await deps.suggestModels(org ?? job.org));
+            const all = await deps.suggestModels(org ?? job.org);
+            const dead = deadModelFrom(message).toLowerCase();
+            // Never suggest the model that just failed — it is still in the
+            // provider's catalogue, but it demonstrably does not work here.
+            extra = renderSuggestions(all.filter((mm) => mm.toLowerCase() !== dead));
           } catch {
             /* diagnostics only — never turn this into a second failure */
           }
@@ -381,6 +422,25 @@ export function isModelUnavailable(message: string): boolean {
     /HTTP 404/.test(message) ||
     /no longer available|does not exist|not found|NOT_FOUND|unknown model|invalid model/i.test(message)
   );
+}
+
+/**
+ * Does this model have NO quota at all for this key, as opposed to the key
+ * having gone too fast?
+ *
+ * `limit: 0` is granted PER MODEL, not per account: a free Gemini key can hold
+ * 20 requests/day on 2.5-flash and exactly 0 on 2.5-pro. So this is not a
+ * "wait and retry" condition, it means this particular model is unusable here
+ * and healing should move on to the next candidate. A normal 429 (a real rate
+ * limit) does apply account-wide and must stop the walk.
+ */
+export function isZeroQuota(message: string): boolean {
+  return /limit:\s*0\b/.test(message) || /quota.*\blimit\W+0\b/i.test(message);
+}
+
+/** Reasons to try a different model rather than give up. */
+function shouldTryAnotherModel(message: string): boolean {
+  return isModelUnavailable(message) || isZeroQuota(message);
 }
 
 /**

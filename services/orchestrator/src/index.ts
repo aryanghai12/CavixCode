@@ -18,6 +18,8 @@ export {
   makeReviewHandler,
   isPermanentFailure,
   isModelUnavailable,
+  isZeroQuota,
+  deadModelFrom,
   cleanUp,
   type ReviewOutcome,
   type ReviewWorkflowDeps,
@@ -29,4 +31,4 @@ export { RedisStreamSource } from "./bridge/redisSource.ts";
 export { pumpOnce, runBridge } from "./bridge/bridge.ts";
 
 export { loadConfig, type OrchestratorConfig } from "./config.ts";
-export { makeModelSuggester, makeModelSaver, pickBestModel, renderSuggestions, type ModelSuggester } from "./byok/models.ts";
+export { makeModelSuggester, makeModelSaver, pickBestModel, rankModels, renderSuggestions, type ModelSuggester } from "./byok/models.ts";

@@ -40,34 +40,64 @@ export function makeModelSuggester(opts: ModelSuggesterOptions): ModelSuggester 
  * something less stable than what they had.
  */
 export function pickBestModel(current: string, available: string[]): string | null {
-  if (available.length === 0) return null;
+  const ranked = rankModels(current, available);
+  if (ranked.length === 0) return null;
+  // Keeping a still-listed current choice is right when VALIDATING a selection.
+  // It is wrong when REPLACING one that just failed — callers that are healing
+  // must exclude the dead id first (see rankModels/healing).
   if (available.includes(current)) return current;
+  return ranked[0];
+}
+
+/**
+ * Rank candidates best-first for a given current model.
+ *
+ * Separate from pickBestModel because healing needs the whole ordered list, not
+ * just the winner: a provider can list a model it will not actually serve to
+ * your key, so the first candidate may fail too and we move to the next.
+ */
+export function rankModels(current: string, available: string[]): string[] {
+  if (available.length === 0) return [];
 
   const cur = current.toLowerCase().replace(/^models\//, "");
   // "gemini-2.5-flash" -> ["gemini","2.5","flash"]
   const curParts = cur.split(/[-.]/).filter(Boolean);
 
+  // Weights are ordered by what actually decides whether a review succeeds.
+  // "Will this model serve me at all" beats "is it the same generation", because
+  // family affinity is only a nicety while quota is the difference between a
+  // review and a 429.
   const score = (id: string): number => {
     const m = id.toLowerCase();
     let s = 0;
-    // Shared leading tokens = same family/generation as what they picked.
+
+    // 1. Same family/generation — a tiebreaker, not the deciding factor.
     const parts = m.split(/[-.]/).filter(Boolean);
+    let shared = 0;
     for (let i = 0; i < Math.min(parts.length, curParts.length); i++) {
       if (parts[i] !== curParts[i]) break;
-      s += 30;
+      shared++;
     }
-    // Prefer capable, stable tiers.
-    if (/\bpro\b|opus/.test(m)) s += 12;
+    s += shared * 8;
+    if (shared === 0) s -= 25; // a different provider's family entirely
+
+    // 2. Tier — the dominant signal, and deliberately the OPPOSITE of "best
+    //    model". The catalogue says nothing about quota, and on a free Gemini key
+    //    the pro tiers are exactly the ones granted 0 requests/day, so preferring
+    //    them walks straight into a 429. Flash and lite carry the free quota.
+    //    Anyone who wants pro can still select it by hand.
+    if (/flash|sonnet|haiku|mini/.test(m)) s += 40;
+    if (/lite/.test(m)) s += 6;
+    if (/\bpro\b|ultra|opus/.test(m)) s -= 40;
     if (/latest/.test(m)) s += 8;
-    if (/flash|sonnet/.test(m)) s += 6;
-    // Never auto-select something experimental over a stable option.
-    if (/preview|exp|experimental|beta|thinking|tuning/.test(m)) s -= 40;
-    if (/lite|nano|mini|haiku|embedding|vision|image|tts|audio/.test(m)) s -= 10;
+
+    // 3. Hard exclusions — never auto-select these over a stable text model.
+    if (/preview|exp|experimental|thinking|tuning/.test(m)) s -= 120;
+    if (/embedding|vision|image|tts|audio|robotics|veo|imagen|lyria|banana|live/.test(m)) s -= 200;
     return s;
   };
 
-  const ranked = [...available].sort((a, b) => score(b) - score(a) || a.localeCompare(b));
-  return ranked[0] ?? null;
+  return [...available].sort((a, b) => score(b) - score(a) || a.localeCompare(b));
 }
 
 /** Persist an auto-selected model so the next review, and the dashboard, agree. */
