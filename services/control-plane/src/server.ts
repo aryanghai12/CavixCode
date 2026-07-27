@@ -17,6 +17,7 @@ import {
 } from "./auth.ts";
 import type { OrgTier } from "./store.ts";
 import * as gh from "./github.ts";
+import { compileEnglishRule } from "@cavix/policy";
 import {
   listAnthropicModels,
   listGoogleModels,
@@ -321,6 +322,7 @@ async function apiRoute(
     if (!isPlatformAdmin(s.email)) return void sendJson(res, 403, { error: "forbidden: platform admin only" });
 
     if (m === "GET" && p === "/api/admin/orgs") return void sendJson(res, 200, store.listOrgsAdmin());
+    if (m === "GET" && p === "/api/admin/stats") return void sendJson(res, 200, store.platformStats());
 
     const am = /^\/api\/admin\/orgs\/([^/]+)$/.exec(p);
     if (m === "POST" && am) {
@@ -395,6 +397,34 @@ async function apiRoute(
     return void sendJson(res, 200, { llmModel: updated.llmModel });
   }
 
+  // Internal: everything the orchestrator must obey for this org's reviews.
+  //
+  // One call, one source of truth. These are the switches the repo owner flipped
+  // in the dashboard — verification, where the summary goes, the pre-merge gate,
+  // whether Cavix may request changes. The orchestrator has no defaults of its
+  // own for them: what the owner chose on the site is what runs.
+  im = /^\/api\/internal\/orgs\/([^/]+)\/review-config$/.exec(p);
+  if (m === "GET" && im) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(im[1]);
+    const s = store.getSettings(org);
+    return void sendJson(res, 200, {
+      verifyFindings: s.verifyFindings,
+      summaryInDescription: s.summaryInDescription,
+      requestChangesOnFail: s.requestChangesOnFail,
+      failOn: s.failOn,
+      autoReview: s.autoReview,
+      reviewDraftPRs: s.reviewDraftPRs,
+      preMergeChecks: s.preMergeChecks,
+      pathFilters: s.pathFilters,
+      reviewSections: s.reviewSections,
+      tone: s.tone,
+    });
+  }
+
   // Execution gatekeeper: is this "owner/repo" enabled for review in the dashboard?
   if (m === "GET" && p === "/api/internal/repos/enabled") {
     const token = process.env.CAVIX_INTERNAL_TOKEN;
@@ -463,6 +493,28 @@ async function apiRoute(
       const body = await readJson(req);
       return void sendJson(res, 200, store.updateSettings(org, body as Record<string, never>));
     }
+  }
+
+  // Does each plain-English pre-merge rule actually compile into a deterministic
+  // check? Writing a rule that silently never runs is the worst outcome for a
+  // gate, so the dashboard shows compile status per rule as you type.
+  mm = /^\/api\/orgs\/([^/]+)\/policy\/compile$/.exec(p);
+  if (m === "POST" && mm) {
+    const org = decodeURIComponent(mm[1]);
+    const auth = requireOrg(req, res, store, org);
+    if (!auth) return;
+    const body = await readJson(req);
+    const rules: string[] = Array.isArray(body.rules) ? body.rules.map(String) : [];
+    return void sendJson(
+      res,
+      200,
+      rules.map((text) => {
+        const r = compileEnglishRule(text);
+        return r.ok
+          ? { text, ok: true, ruleId: r.rule.id, title: r.rule.title, severity: r.rule.severity, matcher: r.matcher }
+          : { text, ok: false, error: r.error };
+      }),
+    );
   }
 
   mm = /^\/api\/orgs\/([^/]+)\/apikey$/.exec(p);

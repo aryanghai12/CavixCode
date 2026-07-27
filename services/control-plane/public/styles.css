@@ -606,6 +606,12 @@ select option { background: #0D1526; color: var(--text); }
 .admin-tile .t-lbl { color: var(--text-faint); font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .admin-tile .t-val { font-size: 30px; font-weight: 800; letter-spacing: -.03em; margin-top: 6px; }
 .admin-tile.accent .t-val { color: var(--text); }
+.admin-tile .t-sub { color: var(--text-faint); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+/* Per-org daily usage against the effective review limit. */
+.usage-bar { background: var(--bg-elev); border-radius: 5px; height: 6px; overflow: hidden; }
+.usage-bar > span { display: block; height: 100%; background: var(--brand-grad); }
+/* The compile status sits between the rule text and its Remove button. */
+.rule-row .badge { flex: none; }
 .admin-org { display: grid; grid-template-columns: 1.4fr .8fr 1fr .9fr auto; align-items: center; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--border-soft); }
 .admin-org:last-child { border-bottom: none; }
 .admin-org:hover { background: rgba(59,130,246,.06); }
