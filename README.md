@@ -266,7 +266,7 @@ dishonest claim in a product whose whole pitch is that it does not make those.
 | 9 | Adjudication: dedupe, vote, calibrate, threshold | yes | **yes** |
 | 10 | Execution-grounded verification: reproduce, PoC, fix-and-run | yes | **yes** |
 | 11 | Synthesis and posting | yes (5 platforms) | yes, GitHub only |
-| 12 | Feedback and learning loop | yes | decisions are recorded, nothing consumes them yet |
+| 12 | Feedback and learning loop | yes | **yes**, per-category confidence bars from your own decisions |
 | 13 | Teardown, zero retention, observability, cost accounting | yes | sandbox teardown and cost accounting |
 
 Stages 3 through 9 are composed by [packages/pipeline/](packages/pipeline/) and
@@ -299,6 +299,16 @@ The path a pull request takes:
 7. The check run closes with its conclusion and a link to the review.
 8. The review is recorded on the dashboard, where accepting or rejecting a
    finding feeds the calibration loop.
+
+Step 8 is not decoration. Once a workspace has ruled on enough findings, Cavix
+works out the confidence bar its own decisions justify, per category, and Stage 9
+uses that instead of the default on the next pull request. It only moves a bar
+when the findings a team rejected actually sat at a different confidence from the
+ones it accepted, because a threshold that cannot tell them apart would drop the
+good findings at the same rate as the bad. The Learnings page shows every bar,
+the decisions behind it, and why any category was left alone. A category can be
+made quieter this way and never silenced: there is a ceiling, and a bad
+fortnight ages out of the 90-day window on its own.
 
 Cavix posts as a plain comment by default and never blocks a merge. Blocking is
 off unless an owner turns it on, and even then it only escalates for a failing

@@ -453,7 +453,11 @@ export async function runReview(
   if (deep) {
     try {
       const [pipeline, prose] = await Promise.all([
-        deep({ org, title: job.title, diff, ref }),
+        // Stage 12 closes here. The per-category bars this workspace taught
+        // Cavix came back on the review-config fetch above, which every review
+        // already makes, so feeding them in costs nothing: no extra call, no
+        // extra latency, and an empty object when there is nothing learned yet.
+        deep({ org, title: job.title, diff, ref, thresholdByCategory: config.thresholdByCategory }),
         deps.reviewer.summarise(proseInput),
       ]);
       signals = pipeline;
@@ -482,6 +486,7 @@ export async function runReview(
           deterministic: signals.deterministicCount,
           agents_reporting: signals.ensembleAgents,
           dropped_by_adjudication: signals.droppedCount,
+          calibrated_categories: signals.calibratedCategories,
           ast_symbols: signals.astSymbols,
         }
       : {}),

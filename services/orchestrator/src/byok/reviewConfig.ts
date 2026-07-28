@@ -55,6 +55,21 @@ export interface OrgReviewConfig {
   /** The org's chosen writing voice for everything the model produces. */
   tone: string;
   pathFilters: PathFilterConfig;
+  /**
+   * Stage 12 — the confidence bar this workspace has taught Cavix, per category.
+   *
+   * It rides on THIS call rather than getting one of its own, and that is the
+   * whole reason it is here. The workflow already fetches the review config once
+   * per review and caches it, so a workspace with a calibration costs exactly
+   * the same number of round trips as one without. A second endpoint would have
+   * put a control-plane hop in front of every pull request in the deployment,
+   * for a number that changes when a human clicks Accept.
+   *
+   * Empty is the normal state: a new workspace, a workspace whose decisions do
+   * not separate, or a control-plane that could not be reached. All three mean
+   * Stage 9 uses its own default, which is what it did before this existed.
+   */
+  thresholdByCategory: Record<string, number>;
 }
 
 export const ALL_SECTIONS: ReviewSections = {
@@ -76,6 +91,7 @@ export const DEFAULT_REVIEW_CONFIG: OrgReviewConfig = {
   reviewDraftPRs: false,
   tone: "concise",
   pathFilters: { include: [], exclude: [] },
+  thresholdByCategory: {},
 };
 
 export type ReviewConfigFetcher = (org: string) => Promise<OrgReviewConfig>;
@@ -185,5 +201,28 @@ export function coerce(value: unknown): OrgReviewConfig {
     reviewDraftPRs: v.reviewDraftPRs === true,
     tone: typeof v.tone === "string" && v.tone.trim() !== "" ? v.tone : DEFAULT_REVIEW_CONFIG.tone,
     pathFilters: { include: globs(pf.include), exclude: globs(pf.exclude) },
+    thresholdByCategory: thresholds(v.thresholdByCategory),
   };
+}
+
+/**
+ * Narrow the learned thresholds off the wire.
+ *
+ * This one is worth being paranoid about, because a bad number here does not
+ * fail loudly: it silently drops a customer's findings on every review until
+ * somebody notices. A value that is not a finite number in [0,1] is not a
+ * threshold, and an older control-plane that sends nothing at all must land on
+ * "no calibration", never on "threshold 0" (post everything) or "threshold
+ * undefined" (which reads as 0 in a comparison).
+ */
+function thresholds(value: unknown): Record<string, number> {
+  if (typeof value !== "object" || value === null) return {};
+  const out: Record<string, number> = {};
+  for (const [category, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
+    if (raw < 0 || raw > 1) continue;
+    if (category.trim() === "") continue;
+    out[category] = raw;
+  }
+  return out;
 }

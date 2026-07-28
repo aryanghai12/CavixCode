@@ -430,6 +430,18 @@ async function apiRoute(
     if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
     const org = decodeURIComponent(im[1]);
     const s = store.getSettings(org);
+    // Stage 12 rides along here rather than on an endpoint of its own. The
+    // orchestrator makes this call once per review and caches it; a separate
+    // one would have added a control-plane round trip to every pull request in
+    // the deployment for a number that only changes when a human clicks Accept.
+    // Best-effort: a calibration that cannot be computed costs this review its
+    // learned bars, never the review.
+    let thresholdByCategory: Record<string, number> = {};
+    try {
+      thresholdByCategory = store.calibration(org).thresholdByCategory;
+    } catch {
+      /* the orchestrator falls back to Stage 9's own default */
+    }
     return void sendJson(res, 200, {
       verifyFindings: s.verifyFindings,
       summaryInDescription: s.summaryInDescription,
@@ -441,6 +453,7 @@ async function apiRoute(
       pathFilters: s.pathFilters,
       reviewSections: s.reviewSections,
       tone: s.tone,
+      thresholdByCategory,
     });
   }
 
@@ -576,7 +589,7 @@ async function apiRoute(
 
   mm = /^\/api\/orgs\/([^/]+)\/repos\/([^/]+)$/.exec(p);
   if (m === "DELETE" && mm) {
-    const auth = requireOrg(req, res, store, decodeURIComponent(mm[1]));
+    const auth = requireOrg(req, res, decodeURIComponent(mm[1]));
     if (!auth) return;
     const ok = store.removeRepo(decodeURIComponent(mm[1]), decodeURIComponent(mm[2]));
     return void sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: "no such repo" });
@@ -597,7 +610,7 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/settings$/.exec(p);
   if (mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrg(req, res, store, org);
+    const auth = requireOrg(req, res, org);
     if (!auth) return;
     if (m === "GET") return void sendJson(res, 200, store.getSettings(org));
     if (m === "PUT" || m === "PATCH") {
@@ -612,7 +625,7 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/policy\/compile$/.exec(p);
   if (m === "POST" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrg(req, res, store, org);
+    const auth = requireOrg(req, res, org);
     if (!auth) return;
     const body = await readJson(req);
     const rules: string[] = Array.isArray(body.rules) ? body.rules.map(String) : [];
@@ -631,7 +644,7 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/apikey$/.exec(p);
   if (m === "POST" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrg(req, res, store, org);
+    const auth = requireOrg(req, res, org);
     if (!auth) return;
     const body = await readJson(req);
     const key = String(body.apiKey ?? "");
@@ -651,7 +664,7 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/models$/.exec(p);
   if (m === "GET" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrg(req, res, store, org);
+    const auth = requireOrg(req, res, org);
     if (!auth) return;
     const settings = store.getSettings(org);
     const provider = url.searchParams.get("provider") || settings.llmProvider;
@@ -683,14 +696,14 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/team$/.exec(p);
   if (m === "GET" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrg(req, res, store, org);
+    const auth = requireOrg(req, res, org);
     if (!auth) return;
     return void sendJson(res, 200, store.listTeam(org));
   }
   mm = /^\/api\/orgs\/([^/]+)\/team\/([^/]+)\/role$/.exec(p);
   if (m === "POST" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrg(req, res, store, org, ["owner", "admin"]);
+    const auth = requireOrg(req, res, org, ["owner", "admin"]);
     if (!auth) return;
     const body = await readJson(req);
     try {
@@ -704,7 +717,7 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/stats$/.exec(p);
   if (m === "GET" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrg(req, res, store, org);
+    const auth = requireOrg(req, res, org);
     if (!auth) return;
     return void sendJson(res, 200, store.stats(org));
   }
@@ -824,6 +837,20 @@ async function apiRoute(
     if (isPlatformAdmin(s.email)) return void sendJson(res, 200, store.listDecisions());
     const mine = new Set(store.listReviews(s.org, Number.MAX_SAFE_INTEGER).map((r) => r.id));
     return void sendJson(res, 200, store.listDecisions().filter((d) => mine.has(d.reviewId)));
+  }
+
+  // What those decisions actually changed, in this workspace's own numbers.
+  //
+  // The same object the orchestrator receives, so the Learnings page cannot
+  // describe a calibration that differs from the one running on the pull
+  // requests. That is the entire reason it is one function in the store rather
+  // than a second derivation written for the UI.
+  mm = /^\/api\/orgs\/([^/]+)\/calibration$/.exec(p);
+  if (m === "GET" && mm) {
+    const org = decodeURIComponent(mm[1]);
+    const auth = requireOrgMember(req, res, org);
+    if (!auth) return;
+    return void sendJson(res, 200, store.calibration(org));
   }
   if (m === "GET" && p === "/api/feed/proven") return void sendJson(res, 200, store.provenFeed());
 
@@ -983,10 +1010,36 @@ function safeReviewUrl(value: unknown): string | null {
 }
 
 /** Require a valid session whose org matches `org` (and optionally a role). */
+/**
+ * A signed-in member of this workspace, or a platform admin, for READ-ONLY
+ * workspace data. Any role will do: everyone on a team can look at the reports.
+ *
+ * This existed only as two call sites and no definition, so
+ * `GET /api/orgs/:org/analytics` threw a ReferenceError on every request and the
+ * Reports page has been answering 500 since it shipped. It went unnoticed
+ * because `services/control-plane` was missing from the tsconfig `include` list,
+ * so `npx tsc --noEmit` never looked at this file. Both halves are fixed.
+ */
+function requireOrgMember(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  org: string,
+): SessionPayload | null {
+  const s = sessionFromRequest(req);
+  if (!s) {
+    sendJson(res, 401, { error: "authentication required" });
+    return null;
+  }
+  if (s.org !== org && !isPlatformAdmin(s.email)) {
+    sendJson(res, 403, { error: "forbidden: not a member of this organization" });
+    return null;
+  }
+  return s;
+}
+
 function requireOrg(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  store: Store,
   org: string,
   roles?: Role[],
 ): SessionPayload | null {

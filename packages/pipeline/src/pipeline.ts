@@ -38,6 +38,12 @@ export interface Phase1Deps {
   router?: ModelRouter;
   tierConfig?: ModelTierConfig;
   confidenceThreshold?: number;
+  /**
+   * Stage 12's learned per-category bars for this workspace. Absent categories
+   * fall back to `confidenceThreshold`. See the adjudicator for why only moved
+   * categories appear.
+   */
+  thresholdByCategory?: Record<string, number>;
   budgetTokens?: number;
 }
 
@@ -105,7 +111,10 @@ export async function runPhase1Review(input: Phase1Input, deps: Phase1Deps): Pro
 
   // Stage 9 adjudication over everything.
   const all = [...deterministic.findings, ...ensembleResult.findings, ...policyFindings];
-  const adjudicated = adjudicate(all, { confidenceThreshold: deps.confidenceThreshold });
+  const adjudicated = adjudicate(all, {
+    confidenceThreshold: deps.confidenceThreshold,
+    thresholdByCategory: deps.thresholdByCategory,
+  });
 
   return {
     findings: adjudicated.findings,

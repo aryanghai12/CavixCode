@@ -25,10 +25,10 @@ stages 0 through 11 and part of 13 on a real pull request.
 | 9 Adjudication | live |
 | 10 Execution verification | live |
 | 11 Synthesis and posting | live, GitHub only |
-| 12 Learning loop | decisions recorded and surfaced; nothing feeds them back |
+| 12 Learning loop | live, per-category confidence bars from the org's own decisions |
 | 13 Teardown, cost accounting | sandbox teardown and cost live; zero-retention package unwired |
 
-Run `npm test` (540 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
+Run `npm test` (567 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
 and `cd services/edge && go test ./...`. All green as of this handoff.
 
 ## How stages 5 and 6 were wired, since the next ones should copy it
@@ -54,18 +54,37 @@ Both followed the same shape, and it is worth knowing before you add another:
   blaming the pull request, because the trend is measured on a branch that
   predates it.
 
+## How Stage 12 was wired, since it adds a rule to the list above
+
+Same shape as 5 and 6, plus one that is new and worth keeping:
+
+- **Ride an existing call rather than adding one.** The learned bars come back on
+  `/api/internal/orgs/:org/review-config`, which the workflow already fetches once
+  per review and caches for 30 seconds. Closing the loop cost zero extra round
+  trips. A second endpoint would have been the obvious design and the wrong one.
+- **The refusal branch is a feature.** Most of the work in `packages/learning` is
+  deciding when NOT to move a bar, and the Learnings page renders that reason as
+  prominently as a bar that moved. A calibration that always finds something to
+  change is a calibration that is fitting to noise.
+
 ## What is left, in the order I would do it
 
-### 1. Stage 12 closed: make the learning loop actually learn
+### ~~1. Stage 12 closed: make the learning loop actually learn~~ DONE
 
-Decisions are captured, stored, and now shown on the Learnings page with the
-categories a team keeps rejecting. Nothing reads them back. `packages/learning/`
-has the calibration code.
+Live. `store.calibration(org)` derives a per-category confidence bar from that
+workspace's own decisions, it is served on the review-config call, and Stage 9
+applies it. The Learnings page shows every bar with the decisions behind it.
 
-The loop closes when a per-org confidence threshold, derived from that history,
-is passed into `adjudicate()` at review time.
-`DeepReviewOptions.confidenceThreshold` is already plumbed for exactly this and
-is currently never set.
+Two things a future session should know:
+
+- **The Stage 10 half is still open.** `ARCHITECTURE.md` describes Stage 12 as
+  feeding both Stage 9's threshold and Stage 10's verify gate. Only Stage 9 is
+  wired. Spending proof where a team's acceptance is genuinely mixed, and less
+  where the answer is already obvious from history, is a real cost saving and
+  the data to do it is now stored.
+- **`services/control-plane/test` is still outside the tsconfig `include`.** The
+  `src` half is now checked, which is what mattered (see below). The tests need
+  an `await res.json()` typing cleanup first, roughly 150 sites.
 
 ### 2. Mermaid sequence diagrams in the review
 
@@ -101,6 +120,43 @@ sells to regulated buyers.
   go on the review comment, which is dated and supersedable.
 - Tests run with zero infrastructure. Keep it that way.
 
+## Bugs found and fixed in the Stage 12 session
+
+The warning at the bottom of this file held. Five in the repo, four of them live:
+
+- **`requireOrgMember` was called twice and defined nowhere.** `GET
+  /api/orgs/:org/analytics` threw a ReferenceError on every request, so the
+  Reports page has been answering `500 {"error":"requireOrgMember is not
+  defined"}` since it shipped.
+- **`services/control-plane` was not in the tsconfig `include` list**, which is
+  why that could ship: `npx tsc --noEmit`, a documented gate, had never looked at
+  the service. `src` is now included, and fixing what surfaced turned up the next
+  one.
+- **An unrecognised severity made `reviewerHoursSaved` NaN** for a whole
+  workspace. `StoredFinding.severity` is a bare string off the wire and the ROI
+  model looks its minutes up by severity, so one odd value poisons the sum.
+- **`StoredFinding` dropped `confidence`**, which the orchestrator has always
+  sent, and `listDecisions()` dropped `agent`. Both are fields `DecisionRecord`
+  declares, so the learning package's inputs were unreachable from the only real
+  source of decisions in the product.
+- **`Calibration.filterFindings` was a second thresholding path** parallel to
+  Stage 9's, and it double-counted: a trusted category had its threshold lowered
+  AND each finding's confidence multiplied by up to 1.5, from one signal.
+  Removed rather than wired.
+
+Plus two in `calibrate()` itself that only a realistic fixture showed. Probing it
+with a simulated three-month workspace before trusting it is the single highest
+value thing done this session:
+
+- **The ceiling was a cap, and the cap lied.** A category rejected at 0.78 got a
+  bar of 0.75 (the ceiling), which suppresses none of them, under a sentence
+  claiming it held back 100%. The ceiling is now a refusal: a category needing a
+  higher bar is left alone and told why.
+- **It fitted to a 0.02 gap.** Accepts at 0.80 and rejects at 0.78 produced a
+  confident-looking cut at 0.79 that predicts nothing, because the next finding
+  lands either side of it by chance. A minimum margin between the bar and the
+  lowest finding the team kept now reads that as the noise it is.
+
 ---
 
 ## The prompt
@@ -108,36 +164,38 @@ sells to regulated buyers.
 > I am continuing work on Cavix, an AI code reviewer. Read `HANDOFF.md`,
 > `README.md` and `CHANGELOG.md` first, then `ARCHITECTURE.md` for the seams.
 >
-> Stages 0 through 11 already run on real pull requests. What is left is listed
-> in HANDOFF.md. Build **item 1: close the learning loop (Stage 12).**
+> Stages 0 through 12 already run on real pull requests. What is left is listed
+> in HANDOFF.md. Build **item 2: Mermaid sequence diagrams in the review.**
 >
-> Right now every accept and reject a team makes is stored, and shown back to
-> them on the Learnings page, and changes nothing about the next review. That is
-> the difference between a feature and a moat: the roadmap's whole retention
-> argument is that a competitor starts cold while Cavix starts tuned, and today
-> Cavix starts cold too.
->
-> `packages/learning/` has the calibration code and nothing imports it.
-> `DeepReviewOptions.confidenceThreshold` is already plumbed into Stage 9's
-> `adjudicate()` and is never set. The gap between those two facts is the work.
+> The dashboard has had a "Sequence diagram" toggle marked "soon" since the
+> settings page was written. `OrgSettings.reviewSections.sequenceDiagram` is
+> stored and served, and nothing generates one, so a customer can switch on a
+> section that does not exist. GitHub renders Mermaid natively in a comment, and
+> the one thing a reviewer cannot get from a diff is the call order across files
+> that the change alters.
 >
 > Specifically:
-> 1. Derive a per-org confidence threshold, and ideally per-category, from that
->    workspace's accept and reject history. A team that rejects every
->    maintainability nit should stop being shown them; a team that accepts every
->    security finding should see them at a lower bar.
-> 2. Feed it into the review path. Decide where it is computed and cached, and
->    say why. It must not add a round trip to every review.
-> 3. Make it visible. The Learnings page should say what changed as a result, in
->    the team's own numbers, because an invisible moat does not retain anyone.
-> 4. Guard against the obvious failure: a workspace with three decisions must not
->    get a threshold derived from three decisions, and one bad week must not
->    silence a category permanently.
+> 1. Generate a `sequenceDiagram` for the changed code path. Decide what it is a
+>    diagram OF, and say why: a per-file diagram of everything is noise, and a
+>    diagram of a path Cavix did not actually trace is a drawing.
+> 2. Decide where it comes from. Stage 4's call graph over the changed files is
+>    already built during a deep review and is a real, measured structure; a
+>    model asked to draw one from the diff is not. If you use the model at all,
+>    say which half is measured and which is written.
+> 3. Wire the toggle. `reviewSections.sequenceDiagram` reaches the orchestrator
+>    on the review-config call but is dropped by `coerce()` in
+>    `services/orchestrator/src/byok/reviewConfig.ts`, which only knows five
+>    sections. Off must mean off, and the section must be absent when the graph
+>    had nothing to draw rather than rendering an empty diagram.
+> 4. It must survive a reader. Mermaid that fails to parse renders as a red error
+>    box on the pull request, so the output needs escaping for identifiers with
+>    quotes, brackets and non-ASCII, and a size cap: a forty-participant diagram
+>    is worse than no diagram.
 >
-> Before writing anything, audit `packages/learning` and tell me the plan,
-> including anything that will not survive contact with real decision data. Do
-> not start building until I have seen it. While you are in there, sweep the repo
-> for bugs and tell me what you find.
+> Before writing anything, tell me the plan, including what the diagram will look
+> like on a real pull request and what it will do on a change where the graph
+> resolves nothing. Do not start building until I have seen it. While you are in
+> there, sweep the repo for bugs and tell me what you find.
 >
 > House rules, all enforced by tests: no emoji anywhere Cavix posts, no em or en
 > dashes, the Scope module never states a number that was not measured, and every
@@ -147,7 +205,8 @@ sells to regulated buyers.
 >
 > A warning worth taking seriously: every package in this repo was written and
 > tested and then never run against real input, and every single one I have wired
-> so far had bugs that only appeared on realistic data. The last two sessions
-> found eight between them, including matching logic that reported nothing at all
-> and a metric that told reviewers to ignore real failures. Probe it with a
-> realistic fixture before you trust a line of it.
+> so far had bugs that only appeared on realistic data. The last three sessions
+> found fifteen between them, including matching logic that reported nothing at
+> all, a metric that told reviewers to ignore real failures, and a page that has
+> been returning 500 since it shipped. Probe it with a realistic fixture before
+> you trust a line of it, and write the fixture before you write the code.

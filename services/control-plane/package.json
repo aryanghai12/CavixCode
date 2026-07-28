@@ -11,6 +11,7 @@
     "@cavix/analytics": "*",
     "@cavix/core": "*",
     "@cavix/gateway": "*",
+    "@cavix/learning": "*",
     "@cavix/policy": "*",
     "pg": "^8.13.1"
   }

@@ -9,6 +9,7 @@ import {
   runReview,
   type DeepReviewStep,
 } from "@cavix/orchestrator";
+import { DEFAULT_REVIEW_CONFIG } from "../src/byok/reviewConfig.ts";
 
 // Stages 3, 4, 7, 8 and 9 on a real pull request.
 //
@@ -267,4 +268,127 @@ test("summary mode never pays for the ensemble", async () => {
   assert.equal(github.submissions.length, 0);
   assert.ok(!systems.some((s) => s.includes("review agent")), "no agent ran");
   assert.match(github.pullBody, /Adds a DB lookup during login\./);
+});
+
+// ── Stage 12: the workspace's learned bar reaches Stage 9 ────────────────────
+
+/**
+ * A review config fetcher that counts its calls, so a test can prove the
+ * calibration rides along on the fetch the workflow already makes rather than
+ * adding a control-plane hop to every pull request.
+ */
+function configFetcher(thresholdByCategory: Record<string, number>) {
+  const calls: string[] = [];
+  const fetcher = async (org: string) => {
+    calls.push(org);
+    return { ...DEFAULT_REVIEW_CONFIG, verifyFindings: false, thresholdByCategory };
+  };
+  return { fetcher, calls };
+}
+
+/**
+ * A change no deterministic scanner has an opinion about, reviewed by an
+ * ensemble whose "correctness" agent reports one finding at 0.90.
+ *
+ * It has to be a finding NO scanner also found, because a cluster containing a
+ * deterministic finding is immune to thresholding by construction. That is the
+ * right behaviour and the test below pins it, but it makes the SQL-injection
+ * fixture above useless for demonstrating that a learned bar does anything.
+ */
+function llmOnly() {
+  const diff = `diff --git a/src/total.js b/src/total.js
+--- a/src/total.js
++++ b/src/total.js
+@@ -1,3 +1,4 @@ function total(items) {
+   let sum = 0;
++  for (let i = 0; i <= items.length; i++) sum += items[i];
+   return sum;
+ }
+`;
+  const source = `function total(items) {
+  let sum = 0;
+  for (let i = 0; i <= items.length; i++) sum += items[i];
+  return sum;
+}
+`;
+  const provider = new FakeProvider((req) => {
+    const system = req.system ?? "";
+    if (system.includes("Describe a pull request")) {
+      return JSON.stringify({ summary: "Sums the items.", walkthrough: [], effort: 1 });
+    }
+    if (system.includes(`Cavix "correctness" review agent`)) {
+      return JSON.stringify({
+        abstain: false,
+        findings: [
+          {
+            path: "src/total.js",
+            line: 3,
+            severity: "medium",
+            category: "correctness",
+            title: "Loop runs one past the end of the array",
+            body: "`<=` should be `<`.",
+            confidence: 0.9,
+          },
+        ],
+      });
+    }
+    if (system.includes("review agent")) return JSON.stringify({ abstain: true, findings: [] });
+    return JSON.stringify({ summary: "s", effort: 1, findings: [] });
+  });
+
+  const config: GatewayConfigData = {
+    orgs: { acme: { provider: "fake", apiKey: "byok-acme", model: "claude-sonnet-4-6" } },
+  };
+  const gateway = new Gateway({ providers: new Map([["fake", provider]]), config });
+  const github = new FakeGitHubClient({ diff, files: { "src/total.js": source } });
+  return {
+    github,
+    reviewer: new Reviewer({ gateway }),
+    deepReview: makeDeepReviewStep({ gateway, github }),
+  };
+}
+
+test("a learned bar suppresses a finding this workspace keeps rejecting", async () => {
+  const { github, reviewer, deepReview } = llmOnly();
+  // The correctness agent reports at 0.90. A workspace that has taught Cavix a
+  // 0.95 bar for correctness should not be shown it.
+  const { fetcher, calls } = configFetcher({ correctness: 0.95 });
+
+  const outcome = await runReview(job(), { github, reviewer, deepReview, reviewConfig: fetcher });
+
+  assert.equal(outcome.findingCount, 0, "held to the workspace's own bar");
+  assert.equal(calls.length, 1, "and it cost exactly the config fetch the review already made");
+});
+
+test("the same finding survives with no calibration, so the bar is what changed", async () => {
+  const { github, reviewer, deepReview } = llmOnly();
+  const { fetcher } = configFetcher({});
+  const outcome = await runReview(job(), { github, reviewer, deepReview, reviewConfig: fetcher });
+  assert.equal(outcome.findingCount, 1);
+});
+
+test("a learned bar for another category leaves this one alone", async () => {
+  const { github, reviewer, deepReview } = llmOnly();
+  const { fetcher } = configFetcher({ style: 0.95 });
+  const outcome = await runReview(job(), { github, reviewer, deepReview, reviewConfig: fetcher });
+  assert.equal(outcome.findingCount, 1, "correctness is not held to style's bar");
+});
+
+test("a learned bar cannot suppress what a scanner also measured", async () => {
+  // The SQL injection fixture: Stage 3's SAST rule and Stage 8's security agent
+  // both found it, so the cluster is deterministic. No learned threshold, and no
+  // number of rejections, can take a measured fact off the pull request.
+  const { github, reviewer, deepReview } = wire();
+  const { fetcher } = configFetcher({ security: 0.99 });
+  const outcome = await runReview(job(), { github, reviewer, deepReview, reviewConfig: fetcher });
+  assert.equal(outcome.findingCount, 1, "the scanner's fact survives the workspace's own bar");
+});
+
+test("no control-plane means no calibration, and the review is unaffected", async () => {
+  // Every self-hosted deployment without a dashboard runs this path, and it is
+  // also what a control-plane outage looks like. Stage 9 falls back to its own
+  // default rather than to a bar of zero or a failed review.
+  const { github, reviewer, deepReview } = llmOnly();
+  const outcome = await runReview(job(), { github, reviewer, deepReview });
+  assert.equal(outcome.findingCount, 1);
 });

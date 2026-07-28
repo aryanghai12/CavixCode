@@ -32,6 +32,19 @@ export interface DeepReviewInput {
   title: string;
   diff: string;
   ref: PullRef;
+  /**
+   * Stage 12 — this workspace's learned per-category confidence bars, derived
+   * from its own accept and reject history.
+   *
+   * It arrives PER REVIEW rather than being baked in at boot, because it is a
+   * property of the org and this step is shared by every org the deployment
+   * serves. It rides along on the review-config call the workflow already makes,
+   * so a calibrated review costs the same number of round trips as an
+   * uncalibrated one. Absent (a workspace with no history, an unreachable
+   * control-plane) means Stage 9 uses its own default, which is what every
+   * review did before this existed.
+   */
+  thresholdByCategory?: Record<string, number>;
 }
 
 export interface DeepReviewResult {
@@ -49,6 +62,12 @@ export interface DeepReviewResult {
   ensembleAgents: number;
   abstained: string[];
   droppedCount: number;
+  /**
+   * Categories whose confidence bar came from this workspace's own decisions
+   * rather than the default. 0 on a workspace that has not taught Cavix
+   * anything yet, which is every workspace on day one.
+   */
+  calibratedCategories: number;
   /** Symbols the Stage 4 index resolved across the fetched files. */
   astSymbols: number;
   filesIndexed: number;
@@ -61,9 +80,10 @@ export interface DeepReviewOptions {
   gateway: Gateway;
   github: GitHubClient;
   /**
-   * Findings below this confidence are dropped by Stage 9. The pipeline's own
-   * default applies when unset; an org's calibrated threshold overrides it once
-   * Stage 12 is feeding one.
+   * The deployment-wide floor below which Stage 9 drops a finding. The
+   * pipeline's own default applies when unset. A workspace's learned
+   * per-category bars (Stage 12) arrive on the INPUT, not here, and override
+   * this for the categories they cover.
    */
   confidenceThreshold?: number;
   logger?: { info(msg: string, meta?: Record<string, unknown>): void };
@@ -110,6 +130,7 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
     const index = new CodeIndex(new HeuristicParser());
     index.indexFiles(sourceFiles);
 
+    const learned = input.thresholdByCategory ?? {};
     const result = await runPhase1Review(
       { org: input.org, title: input.title, diff: input.diff },
       {
@@ -117,6 +138,7 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
         index,
         sourceFiles,
         ...(opts.confidenceThreshold !== undefined ? { confidenceThreshold: opts.confidenceThreshold } : {}),
+        ...(Object.keys(learned).length > 0 ? { thresholdByCategory: learned } : {}),
       },
     );
 
@@ -135,6 +157,7 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
       abstained: result.ensembleAbstained.length,
       dropped: result.droppedCount,
       surfaced: result.findings.length,
+      calibrated_categories: Object.keys(learned).length,
       cost_usd: result.totalCostUsd,
     });
 
@@ -147,6 +170,7 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
       ensembleAgents: 7 - result.ensembleAbstained.length,
       abstained: result.ensembleAbstained,
       droppedCount: result.droppedCount,
+      calibratedCategories: Object.keys(learned).length,
       astSymbols,
       filesIndexed: sourceFiles.length,
       costUsd: result.totalCostUsd,

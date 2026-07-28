@@ -293,10 +293,38 @@ reviewer structurally cannot produce.
 
 Stage 6 correlates a PR's touched functions with historical CI/CD benchmarks
 (ClickHouse in prod) and warns on measured or predicted regressions, optionally
-running the affected benchmark in the sandbox. Stage 12 calibrates per-org
-thresholds from dashboard accept/reject decisions and feeds both the Stage 9
-threshold and the Stage 10 verify gate — the system learns what's worth proving
-and which categories the org trusts, lowering false positives over time.
+running the affected benchmark in the sandbox.
+
+### Stage 12 — why the loop is closed where it is
+
+Stage 12 turns a workspace's accept/reject history into a per-category confidence
+bar and feeds it to Stage 9's `adjudicate()`. Three seams decide whether that is
+honest or merely plausible:
+
+1. **It is derived from the confidence distribution, not the accept rate.** The
+   threshold acts on confidence; an accept rate does not mention it. A team that
+   rejects a category whose findings all arrived at 0.9 cannot be helped by a
+   confidence threshold, and a calibration that moves the bar anyway suppresses
+   the accepted findings at the same rate. So each bar is the lowest cut that
+   would have held back most of that category's rejections while costing almost
+   none of its accepts, and when no such cut exists the bar does not move and the
+   Learnings page says which of the four reasons applied. The refusal branch is
+   the expected outcome on real data, not the error path.
+2. **The control-plane computes it; the orchestrator consumes it.** Same split as
+   the contract graph and CI history, for the same reason: the decisions live
+   where Postgres is. It rides on the `/api/internal/orgs/:org/review-config`
+   response the workflow already fetches once per review and caches, so closing
+   the loop costs zero additional round trips per pull request. A second endpoint
+   would have put a control-plane hop in front of every review in the deployment
+   for a number that changes when a human clicks Accept.
+3. **It tunes what the MODELS are trusted to say, and nothing else.** Stage 9's
+   invariants are untouched: immutable policy findings are partitioned out before
+   any threshold is read, and a cluster containing a deterministic finding
+   survives whatever bar the workspace has learned. No volume of rejections can
+   take a measured fact off a pull request.
+
+The Stage 10 half of the loop (calibrating the *verify* gate from the same
+history, so proof is spent where acceptance is genuinely mixed) is not wired.
 
 ### Why FP-rate drops and F1 rises across phases
 

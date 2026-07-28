@@ -5,6 +5,74 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Stage 12 closed: the learning loop actually learns
+
+Every accept and reject a team made was stored, shown back to them, and changed
+nothing about the next review. `packages/learning` had the calibration code and
+nothing imported it; `DeepReviewOptions.confidenceThreshold` was plumbed into
+Stage 9 and never set. The gap between those two facts was the whole of the
+retention argument: a competitor starts cold, and so did Cavix.
+
+#### Added
+- **A per-category confidence bar, derived from the workspace's own decisions**,
+  fed into Stage 9's `adjudicate()`. A category absent from the map keeps the
+  default, because "this team has taught us nothing here" and "their bar happens
+  to equal the default" are different claims and only one of them is measurable.
+- **It rides on the review-config fetch the workflow already makes.** No extra
+  round trip per review, no second endpoint in front of every pull request, and
+  the same object the Learnings page is shown, so the page cannot describe a
+  calibration different from the one running.
+- **Computed in the control-plane**, where the decisions live, and cached until
+  the next decision, which is the only thing that changes it. The alternative
+  was shipping every decision a workspace ever made over the wire on every pull
+  request so a stateless worker could reduce them to a dozen numbers.
+- **The Learnings page says what changed, in the team's own numbers**: the bar
+  per category, the decisions it rests on, and one sentence of why. A category
+  whose bar did NOT move says why not, rather than going quiet.
+- `GET /api/orgs/:org/calibration`, scoped to the workspace.
+- `StoredFinding.confidence`, and `confidence` plus `agent` on `/api/decisions`.
+
+#### The design decision that matters
+The threshold acts on confidence; an accept rate does not mention it. So nothing
+is derived from the accept rate alone. Each bar is the lowest cut that would have
+held back at least 60% of that category's rejections while costing at most 20% of
+its accepts, and when no cut does that, the bar does not move and the page says
+so. On real data that refusal is the common case, not an error: a team rejecting
+findings an agent was confidently wrong about cannot be helped by a confidence
+threshold, and pretending otherwise drops the good findings at the same rate.
+
+Four guards: a 90-day window so a bad week ages out; ten decisions before a
+category earns an opinion and twenty before the workspace does; and a ceiling of
+base + 0.25 that is a refusal rather than a cap, so a category can be made
+quieter and never silenced.
+
+#### Fixed
+- **The confidence a decision was made about was thrown away on arrival.** The
+  orchestrator sent it on every finding; `StoredFinding` had no such field. Every
+  confidence-threshold derivation was therefore impossible from the only real
+  source of decisions in the product, and nothing surfaced it.
+- **`listDecisions()` dropped `agent` too**, the other field `DecisionRecord`
+  declares.
+- **`requireOrgMember` was called twice and defined nowhere**, so
+  `GET /api/orgs/:org/analytics` threw a ReferenceError on every request and the
+  Reports page has been answering 500 since it shipped.
+- **`services/control-plane` was missing from the tsconfig `include` list**, which
+  is why the above could ship. `npx tsc --noEmit` now checks it. (The
+  control-plane's own tests are still outside it; they need an `await res.json()`
+  cleanup that is not this change's business.)
+- **An unrecognised severity string made `reviewerHoursSaved` NaN** for a whole
+  workspace, because the ROI model looks its minutes up by severity and
+  `StoredFinding.severity` is a bare string off the wire. Narrowed at the
+  boundary.
+
+#### Removed
+- The `Calibration` class and its `filterFindings`. It was a second thresholding
+  path parallel to Stage 9's, and two places that drop findings is how the Scope
+  module's dropped count starts disagreeing with reality. It also derived its
+  threshold from the accept rate, and multiplied a finding's confidence by
+  `0.5 + acceptRate`, so a trusted category had its bar lowered and its
+  confidence raised for one signal, counted twice.
+
 ### Stage 6 live: CI telemetry and regression warnings
 
 `packages/telemetry` was written, tested and imported by nothing. The roadmap

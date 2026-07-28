@@ -78,3 +78,44 @@ test("gate OFF (no immutable findings): nothing is force-passed", () => {
   assert.equal(res.findings.length, 0, "with no policy findings, weak findings are simply dropped");
   assert.equal(res.immutableKept, 0);
 });
+
+// ── Stage 12: the workspace's own learned bar, per category ───────────────────
+
+test("a learned category threshold replaces the default for that category only", () => {
+  const nit = mk({ path: "a.js", line: 1, category: "style", confidence: 0.55, title: "naming" });
+  const bug = mk({ path: "b.js", line: 1, category: "correctness", confidence: 0.55, title: "off by one" });
+
+  const res = adjudicate([nit, bug], { confidenceThreshold: 0.5, thresholdByCategory: { style: 0.7 } });
+
+  assert.ok(!res.findings.some((f) => f.category === "style"), "style is held to the learned bar");
+  assert.ok(res.findings.some((f) => f.category === "correctness"), "correctness keeps the default");
+  assert.match(res.dropped[0].reason, /learned "style" threshold/);
+});
+
+test("a learned threshold can LOWER the bar for a category the team trusts", () => {
+  const sec = mk({ path: "a.js", line: 1, category: "security", confidence: 0.4, title: "ssrf" });
+  const strict = adjudicate([sec], { confidenceThreshold: 0.5 });
+  assert.equal(strict.findings.length, 0);
+
+  const learned = adjudicate([sec], { confidenceThreshold: 0.5, thresholdByCategory: { security: 0.35 } });
+  assert.equal(learned.findings.length, 1, "the workspace's own bar surfaces it");
+});
+
+test("no learned threshold cannot silently mean zero", () => {
+  // An empty map, or a category that is simply absent from it, must fall back to
+  // the default. Reading a missing entry as 0 would post everything.
+  const weak = mk({ path: "a.js", line: 1, category: "style", confidence: 0.1, title: "weak" });
+  const res = adjudicate([weak], { confidenceThreshold: 0.5, thresholdByCategory: {} });
+  assert.equal(res.findings.length, 0);
+});
+
+test("a learned threshold never touches deterministic facts or policy findings", () => {
+  // The whole invariant, restated against the new input: Stage 12 tunes what the
+  // MODELS are trusted to say, never what a scanner measured or a gate decided.
+  const fact = mk({ path: "a.js", line: 1, source: "sast", category: "security", confidence: 0.05, title: "hardcoded key" });
+  const policy = mk({ path: "b.js", line: 1, source: "policy", immutable: true, category: "security", confidence: 0.05, title: "no auth" });
+
+  const res = adjudicate([fact, policy], { thresholdByCategory: { security: 0.9 } });
+  assert.equal(res.findings.length, 2, "neither is subject to a learned bar");
+  assert.equal(res.dropped.length, 0);
+});

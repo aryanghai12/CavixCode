@@ -22,6 +22,7 @@
     "packages/*/test/**/*.ts",
     "services/orchestrator/src/**/*.ts",
     "services/orchestrator/test/**/*.ts",
+    "services/control-plane/src/**/*.ts",
     "eval/**/*.ts"
   ]
 }

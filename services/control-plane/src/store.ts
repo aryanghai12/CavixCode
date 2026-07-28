@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { Finding } from "@cavix/core";
+import type { Finding, Severity } from "@cavix/core";
 import { computeOrgRollup, InMemoryAnalyticsStore, type ReviewEvent } from "@cavix/analytics";
+import { calibrate, type DecisionRecord, type OrgCalibration } from "@cavix/learning";
 import { hashPassword, verifyPassword, encryptSecret, decryptSecret, fingerprint } from "./auth.ts";
 
 // The control-plane store. In-memory for Phase 1; the same port backs Postgres in
@@ -108,6 +109,17 @@ export interface StoredFinding {
   category: string;
   title: string;
   source: string;
+  /**
+   * The confidence this finding carried when it was posted.
+   *
+   * The orchestrator has always sent it and this row always threw it away, which
+   * broke Stage 12 in a way nothing surfaced: a confidence threshold learned
+   * from decisions is only derivable if you know what confidence each decided
+   * finding had. Optional because rows written before this existed do not carry
+   * one, and a decision with no confidence informs the accept rates and nothing
+   * else. See `calibration()`.
+   */
+  confidence?: number;
   immutable: boolean;
   agent?: string;
   /** Execution-verified (Stage 10) — eligible for the public proven-catches feed. */
@@ -359,6 +371,8 @@ export interface Store {
   getFinding(id: string): StoredFinding | undefined;
   recordDecision(findingId: string, state: DecisionState, user: string): StoredFinding;
   listDecisions(): Array<{ findingId: string; reviewId: string; state: DecisionState; user: string; at: string; source: string }>;
+  /** Stage 12. The confidence bars this workspace's own decisions have earned. */
+  calibration(org: string): OrgCalibration;
   provenFeed(limit?: number): ProvenCatch[];
 
   // --- accounts & team ---
@@ -480,6 +494,12 @@ export class InMemoryStore implements Store {
   private mutes: MuteEvent[] = [];
   private orgGraphs = new Map<string, StoredOrgGraph>();
   private ciRuns = new Map<string, StoredCiHistory>();
+  /**
+   * Stage 12's derived thresholds, per workspace. Never persisted: it is a pure
+   * function of the decisions, so a snapshot of it could only ever disagree with
+   * them, and recomputing costs one pass over a workspace's decided findings.
+   */
+  private calibrations = new Map<string, OrgCalibration>();
 
   createOrg(name: string, opts: { tier?: OrgTier; provenFeedOptIn?: boolean } = {}): Org {
     const org: Org = { id: id8("org"), name, tier: opts.tier ?? "paid", provenFeedOptIn: opts.provenFeedOptIn ?? false, createdAt: new Date().toISOString() };
@@ -557,6 +577,9 @@ export class InMemoryStore implements Store {
         category: f.category,
         title: f.title,
         source: f.source,
+        ...(typeof f.confidence === "number" && Number.isFinite(f.confidence)
+          ? { confidence: f.confidence }
+          : {}),
         immutable: f.immutable === true,
         agent: f.agent,
         verified: f.verified === true,
@@ -616,7 +639,17 @@ export class InMemoryStore implements Store {
     // we still record the human decision (signal for the org), but the finding is
     // never removed from the review by it.
     f.decision = { state, user, at: new Date().toISOString() };
+    // This is the one event that changes a workspace's calibration, so it is the
+    // one place the cache has to be dropped. Clicking Accept and then seeing the
+    // Learnings page report the old bar for thirty seconds is exactly the kind of
+    // thing that makes a customer stop believing the page.
+    this.calibrations.delete(this.orgOfReview(f.reviewId));
     return f;
+  }
+
+  /** Which workspace a review belongs to, or "" if it has been dropped. */
+  private orgOfReview(reviewId: string): string {
+    return this.reviews.find((r) => r.id === reviewId)?.org ?? "";
   }
 
   listDecisions() {
@@ -640,6 +673,11 @@ export class InMemoryStore implements Store {
       category: string;
       verified: boolean;
       repo: string;
+      // The two fields Stage 12's calibration is derived from. Both were sent by
+      // the orchestrator and dropped here, so the learning package's inputs were
+      // unreachable from the only real source of decisions in the product.
+      confidence?: number;
+      agent?: string;
     }> = [];
     const repoOf = new Map(this.reviews.map((r) => [r.id, r.repo]));
     for (const f of this.findings.values()) {
@@ -658,9 +696,51 @@ export class InMemoryStore implements Store {
         category: f.category,
         verified: f.verified === true,
         repo: repoOf.get(f.reviewId) ?? "",
+        ...(typeof f.confidence === "number" ? { confidence: f.confidence } : {}),
+        ...(f.agent ? { agent: f.agent } : {}),
       });
     }
     return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  }
+
+  /**
+   * What one workspace has taught Cavix, as the confidence bars Stage 9 will use.
+   *
+   * Computed HERE rather than in the orchestrator, for the same reason the
+   * contract graph and the CI history are stored here: this is the process that
+   * owns the decisions. The alternative is shipping every decision a workspace
+   * has ever made over the wire on every pull request so a stateless worker can
+   * reduce them to a dozen numbers, which is both slower and a wider blast
+   * radius on the one endpoint that already crosses a trust boundary.
+   *
+   * Cached until the next decision, because that is the only thing that changes
+   * it. Reviews come and go without touching it: a posted finding nobody has
+   * ruled on teaches nothing.
+   */
+  calibration(org: string): OrgCalibration {
+    const hit = this.calibrations.get(org);
+    if (hit) return hit;
+    const computed = calibrate(this.decisionRecords(org));
+    this.calibrations.set(org, computed);
+    return computed;
+  }
+
+  /** This workspace's decisions, in the shape the learning package consumes. */
+  private decisionRecords(org: string): DecisionRecord[] {
+    const mine = new Set(this.reviews.filter((r) => r.org === org).map((r) => r.id));
+    const out: DecisionRecord[] = [];
+    for (const f of this.findings.values()) {
+      if (!f.decision || !mine.has(f.reviewId)) continue;
+      out.push({
+        category: f.category,
+        source: f.source,
+        accepted: f.decision.state === "accepted",
+        at: f.decision.at,
+        ...(typeof f.confidence === "number" ? { confidence: f.confidence } : {}),
+        ...(f.agent ? { agent: f.agent } : {}),
+      });
+    }
+    return out;
   }
 
   // ---------- accounts & team ----------
@@ -768,7 +848,7 @@ export class InMemoryStore implements Store {
     // as `undefined` would silently mean "off" — turning verification off for
     // every existing org the moment it shipped. Patch in place so the object
     // identity (and updateSettings' mutation) still works.
-    const defaults = defaultSettings() as Record<string, unknown>;
+    const defaults = defaultSettings() as unknown as Record<string, unknown>;
     const cur = s as unknown as Record<string, unknown>;
     for (const k of Object.keys(defaults)) if (cur[k] === undefined) cur[k] = defaults[k];
     return s;
@@ -778,7 +858,7 @@ export class InMemoryStore implements Store {
     // Only allow known, safe fields to be patched (never the fingerprint directly).
     const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped", "verifyFindings", "summaryInDescription", "requestChangesOnFail", "pathFilters", "preMergeChecks", "reviewSections"];
     for (const k of allowed) {
-      if (patch[k] !== undefined) (s as Record<string, unknown>)[k] = patch[k];
+      if (patch[k] !== undefined) (s as unknown as Record<string, unknown>)[k] = patch[k];
     }
     this.settings.set(org, s);
     return s;
@@ -900,7 +980,12 @@ export class InMemoryStore implements Store {
         repo: r.repo,
         reviewId: r.id,
         findingId: f.id,
-        severity: f.severity,
+        // Narrowed, not asserted. `StoredFinding.severity` is a bare string (it
+        // comes off the wire), and the ROI model looks its minutes up by
+        // severity: one unrecognised value made `reviewerHoursSaved` NaN for the
+        // whole workspace, which the Reports page would have rendered as "NaN
+        // hours saved". Anything unknown counts as the least-claiming bucket.
+        severity: toSeverity(f.severity),
         source: f.source,
         ...(f.agent ? { agent: f.agent } : {}),
         verified: f.verified === true,
@@ -1173,6 +1258,9 @@ export class InMemoryStore implements Store {
     this.mutes = s.mutes ?? [];
     this.orgGraphs = new Map(s.orgGraphs ?? []);
     this.ciRuns = new Map(s.ciRuns ?? []);
+    // Derived from the decisions that were just replaced, so anything cached
+    // from the previous state now describes a workspace that is no longer here.
+    this.calibrations.clear();
   }
 
   /** True when the store has no data yet (used to decide whether to seed). */
@@ -1187,6 +1275,11 @@ function toPublic(u: User): PublicUser {
 
 function id8(prefix: string): string {
   return `${prefix}_${randomUUID().slice(0, 8)}`;
+}
+
+/** A severity the ROI model knows how to price, or the quietest one. */
+function toSeverity(s: string): Severity {
+  return s === "critical" || s === "high" || s === "medium" || s === "low" || s === "info" ? s : "info";
 }
 
 function round2(n: number): number {

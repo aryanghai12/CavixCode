@@ -885,7 +885,14 @@
 
   // ---------- LEARNINGS ----------
   async function renderLearnings() {
-    const decisions = await api(`/api/decisions`);
+    // Two calls, deliberately: the decisions are the raw history, the
+    // calibration is what Cavix DID about it. The second is the same object the
+    // orchestrator is handed on every review, so this page cannot describe a
+    // calibration that differs from the one running on the pull requests.
+    const [decisions, cal] = await Promise.all([
+      api(`/api/decisions`),
+      api(`/api/orgs/${encodeURIComponent(org)}/calibration`).catch(() => null),
+    ]);
     const mine = decisions.slice(0, 100);
     const accepted = mine.filter((d) => d.state === "accepted").length;
     const rejected = mine.length - accepted;
@@ -902,12 +909,49 @@
 
     const sevMark = (s) => (SEV_ROWS.find((r) => r.key === s) || { mark: "▫", color: "#7C93B5" });
 
+    // What actually changed on your pull requests. Everything here is a number
+    // this workspace produced: a bar that moved says which decisions moved it,
+    // and a bar that did not says why not, rather than going quiet.
+    const moved = cal ? cal.categories.filter((c) => c.moved) : [];
+    const held = cal ? cal.categories.filter((c) => !c.moved) : [];
+    const pct = (n) => `${Math.round(n * 100)}%`;
+    const barRow = (c, live) => `
+      <div class="settings-row">
+        <div class="sr-label">
+          <b>${esc(c.category)}</b>
+          <div class="t-faint" style="margin-top:4px;max-width:640px">${esc(c.reason)}</div>
+        </div>
+        <div style="text-align:right;white-space:nowrap">
+          <b style="color:${live ? (c.threshold > cal.base ? "var(--amber, #C99A2E)" : "var(--green)") : "var(--text-dim)"}">${pct(c.threshold)}</b>
+          <div class="t-faint">${c.samples} decided</div>
+        </div>
+      </div>`;
+
+    const calibrationPanel = !cal
+      ? ""
+      : `<div class="panel">
+        <div class="panel-head"><div><h2>What your decisions changed</h2>
+          <span class="sub">${cal.active
+            ? `Live on your pull requests now. Standard bar ${pct(cal.base)}, from the last ${cal.windowDays} days.`
+            : `Not applied yet. ${cal.decisionsUntilActive} more decided findings and Cavix starts tuning to you.`}</span></div></div>
+        <div class="panel-body">
+          ${moved.length
+            ? `<p class="sr-desc" style="margin-bottom:16px">A finding in these categories now has to clear <b>your</b> bar, not the default one.${cal.active ? "" : " These are what <i>would</i> apply once there is enough history."}</p>${moved.map((c) => barRow(c, cal.active)).join("")}`
+            : `<div class="empty" style="padding:24px">No bar has moved yet. Cavix only changes one when your rejections sit at a different confidence from your accepts, because a threshold that cannot tell them apart drops the good findings too.</div>`}
+          ${held.length
+            ? `<div style="margin-top:24px"><div class="t-faint" style="margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em;font-size:11px">Measured, left alone</div>${held.map((c) => barRow(c, false)).join("")}</div>`
+            : ""}
+        </div>
+      </div>`;
+
     content.innerHTML = `
       <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
         ${CavixCharts.tile("Preferences learned", mine.length, { note: "from your accept and reject history" })}
         ${CavixCharts.tile("Confirmed real", accepted, { note: "raised again without hesitation" })}
         ${CavixCharts.tile("Told to stop", rejected, { note: "the bar Cavix is calibrating to" })}
       </div>
+
+      ${calibrationPanel}
 
       ${noisiest.length ? `<div class="panel">
         <div class="panel-head"><div><h2>What your team keeps rejecting</h2><span class="sub">Cavix weights these down first</span></div></div>
@@ -917,7 +961,7 @@
       <div class="panel">
         <div class="panel-head"><div><h2>Every decision</h2><span class="sub">Newest first</span></div></div>
         <div class="panel-body">
-          <p class="sr-desc" style="margin-bottom:16px">Every accept and reject tunes Cavix to <b>your</b> team's bar: thresholds, which nits to suppress, what is worth proving. A competitor starts cold; Cavix starts tuned.</p>
+          <p class="sr-desc" style="margin-bottom:16px">Every accept and reject tunes Cavix to <b>your</b> team's bar. What it changed is in the panel above, in your own numbers. A competitor starts cold; Cavix starts tuned.</p>
           ${mine.length ? `<table class="table"><thead><tr><th>Finding</th><th>Where</th><th>Source</th><th>Decision</th><th>By</th></tr></thead><tbody>
             ${mine.map((d) => {
               const sv = sevMark(d.severity);

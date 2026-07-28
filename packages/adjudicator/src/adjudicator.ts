@@ -15,6 +15,16 @@ import { SEVERITY_RANK, type Evidence, type Finding, type Severity } from "@cavi
 
 export interface AdjudicationOptions {
   confidenceThreshold?: number;
+  /**
+   * Stage 12's learned bar, per category, for THIS workspace.
+   *
+   * A category that is absent falls back to `confidenceThreshold`, and that
+   * distinction is deliberate: an absent entry means "this team has taught us
+   * nothing about this category", which is not the same claim as "this team's
+   * bar happens to equal the default". Only categories whose bar actually moved
+   * appear here, so the reason string below can always name a measurement.
+   */
+  thresholdByCategory?: Record<string, number>;
   lineTolerance?: number;
 }
 
@@ -39,6 +49,7 @@ export function adjudicate(findings: Finding[], options: AdjudicationOptions = {
   // (e.g. an unset deps.confidenceThreshold) clobber the default with undefined.
   const opts = {
     confidenceThreshold: options.confidenceThreshold ?? DEFAULTS.confidenceThreshold,
+    thresholdByCategory: options.thresholdByCategory ?? {},
     lineTolerance: options.lineTolerance ?? DEFAULTS.lineTolerance,
   };
 
@@ -62,10 +73,20 @@ export function adjudicate(findings: Finding[], options: AdjudicationOptions = {
     votes.push({ title: merged.title, path: merged.path, line: merged.line, votes: voteCount, confidence: merged.confidence });
 
     // (2)/(3) deterministic always survives; LLM-only must clear the threshold.
-    if (isDeterministic || merged.confidence >= opts.confidenceThreshold) {
+    // The bar is this workspace's learned one for the category when Stage 12 has
+    // measured one, and the org-wide default otherwise.
+    const learned = opts.thresholdByCategory[merged.category];
+    const threshold = typeof learned === "number" ? learned : opts.confidenceThreshold;
+    if (isDeterministic || merged.confidence >= threshold) {
       kept.push(merged);
     } else {
-      dropped.push({ finding: merged, reason: `below confidence threshold (${merged.confidence.toFixed(2)} < ${opts.confidenceThreshold})` });
+      dropped.push({
+        finding: merged,
+        reason:
+          typeof learned === "number"
+            ? `below this workspace's learned "${merged.category}" threshold (${merged.confidence.toFixed(2)} < ${threshold})`
+            : `below confidence threshold (${merged.confidence.toFixed(2)} < ${threshold})`,
+      });
     }
   }
 

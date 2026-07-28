@@ -420,3 +420,29 @@ test("the config is fetched once and cached across reviews", async () => {
   assert.equal(calls, 1);
   assert.equal((await fetcher("acme")).verifyFindings, false);
 });
+
+// ---------- Stage 12: the learned thresholds on the wire ----------
+
+test("coerce: a learned threshold survives the wire; junk does not", () => {
+  const got = coerce({
+    thresholdByCategory: {
+      style: 0.72,
+      security: 0.35,
+      broken: "0.9",          // a string is not a threshold
+      nan: Number.NaN,
+      high: 1.4,              // outside [0,1]
+      negative: -0.2,
+      "": 0.5,                // an unnamed category
+    },
+  }).thresholdByCategory;
+  assert.deepEqual(got, { style: 0.72, security: 0.35 });
+});
+
+test("coerce: a control-plane that sends no calibration means NO calibration", () => {
+  // The dangerous failure here is silent. An absent field read as 0 would post
+  // every finding the ensemble produced, on every review, until somebody noticed.
+  assert.deepEqual(coerce({}).thresholdByCategory, {});
+  assert.deepEqual(coerce({ thresholdByCategory: null }).thresholdByCategory, {});
+  assert.deepEqual(coerce({ thresholdByCategory: "all of them" }).thresholdByCategory, {});
+  assert.deepEqual(DEFAULT_REVIEW_CONFIG.thresholdByCategory, {});
+});
