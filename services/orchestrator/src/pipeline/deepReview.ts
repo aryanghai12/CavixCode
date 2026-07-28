@@ -1,5 +1,5 @@
 import type { Finding } from "@cavix/core";
-import { CodeIndex, HeuristicParser } from "@cavix/analyzer";
+import { CodeIndex, HeuristicParser, traceSequence, type CallTrace } from "@cavix/analyzer";
 import { runPhase1Review } from "@cavix/pipeline";
 import type { Gateway } from "@cavix/gateway";
 import type { GitHubClient, PullRef } from "../github/client.ts";
@@ -71,6 +71,17 @@ export interface DeepReviewResult {
   /** Symbols the Stage 4 index resolved across the fetched files. */
   astSymbols: number;
   filesIndexed: number;
+  /**
+   * The call path this change sits on, traced across files from the same graph
+   * Stage 4 built. Absent when the graph had nothing worth drawing, which is the
+   * usual case: a single-file change has no boundary to show being crossed.
+   *
+   * Costs nothing. It is a walk over an index that was already built for the
+   * ensemble's context, so no model is asked to draw it and no model could:
+   * a flow inferred from a diff is a guess, and this has to be a measurement or
+   * it should not be on the pull request.
+   */
+  trace?: CallTrace;
   costUsd: number;
 }
 
@@ -146,6 +157,21 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
     // not expose a global list, and summing the files we indexed is the same
     // number without widening a package's public surface for one metric.
     const astSymbols = sourceFiles.reduce((n, f) => n + index.symbolsInFile(f.path).length, 0);
+
+    // The call flow, from the same graph. Wrapped because it must never be the
+    // reason a review fails: a diagram is worth strictly less than the findings
+    // it sits above, so a bad trace costs the picture and nothing else.
+    let trace: CallTrace | undefined;
+    try {
+      trace = traceSequence(index, input.diff) ?? undefined;
+    } catch (err) {
+      opts.logger?.info("could not trace the call flow (continuing without a diagram)", {
+        repo: `${input.ref.owner}/${input.ref.repo}`,
+        pr: input.ref.number,
+        err: (err as Error).message,
+      });
+    }
+
     opts.logger?.info("deep review complete", {
       repo: `${input.ref.owner}/${input.ref.repo}`,
       pr: input.ref.number,
@@ -158,6 +184,7 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
       dropped: result.droppedCount,
       surfaced: result.findings.length,
       calibrated_categories: Object.keys(learned).length,
+      trace_steps: trace?.steps.length ?? 0,
       cost_usd: result.totalCostUsd,
     });
 
@@ -173,6 +200,7 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
       calibratedCategories: Object.keys(learned).length,
       astSymbols,
       filesIndexed: sourceFiles.length,
+      ...(trace ? { trace } : {}),
       costUsd: result.totalCostUsd,
     };
   };

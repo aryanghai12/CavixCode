@@ -851,12 +851,22 @@ export class InMemoryStore implements Store {
     const defaults = defaultSettings() as unknown as Record<string, unknown>;
     const cur = s as unknown as Record<string, unknown>;
     for (const k of Object.keys(defaults)) if (cur[k] === undefined) cur[k] = defaults[k];
+    // Air-gap is a property of the DEPLOYMENT, never of a workspace. It is
+    // enforced by the gateway's EgressGuard and a Kubernetes NetworkPolicy, both
+    // process-wide, and neither of them has ever read this field. Storing a
+    // per-org copy meant the dashboard could show a security control as ON while
+    // the process it describes was making outbound calls, which is the worst
+    // possible thing for a page like that to be wrong about. Derived on read so
+    // it always states what the deployment is actually doing.
+    s.airgapped = process.env.CAVIX_AIRGAPPED === "true";
     return s;
   }
   updateSettings(org: string, patch: Partial<OrgSettings>): OrgSettings {
     const s = this.getSettings(org);
     // Only allow known, safe fields to be patched (never the fingerprint directly).
-    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "airgapped", "verifyFindings", "summaryInDescription", "requestChangesOnFail", "pathFilters", "preMergeChecks", "reviewSections"];
+    // `airgapped` is deliberately NOT patchable: see getSettings. A dashboard
+    // that can set it can lie about it.
+    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "verifyFindings", "summaryInDescription", "requestChangesOnFail", "pathFilters", "preMergeChecks", "reviewSections"];
     for (const k of allowed) {
       if (patch[k] !== undefined) (s as unknown as Record<string, unknown>)[k] = patch[k];
     }

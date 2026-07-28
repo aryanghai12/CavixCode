@@ -219,3 +219,41 @@ test("the calibration is a workspace's own business", async () => {
     assert.equal(outsider.status, 403);
   });
 });
+
+// ── settings that must not be able to lie ────────────────────────────────────
+
+test("air-gapped mode reports the deployment, and cannot be set from the dashboard", async () => {
+  // It is enforced by the gateway's egress guard and a network policy, both
+  // process-wide, and neither has ever read a per-org field. A dashboard switch
+  // that could set it could show a security control as ON while the process it
+  // describes was making outbound calls.
+  const previous = process.env.CAVIX_AIRGAPPED;
+  try {
+    delete process.env.CAVIX_AIRGAPPED;
+    await withServer(async (base) => {
+      const cookie = await signIn(base, "acme");
+      const settings = async () =>
+        (await (await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } })).json()) as {
+          airgapped: boolean;
+        };
+      assert.equal((await settings()).airgapped, false);
+
+      // Asking for it does not grant it.
+      const res = await fetch(base + "/api/orgs/acme/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ airgapped: true }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal((await settings()).airgapped, false, "the dashboard cannot claim an air gap it does not have");
+
+      // And when the deployment really is air-gapped, it says so without anyone
+      // having to click anything.
+      process.env.CAVIX_AIRGAPPED = "true";
+      assert.equal((await settings()).airgapped, true);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.CAVIX_AIRGAPPED;
+    else process.env.CAVIX_AIRGAPPED = previous;
+  }
+});

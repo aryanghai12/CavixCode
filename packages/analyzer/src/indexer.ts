@@ -106,6 +106,41 @@ export class CodeIndex {
     return [...ids].map((c) => this.symbols.get(c)!).filter(Boolean);
   }
 
+  /**
+   * Direct callees of a symbol IN THE ORDER THEY ARE WRITTEN, with the line each
+   * call sits on.
+   *
+   * `calleesOf` cannot answer this and never could: `resolveEdges` folds every
+   * call site into a `Set<string>`, which is the right shape for "what does this
+   * reach" and throws away the two facts a sequence needs, order and position.
+   * The ordered data was always there in `FileRecord.calls`; nothing had asked
+   * for it.
+   *
+   * Repeated calls to the same target collapse to the first one. A loop that
+   * calls `save()` three times is one interaction in a diagram, and drawing it
+   * three times says something about the source that is not true of the flow.
+   */
+  callSitesFrom(id: string): Array<{ symbol: SymbolNode; line: number }> {
+    const from = this.symbols.get(id);
+    if (!from) return [];
+    const rec = this.files.get(from.path);
+    if (!rec) return [];
+
+    const firstByTarget = new Map<string, number>();
+    for (const call of rec.calls) {
+      if (call.fromId !== id) continue;
+      const targetId = this.resolveCallee(rec, call.callee);
+      if (!targetId || targetId === id) continue;
+      const seen = firstByTarget.get(targetId);
+      if (seen === undefined || call.line < seen) firstByTarget.set(targetId, call.line);
+    }
+
+    return [...firstByTarget.entries()]
+      .map(([targetId, line]) => ({ symbol: this.symbols.get(targetId)!, line }))
+      .filter((e) => !!e.symbol)
+      .sort((a, b) => a.line - b.line || a.symbol.name.localeCompare(b.symbol.name));
+  }
+
   /** Transitive callees up to `depth` hops (what a symbol reaches, cross-file). */
   transitiveCallees(ids: string[], depth = 4): Set<string> {
     const seen = new Set<string>();

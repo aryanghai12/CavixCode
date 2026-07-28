@@ -9,9 +9,11 @@ import {
   type Severity,
   type Verification,
 } from "@cavix/core";
+import type { CallTrace } from "@cavix/analyzer";
 import { REVIEW_MARKER, type InlineComment, type ReviewEvent, type ReviewSubmission } from "../github/client.ts";
 import type { PreMergeResult } from "../policy/preMerge.ts";
 import { ALL_SECTIONS, type ReviewSections } from "../byok/reviewConfig.ts";
+import { renderSequenceDiagram } from "./mermaid.ts";
 
 // The poster renders everything a human sees on the pull request. Three surfaces,
 // each with a different job, and the split between the first two is deliberate:
@@ -224,6 +226,12 @@ export interface PosterOptions {
   /** Real measurements from earlier pipeline stages. See ScopeSignals. */
   signals?: ScopeSignals;
   /**
+   * Stage 4's traced call path for this change, when the deep review ran and the
+   * graph had something to draw. Absent means no diagram, which is the usual
+   * case and not an error: see `traceSequence`.
+   */
+  trace?: CallTrace;
+  /**
    * Render the coloured badge strip at the top of the review (shields.io images).
    *
    * On by default, and deliberately small: at most five badges per review, only
@@ -364,6 +372,8 @@ export function buildPullDescription(
   diff: string,
   ref?: ReviewLinkRef,
   sections: ReviewSections = ALL_SECTIONS,
+  /** Stage 4's traced call path, when the deep review produced one. */
+  trace?: CallTrace,
 ): string {
   const files = parseUnifiedDiff(diff);
   // The blank line before the end marker matters: without it a trailing table
@@ -372,7 +382,7 @@ export function buildPullDescription(
     SUMMARY_START,
     DESCRIPTION_TITLE,
     "",
-    ...renderNarrative(result, files, ref, sections, false),
+    ...renderNarrative(result, files, ref, sections, false, trace),
     "",
     SUMMARY_END,
   ].join("\n");
@@ -542,7 +552,7 @@ function renderReviewComment(
   // The description could not be written (a fork PR, a revoked permission), so
   // the summary and walkthrough degrade into the comment rather than vanishing.
   if (opts.includeSummary) {
-    const narrative = renderNarrative(result, files, ref, sections);
+    const narrative = renderNarrative(result, files, ref, sections, true, opts.trace);
     if (narrative.length > 0) head.push("", "---", "", ...narrative);
   }
 
@@ -1032,6 +1042,16 @@ function renderNarrative(
    * stacking a second heading that says the same word is noise.
    */
   summaryHeading = true,
+  /**
+   * Stage 4's traced call path, when the deep review produced one.
+   *
+   * It belongs in the narrative, next to the walkthrough, and not with the
+   * findings: what a change DOES is durable and is still true after the author
+   * fixes everything Cavix raised, which is the rule the description block is
+   * built on. It also means the diagram falls back into the review comment on a
+   * fork PR by exactly the same path as the summary, with no second code path.
+   */
+  trace?: CallTrace,
 ): string[] {
   const out: string[] = [];
   if (sections.summary) {
@@ -1043,6 +1063,17 @@ function renderNarrative(
     if (changes.length > 0) {
       if (out.length > 0) out.push("", "---", "");
       out.push(...changes);
+    }
+  }
+  if (sections.sequenceDiagram) {
+    // Renders nothing at all when the graph had nothing to draw, which is the
+    // usual case: most pull requests change one file, and a sequence diagram of
+    // one file is a list. An empty section reads as a broken feature; an absent
+    // one reads as "not relevant here", which is what is true.
+    const diagram = renderSequenceDiagram(trace);
+    if (diagram.length > 0) {
+      if (out.length > 0) out.push("", "---", "");
+      out.push(...diagram);
     }
   }
   return out;

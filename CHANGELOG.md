@@ -5,6 +5,68 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Call-flow diagrams in the review
+
+The dashboard has carried a "Sequence diagram" toggle marked "soon" since the
+settings page was written, `OrgSettings.reviewSections.sequenceDiagram` has been
+stored and served the whole time, and nothing generated one. GitHub renders
+Mermaid natively in a comment, and the one thing a reviewer cannot get from a
+diff is the order in which the changed files now call each other.
+
+#### Added
+- **A Mermaid `sequenceDiagram` of the traced call path**, in the PR description
+  under the walkthrough. It describes what the change DOES, which is still true
+  after the author fixes every finding, so it follows the same rule as the rest
+  of that block and falls back into the review comment on a fork PR by the same
+  path, with no second code path.
+- **`CodeIndex.callSitesFrom`**, which is what made it possible. `resolveEdges`
+  folds every call site into a `Set<string>`, the right shape for "what does this
+  reach" and the wrong one for a sequence: it throws away the order and the line.
+  The ordered data was always in `FileRecord.calls`; nothing had asked for it.
+- **`traceSequence`** in `packages/analyzer`: a depth-first walk in call-site
+  order from the symbols the diff touched, with roots first so the diagram starts
+  where the flow starts.
+- The dashboard toggle is live, and `coerce()` in the orchestrator now knows the
+  field it had been dropping.
+
+#### What it will not do
+No model draws it, and none could: a flow inferred from a diff is a guess with
+arrows on it, and a diagram mixing measured arrows with guessed ones is worth
+less than none because the reader cannot tell them apart. So every arrow is a
+call the graph resolved between two files it parsed. Stage 4 indexes the changed
+files, so a call into an untouched file is not drawn even when the import is
+right there. A single-file change gets nothing: one lifeline is a list. Fewer
+than two interactions gets nothing: that is a sentence, and the walkthrough is
+made of those. It is capped at 6 lifelines and 14 arrows, and the caption says
+when it was cut.
+
+#### Fixed
+- **Two more dashboard toggles that changed nothing.** `policyEnabled` was a live
+  switch in the Automation panel duplicating the real one in Pre-merge checks,
+  which is the field the orchestrator actually reads; the duplicate is gone.
+  `airgapped` was a live switch for a control enforced by the gateway's
+  `EgressGuard` and a Kubernetes NetworkPolicy, both process-wide, neither of
+  which has ever read the field. It is now derived from the deployment on read
+  and is not patchable, because a dashboard that can set it can show a security
+  control as ON while the process makes outbound calls.
+- **`mermaidText` exceeded the width cap it enforced**, returning `max + 2`
+  characters by appending an ellipsis to `max - 1`.
+
+#### Found by probing before trusting
+Two defects that only a realistic fixture showed, both in the first version:
+
+- **Local helper calls crowded out the flow.** Drawing every same-file call as a
+  self-message filled the step budget with `handler.ts ->> handler.ts` rows on
+  any realistic handler. Past about fifteen helpers it removed every cross-file
+  arrow, leaving one lifeline and therefore no diagram, on exactly the changes
+  most worth one. Local calls are now walked THROUGH and never drawn, and a
+  helper that reaches another file is attributed to the file its call site is
+  written in.
+- **A non-ASCII identifier was mangled, not sanitised.** The first allow-list
+  turned `über()` into `ber()`, which is not a safe label but a wrong one: the
+  reader cannot find `ber` in their own file. Unicode letters are allowed
+  through; the ASCII punctuation Mermaid assigns meaning to still is not.
+
 ### Stage 12 closed: the learning loop actually learns
 
 Every accept and reject a team made was stored, shown back to them, and changed

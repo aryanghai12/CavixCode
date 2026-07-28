@@ -110,6 +110,33 @@ webhook can refund the same charge twice.
 - `test/refund.test.ts` · New retry regression test
 ```
 
+When the change touches more than one file, a **call-flow diagram** follows the
+walkthrough: a Mermaid sequence diagram, which GitHub renders natively, of how
+the changed files now call each other.
+
+````markdown
+### Call flow
+
+```mermaid
+sequenceDiagram
+    participant P0 as webhook.ts
+    participant P1 as refund.ts
+    participant P2 as charges.ts
+    P0->>P1: issueRefund()
+    P1->>P2: chargeLookup()
+```
+
+<sub>Traced from `onWebhook`, across 3 files, from the resolved call graph.</sub>
+````
+
+No model draws it. Every arrow is a call the Stage 4 graph resolved between two
+files it parsed, in the order the calls are written, so the picture is a
+measurement rather than an illustration. A call into a file this pull request
+does not touch is not drawn even when the import is right there, because Stage 4
+indexes the changed files and an arrow inferred from an import statement is a
+guess. A single-file change gets no diagram at all: one lifeline is a list, and
+the walkthrough above it is already a list.
+
 **No findings go here.** No verdict, no counts, no severities, not even a
 severity mark next to a file. This is deliberate and it matters.
 
@@ -373,6 +400,7 @@ description, blocking off.
 | Pre-merge checks | Off | Plain-English org rules compiled into deterministic, non-bypassable gates |
 | Summary | On | The plain-English description of the change |
 | Changed-files walkthrough | On | One bullet per changed file saying what it now does |
+| Call-flow diagram | On | A Mermaid sequence diagram of how the changed files now call each other. Only appears when the change actually crosses files |
 | Review Scope & Effort | On | The module that opens the review comment |
 | Inline findings | On | Line-level comments. Turning this off moves every explanation into the review comment |
 | Verification proof | On | The sandbox transcript, commands and exit codes |

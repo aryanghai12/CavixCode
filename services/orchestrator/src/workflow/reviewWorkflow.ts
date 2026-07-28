@@ -634,7 +634,7 @@ export async function runReview(
   if (deps.summaryInDescription !== false && config.summaryInDescription && summaryHasContent) {
     try {
       const meta = await deps.github.getPull(ref);
-      const body = buildPullDescription(meta.body ?? "", result, diff, linkRef, config.sections);
+      const body = buildPullDescription(meta.body ?? "", result, diff, linkRef, config.sections, signals?.trace);
       if (body !== (meta.body ?? "")) await deps.github.updatePullBody(ref, body);
       descriptionUpdated = true;
       log.info("summary written to the PR description", base);
@@ -655,6 +655,10 @@ export async function runReview(
     preMerge,
     requestChanges,
     sections: config.sections,
+    // Only used when the description could not be written (a fork PR, a revoked
+    // permission), in which case the whole narrative folds into the comment and
+    // the diagram goes with it rather than being the one piece that vanishes.
+    ...(signals?.trace ? { trace: signals.trace } : {}),
     badges: deps.badges !== false,
     // The Scope module's AST, Deterministic Pass, Ensemble and Blast Radius rows
     // exist for exactly this: real counts from stages that actually ran. Each is
@@ -869,6 +873,11 @@ async function runSummaryOnly(
   let descriptionUpdated = false;
   try {
     const meta = await deps.github.getPull(ref);
+    // No call-flow diagram here, on purpose. Summary mode never builds the Stage
+    // 4 graph, so nothing has measured the flow at this head, and the block is
+    // rewritten whole. Carrying the previous diagram forward would republish a
+    // picture of the code as it was before the push that prompted the refresh,
+    // which is the one thing worse than not having one.
     const body = buildPullDescription(meta.body ?? "", result, diff, linkRef, config.sections);
     if (body !== (meta.body ?? "")) await deps.github.updatePullBody(ref, body);
     descriptionUpdated = true;

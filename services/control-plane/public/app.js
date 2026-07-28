@@ -604,8 +604,8 @@
         <div class="panel-body" style="padding-top:6px">
           ${toggle("autoReview", "Auto-review pull requests", "Review automatically on open and every push.", s.autoReview)}
           ${toggle("reviewDraftPRs", "Review draft PRs", "Also review pull requests still marked as draft.", s.reviewDraftPRs)}
-          ${toggle("policyEnabled", "Policy gate", "Enforce your plain-English org rules as non-bypassable checks.", s.policyEnabled)}
-          ${toggle("airgapped", "Air-gapped mode", "Only reach the in-cluster model, zero outbound calls.", s.airgapped)}
+          <div class="settings-row"><div><div class="sr-label">Air-gapped mode</div><div class="sr-desc">Whether this Cavix deployment can reach the internet at all. Set by whoever runs the service, not from here: it is enforced by the gateway's egress guard and a network policy, both of which apply to the whole process. A switch on this page could only ever disagree with them.</div></div>
+            <span class="badge${s.airgapped ? " badge-verified" : ""}">${s.airgapped ? "air-gapped" : "standard"}</span></div>
         </div>
       </div>
       <div class="panel">
@@ -633,7 +633,7 @@
           ${rsToggle("reviewEffort", "Review Scope &amp; Effort", "The module that opens the review comment: how far the scan reached, what the security and policy gates read, how much of it was proven by execution, and a 1 to 5 estimate of the review left to do.")}
           ${rsToggle("inlineFindings", "Inline findings", "Line-level comments with severity and one-click suggestions. Off moves every explanation into the review comment instead.")}
           ${rsToggle("proof", "Verification proof", "The sandbox transcript, commands and exit codes, that proves a verified finding.")}
-          ${rsSoon("Sequence diagram", "A diagram of the new flow when relevant.")}
+          ${rsToggle("sequenceDiagram", "Call-flow diagram", "A Mermaid sequence diagram of the call path your change sits on, traced from the resolved call graph and drawn in the pull request description. Only appears when the change crosses more than one file, because a sequence diagram of one file is a list.")}
           ${rsSoon("Labels &amp; linked issues", "Auto labels and linked tickets (Jira / Linear).")}
         </div>
       </div>

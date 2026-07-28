@@ -24,6 +24,15 @@ export interface PreMergeConfig {
 export interface ReviewSections {
   summary: boolean;
   changedFiles: boolean;
+  /**
+   * The Mermaid call-flow diagram, next to the walkthrough.
+   *
+   * This toggle has existed in the dashboard, and in `OrgSettings`, since the
+   * settings page was written, and `coerce()` below did not know the field, so
+   * the orchestrator dropped it on arrival. A switch a customer can flip that
+   * changes nothing is worse than one that is not there.
+   */
+  sequenceDiagram: boolean;
   reviewEffort: boolean;
   inlineFindings: boolean;
   proof: boolean;
@@ -75,6 +84,7 @@ export interface OrgReviewConfig {
 export const ALL_SECTIONS: ReviewSections = {
   summary: true,
   changedFiles: true,
+  sequenceDiagram: true,
   reviewEffort: true,
   inlineFindings: true,
   proof: true,
@@ -190,6 +200,7 @@ export function coerce(value: unknown): OrgReviewConfig {
     sections: {
       summary: rs.summary !== false,
       changedFiles: rs.changedFiles !== false,
+      sequenceDiagram: rs.sequenceDiagram !== false,
       reviewEffort: rs.reviewEffort !== false,
       inlineFindings: rs.inlineFindings !== false,
       proof: rs.proof !== false,

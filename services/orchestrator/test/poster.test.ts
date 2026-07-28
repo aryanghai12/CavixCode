@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Finding, ReviewResult, Verification } from "@cavix/core";
+import type { CallTrace } from "@cavix/analyzer";
 import {
   buildPullDescription,
   buildReviewSubmission,
@@ -8,6 +9,18 @@ import {
   SUMMARY_END,
   SUMMARY_START,
 } from "@cavix/orchestrator";
+import { ALL_SECTIONS } from "../src/byok/reviewConfig.ts";
+
+/** A traced call path, as the deep review would hand one over. */
+const TRACE: CallTrace = {
+  participants: ["src/auth.js", "src/db.js"],
+  steps: [
+    { fromPath: "src/auth.js", fromSymbol: "login", toPath: "src/db.js", toSymbol: "query", line: 12 },
+    { fromPath: "src/auth.js", fromSymbol: "login", toPath: "src/db.js", toSymbol: "cacheSet", line: 11 },
+  ],
+  entryPoints: ["login"],
+  truncated: false,
+};
 
 const DIFF = `diff --git a/src/auth.js b/src/auth.js
 --- a/src/auth.js
@@ -277,7 +290,7 @@ test("the badge strip is bounded, coloured, and switchable off for an air gap", 
 test("the Scope module is one of the dashboard's section toggles", () => {
   const body = buildReviewSubmission(resultWith(finding()), DIFF, {
     ref: REF,
-    sections: { summary: true, changedFiles: true, reviewEffort: false, inlineFindings: true, proof: true },
+    sections: { summary: true, changedFiles: true, sequenceDiagram: true, reviewEffort: false, inlineFindings: true, proof: true },
   }).submission.body;
   assert.doesNotMatch(body, /Review Scope & Effort/);
   assert.doesNotMatch(body, /img\.shields\.io/);
@@ -530,5 +543,78 @@ test("nothing Cavix posts contains an em or en dash, whatever the model wrote", 
       ? surface.slice(surface.indexOf(SUMMARY_START))
       : surface;
     assert.doesNotMatch(cavixOwned, /[—–]/, `an em or en dash survived into:\n${cavixOwned}`);
+  }
+});
+
+// ── the call-flow diagram (Stage 4, rendered as Mermaid) ─────────────────────
+
+test("the diagram goes in the PR description, with the summary and walkthrough", () => {
+  // It describes what the change DOES, which is still true after the author
+  // fixes every finding. That is the rule the description block is built on, and
+  // it is why the diagram belongs there rather than with the findings.
+  const body = buildPullDescription("Author notes.", resultWith(finding()), DIFF, REF, ALL_SECTIONS, TRACE);
+  assert.match(body, /### Call flow/);
+  assert.match(body, /```mermaid\nsequenceDiagram/);
+  assert.match(body, /login/, "the caption names what it was traced from");
+  assert.ok(body.indexOf("### Call flow") < body.indexOf(SUMMARY_END), "inside the block Cavix owns");
+});
+
+test("the review comment carries no diagram while the description has one", () => {
+  // Two copies of the same picture on one page is how a review starts feeling
+  // like spam. The comment only gets it when the description could not be
+  // written at all.
+  const built = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF, trace: TRACE });
+  assert.doesNotMatch(built.submission.body, /```mermaid/);
+});
+
+test("a fork PR folds the diagram into the comment rather than losing it", () => {
+  // includeSummary is what the workflow sets when it could not write the
+  // description. The diagram degrades by the same path as the summary, with no
+  // second code path to get wrong.
+  const built = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: REF,
+    includeSummary: true,
+    trace: TRACE,
+  });
+  assert.match(built.submission.body, /### Call flow/);
+  assert.match(built.submission.body, /```mermaid/);
+});
+
+test("the dashboard toggle actually removes it", () => {
+  // This switch has existed in the settings page since it was written and the
+  // orchestrator dropped the field on arrival, so it changed nothing. Off means
+  // off now.
+  const off = { ...ALL_SECTIONS, sequenceDiagram: false };
+  const body = buildPullDescription("Author notes.", resultWith(finding()), DIFF, REF, off, TRACE);
+  assert.doesNotMatch(body, /Call flow/);
+  assert.doesNotMatch(body, /mermaid/);
+  assert.match(body, /### What Changed/, "the rest of the block is untouched");
+});
+
+test("no trace means no section, not an empty one", () => {
+  // The usual case: a single-file change, or a deployment with the deep path
+  // off. An empty diagram reads as a broken feature.
+  const body = buildPullDescription("Author notes.", resultWith(finding()), DIFF, REF, ALL_SECTIONS);
+  assert.doesNotMatch(body, /Call flow/);
+  assert.doesNotMatch(body, /mermaid/);
+  assert.doesNotMatch(body, /```\s*```/, "and no stray fence is left behind");
+});
+
+test("the diagram obeys the house style like every other surface", () => {
+  const hostile: CallTrace = {
+    participants: ["src/naïve.js", "src/db.js"],
+    steps: [{ fromPath: "src/naïve.js", fromSymbol: "go", toPath: "src/db.js", toSymbol: "run—now", line: 1 }],
+    entryPoints: ["go"],
+    truncated: true,
+  };
+  const surfaces = [
+    buildPullDescription("Author notes.", resultWith(finding()), DIFF, REF, ALL_SECTIONS, hostile),
+    buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF, includeSummary: true, trace: hostile })
+      .submission.body,
+  ];
+  for (const surface of surfaces) {
+    assert.doesNotMatch(surface, EMOJI, "no emoji");
+    const owned = surface.includes(SUMMARY_START) ? surface.slice(surface.indexOf(SUMMARY_START)) : surface;
+    assert.doesNotMatch(owned, /[—–]/, "no em or en dashes");
   }
 });

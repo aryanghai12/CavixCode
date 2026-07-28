@@ -392,3 +392,137 @@ test("no control-plane means no calibration, and the review is unaffected", asyn
   const outcome = await runReview(job(), { github, reviewer, deepReview });
   assert.equal(outcome.findingCount, 1);
 });
+
+// ── the call-flow diagram, end to end from the graph to the description ──────
+
+/**
+ * A change that crosses files, which is the only kind worth a sequence diagram.
+ * The file contents are real source, parsed by the real heuristic parser, so the
+ * diagram under test is the one a pull request would actually get.
+ *
+ * The diff touches BOTH files on purpose, and that is not an arbitrary fixture
+ * choice: Stage 4 indexes the files this pull request changed and nothing else,
+ * so a call into a file the diff does not touch has no symbol to resolve against
+ * and is not drawn. `src/audit.js` is present in the repo and absent from the
+ * diff for exactly that reason, and the test below pins it.
+ */
+function crossFile() {
+  const files = {
+    "src/webhook.js": `import { issueRefund } from "./refund.js";
+import { writeAudit } from "./audit.js";
+
+export function onWebhook(event) {
+  const body = parseBody(event);
+  issueRefund(body.id);
+  writeAudit("webhook");
+}
+
+function parseBody(event) {
+  return JSON.parse(event.body);
+}
+`,
+    "src/refund.js": `import { chargeLookup } from "./webhook.js";
+
+export function issueRefund(id) {
+  parseBody(id);
+  return id;
+}
+`,
+    "src/audit.js": `export function writeAudit(kind) {\n  return kind;\n}\n`,
+  };
+  const diff = `diff --git a/src/webhook.js b/src/webhook.js
+--- a/src/webhook.js
++++ b/src/webhook.js
+@@ -5,3 +5,4 @@ export function onWebhook(event) {
+   const body = parseBody(event);
++  issueRefund(body.id);
+   writeAudit("webhook");
+ }
+diff --git a/src/refund.js b/src/refund.js
+--- a/src/refund.js
++++ b/src/refund.js
+@@ -3,3 +3,4 @@ export function issueRefund(id) {
++  parseBody(id);
+   return id;
+ }
+`;
+  const provider = new FakeProvider((req) => {
+    const system = req.system ?? "";
+    if (system.includes("Describe a pull request")) {
+      return JSON.stringify({ summary: "Routes refunds from the webhook.", walkthrough: [], effort: 2 });
+    }
+    if (system.includes("review agent")) return JSON.stringify({ abstain: true, findings: [] });
+    return JSON.stringify({ summary: "s", effort: 1, findings: [] });
+  });
+  const config: GatewayConfigData = {
+    orgs: { acme: { provider: "fake", apiKey: "byok-acme", model: "claude-sonnet-4-6" } },
+  };
+  const gateway = new Gateway({ providers: new Map([["fake", provider]]), config });
+  const github = new FakeGitHubClient({ diff, files });
+  return { github, reviewer: new Reviewer({ gateway }), deepReview: makeDeepReviewStep({ gateway, github }) };
+}
+
+test("a cross-file change gets a call-flow diagram in its description", async () => {
+  const { github, reviewer, deepReview } = crossFile();
+  await runReview(job(), { github, reviewer, deepReview });
+
+  const body = github.pullBody;
+  assert.match(body, /### Call flow/);
+  assert.match(body, /```mermaid\nsequenceDiagram/);
+  // The flow the graph actually resolved, both ways across the two changed
+  // files, and starting from the end nothing else calls.
+  assert.match(body, /participant P0 as webhook\.js/);
+  assert.match(body, /participant P1 as refund\.js/);
+  assert.match(body, /P0->>P1: issueRefund\(\)/);
+  assert.match(body, /P1->>P0: parseBody\(\)/);
+  assert.match(body, /Traced from `onWebhook`/);
+});
+
+test("it never draws an arrow to a file it did not parse", async () => {
+  // Stage 4 indexes the changed files and nothing else, so `writeAudit` in
+  // src/audit.js has no symbol to resolve against even though webhook.js plainly
+  // imports and calls it. Drawing that arrow from the import alone would be the
+  // one thing this feature must not do: a picture of something Cavix did not
+  // measure. The diagram is of the change, not of the codebase.
+  const { github, reviewer, deepReview } = crossFile();
+  await runReview(job(), { github, reviewer, deepReview });
+  const body = github.pullBody;
+  assert.match(body, /```mermaid/, "there is a diagram");
+  assert.doesNotMatch(body, /audit\.js/, "but the unparsed file is not a lifeline");
+  assert.doesNotMatch(body, /writeAudit/, "and its call is not an arrow");
+});
+
+test("the diagram costs no model call", async () => {
+  // It is a walk over an index built for the ensemble anyway. If it ever needed
+  // a model, it would be a drawing of a guess and would not belong on a PR.
+  const { github, deepReview } = crossFile();
+  const ref = { owner: "acme", repo: "widget", number: 42, headSha: "headsha", installationId: 9 };
+  const before = github.pullBody;
+  const result = await deepReview({ org: "acme", title: "t", diff: await github.fetchPullDiff(ref), ref });
+  assert.ok(result.trace, "a trace came back");
+  assert.equal(before, github.pullBody, "and nothing was posted to get it");
+  assert.ok(result.trace!.steps.every((s) => s.fromPath !== s.toPath));
+});
+
+test("the single-model path posts no diagram, because nothing measured a flow", async () => {
+  // No deep review means no graph. A diagram drawn from the diff alone would be
+  // a guess with arrows on it, so there simply is not one.
+  const { github, reviewer } = crossFile();
+  await runReview(job(), { github, reviewer });
+  assert.doesNotMatch(github.pullBody, /mermaid/);
+  assert.doesNotMatch(github.pullBody, /Call flow/);
+});
+
+test("a broken trace costs the diagram, never the review", async () => {
+  // Same failure posture as every other stage: the picture is worth strictly
+  // less than the findings above it.
+  const { github, reviewer, gateway } = wire();
+  const step = makeDeepReviewStep({ gateway, github });
+  const outcome = await runReview(job(), {
+    github,
+    reviewer,
+    deepReview: async (input) => ({ ...(await step(input)), trace: undefined }),
+  });
+  assert.equal(outcome.findingCount, 1, "the review is unaffected");
+  assert.doesNotMatch(github.pullBody, /Call flow/);
+});
