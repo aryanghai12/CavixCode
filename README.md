@@ -49,7 +49,41 @@ That is the whole pitch. Fewer comments, all of them true.
 
 ## What a review actually looks like
 
-Cavix writes to three places on a pull request, each with a different job.
+Cavix writes to four places on a pull request, each with a different job.
+
+### 0. The Checks box
+
+The first thing that happens, before any model is called, is that Cavix appears
+in the pull request's Checks box next to your CI, under the name `Cavix Review`.
+It shows as running while the model reads the diff and the sandbox reproduces
+what it found, then closes with the outcome:
+
+```
+Cavix Review   in progress   Reviewing this pull request
+Cavix Review   success       Review complete. 1 finding, highest critical, 1 verified by execution
+```
+
+Expand it and you get the same Review Scope table the review comment opens with,
+and a Details link straight to the review. The point is that nobody has to wonder
+whether Cavix is running. Silence means the webhook never arrived, and the Checks
+box says so.
+
+An org can mark `Cavix Review` a required check under branch protection to gate
+merges on it. It concludes:
+
+| Conclusion | When |
+|---|---|
+| success | The review posted and nothing you asked Cavix to block on failed |
+| failure | You turned blocking on, and a pre-merge rule failed or a finding hit your blocking severity |
+| neutral | Cavix could not finish (a bad key, a provider outage). GitHub counts neutral as passing |
+
+That last row is on purpose. A red cross for a Cavix outage would mean an expired
+API key silently blocks every merge in the org, so a run that never happened never
+blocks anyone. The check title says plainly that no review was completed.
+
+Check runs need a GitHub App with the `Checks: Read & write` permission. On a
+deployment running a personal access token there is simply no row, and the review
+posts exactly as normal.
 
 ### 1. The pull request description
 
@@ -231,8 +265,10 @@ The path a pull request takes:
 
 1. GitHub sends a webhook to the Go edge service, which verifies the signature,
    drops duplicates and pushes a job onto a Redis Stream.
-2. The orchestrator picks the job up, fetches the diff, and asks the control
-   plane what this organisation's settings are.
+2. The orchestrator picks the job up and immediately opens the `Cavix Review`
+   check run, so the pull request shows work in progress before anything slow
+   starts. Then it fetches the diff and asks the control plane what this
+   organisation's settings are.
 3. If the owner enabled the policy gate, plain-English rules compile into
    deterministic checks and run over the changed files first. These are facts,
    not model output, so they skip the sandbox and cannot be dropped later.
@@ -243,7 +279,8 @@ The path a pull request takes:
 6. The summary and the walkthrough are written into the pull request
    description. The verdict, the scope module and the findings go into a review
    comment, and the detail into inline comments.
-7. The review is recorded on the dashboard, where accepting or rejecting a
+7. The check run closes with its conclusion and a link to the review.
+8. The review is recorded on the dashboard, where accepting or rejecting a
    finding feeds the calibration loop.
 
 Cavix posts as a plain comment by default and never blocks a merge. Blocking is

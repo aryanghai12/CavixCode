@@ -14,6 +14,15 @@ export interface PullRef {
 
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES" | "APPROVE";
 
+/**
+ * The name of Cavix's check run, as it reads in the PR's Checks box.
+ *
+ * It is a constant because an org marks a check required BY NAME under branch
+ * protection. Rename this and every rule pointing at it silently stops matching,
+ * which leaves a branch protected by a check that will never run again.
+ */
+export const CHECK_NAME = "Cavix Review";
+
 export interface InlineComment {
   path: string;
   /** 1-based line in the head (new) file; must be a line present in the diff. */
@@ -59,6 +68,30 @@ export interface PullMeta {
   body: string;
 }
 
+/**
+ * A GitHub Check Run: the row in the pull request's "Checks" box, next to CI.
+ *
+ * This is how a reviewer sees that Cavix is working before any comment exists,
+ * and how they see it finished afterwards. It starts `in_progress` the moment a
+ * job is picked up and ends `completed` when the review is posted.
+ *
+ * `conclusion` is what an org can gate a merge on by marking the check required:
+ *   success  the review is posted and nothing the owner asked to block on failed
+ *   failure  the owner turned blocking on, and something they nominated failed
+ *   neutral  Cavix could not finish. Treated as passing by required checks, on
+ *            purpose: our outage is not a reason to freeze somebody's merges.
+ */
+export interface CheckRunInput {
+  status: "queued" | "in_progress" | "completed";
+  conclusion?: "success" | "failure" | "neutral";
+  /** One line, shown next to the check name. GitHub truncates past 255 chars. */
+  title: string;
+  /** Markdown, shown when the check is expanded. */
+  summary: string;
+  /** Where "Details" goes. The posted review, once there is one. */
+  detailsUrl?: string;
+}
+
 export interface GitHubClient {
   /** Fetch the PR's unified diff (the `application/vnd.github.diff` media type). */
   fetchPullDiff(ref: PullRef): Promise<string>;
@@ -85,6 +118,16 @@ export interface GitHubClient {
   findComment(ref: PullRef, marker: string): Promise<{ id: number } | null>;
   /** Edit a comment we posted earlier. */
   updateComment(ref: PullRef, commentId: number, body: string): Promise<void>;
+  /**
+   * Open the Cavix row in the PR's Checks box. Returns 0 when the check could
+   * not be created, which is an ordinary outcome rather than an error: check
+   * runs are a GitHub App feature and need `checks: write`, so a deployment on a
+   * personal access token, or an installation that predates the permission, will
+   * simply not have one. The review still posts either way.
+   */
+  createCheckRun(ref: PullRef, input: CheckRunInput): Promise<number>;
+  /** Move that row on, most often from "in progress" to its final conclusion. */
+  updateCheckRun(ref: PullRef, checkRunId: number, input: CheckRunInput): Promise<void>;
   /** Who are we posting as? Used once at boot to prove the bot has its own identity. */
   whoAmI(): Promise<AuthIdentity>;
 }

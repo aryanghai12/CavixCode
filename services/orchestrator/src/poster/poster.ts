@@ -237,6 +237,65 @@ export interface BuiltReview {
   verifiedCount: number;
 }
 
+/** What the Checks box shows once the review has landed. */
+export interface CheckOutput {
+  title: string;
+  summary: string;
+}
+
+/**
+ * The finished Cavix row in the pull request's Checks box.
+ *
+ * The title is the one line a reader sees without expanding anything, so it says
+ * the outcome and nothing else. The summary is the same Review Scope module the
+ * comment opens with, built from the same rows, so the two surfaces can never
+ * disagree about what was scanned or what was proven.
+ */
+export function buildCheckOutput(
+  result: ReviewResult,
+  diff: string,
+  opts: PosterOptions = {},
+): CheckOutput {
+  const files = parseUnifiedDiff(diff);
+  const all = [...result.findings].sort(
+    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || a.line - b.line,
+  );
+  const counts = countBySeverity(all);
+  const worst = SEVERITY_ORDER.find((s) => counts[s] > 0);
+  const verified = all.filter(isVerified).length;
+
+  const title = opts.requestChanges
+    ? `Changes requested: ${blockingReason(opts)}`
+    : all.length === 0
+      ? "Review complete. No issues found"
+      : `Review complete. ${plural(all.length, "finding")}, highest ${worst}` +
+        (verified > 0 ? `, ${verified} verified by execution` : "");
+
+  const lines: string[] = [];
+  const rows = scopeRows(result, all, files, opts);
+  if (rows.length > 0) {
+    lines.push("| | Signal | Reading |", "| :--: | :--- | :--- |");
+    for (const r of rows) lines.push(`| ${r.mark} | **${r.signal}** | ${r.reading} |`);
+    lines.push("");
+  }
+  if (all.length > 0) {
+    lines.push(
+      SEVERITY_ORDER.filter((s) => counts[s] > 0)
+        .map((s) => `${SEVERITY_MARK[s]} ${counts[s]} ${s}`)
+        .join(" · "),
+      "",
+    );
+  }
+  // The check row is a summary, not the review. Say where the review is, because
+  // a reader who opened this from the Checks box has not seen the comment yet.
+  lines.push(
+    all.length === 0
+      ? "<sub>Cavix read every changed line and had nothing to raise. The full review is in the pull request conversation.</sub>"
+      : "<sub>Every finding is listed in the Cavix review comment on the pull request, with the detail on the line at fault.</sub>",
+  );
+  return { title, summary: lines.join("\n") };
+}
+
 export function buildReviewSubmission(
   result: ReviewResult,
   diff: string,
@@ -671,10 +730,13 @@ function securityRow(all: Finding[]): ScopeRow {
 function proofRow(all: Finding[], suppressed: number): ScopeRow | null {
   const verified = all.filter(isVerified).length;
   if (verified > 0) {
-    const extra = suppressed > 0 ? `, ${suppressed} discarded as unreproducible` : "";
+    // Wording that reads the same on the review comment and on the check row:
+    // neither says "below", because on the check there is nothing below it.
+    const extra =
+      suppressed > 0 ? `, ${plural(suppressed, "other")} discarded as unreproducible` : "";
     const scope =
       verified === all.length
-        ? `Every finding below was reproduced in a sealed sandbox`
+        ? "Every posted finding was reproduced in a sealed sandbox"
         : `${verified} of ${plural(all.length, "finding")} reproduced in a sealed sandbox`;
     return { mark: MARK_PROVEN, signal: "Execution Proof", reading: `${scope}${extra}` };
   }
@@ -722,7 +784,7 @@ function confidenceRow(all: Finding[]): ScopeRow | null {
   return {
     mark: MARK_NEUTRAL,
     signal: "Confidence Score",
-    reading: `${meter(Math.round(mean * 5), 5, "●", "○")} ${pct}% mean across the findings below`,
+    reading: `${meter(Math.round(mean * 5), 5, "●", "○")} ${pct}% mean across the findings raised`,
   };
 }
 

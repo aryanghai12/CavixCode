@@ -236,7 +236,7 @@ test("the review opens with a Scope module of measured signals, not git stats", 
   // The named symbols the change lands inside, read off the hunk headers.
   assert.match(body, /\| ◇ \| \*\*Symbol Scope\*\* \| `login`, `Project` \|/);
   assert.match(body, /\| ▲ \| \*\*Security Gate\*\* \| ◈ 1 exposure, highest \*\*high\*\* \|/);
-  assert.match(body, /\| ◇ \| \*\*Confidence Score\*\* \| ●●●●● 92% mean across the findings below \|/);
+  assert.match(body, /\| ◇ \| \*\*Confidence Score\*\* \| ●●●●● 92% mean across the findings raised \|/);
   assert.match(body, /\| ◇ \| \*\*Review Effort\*\* \| ◆◆◆◇◇ \*\*3 of 5\*\*, a focused read \|/);
 
   // The banned git stats: GitHub renders all three directly above this comment.
@@ -353,7 +353,7 @@ test("buildReviewSubmission: a verified finding carries its sandbox transcript i
   // The proof is the product claim, so it gets its own row in the Scope module.
   assert.match(
     built.submission.body,
-    /\| ⬢ \| \*\*Execution Proof\*\* \| Every finding below was reproduced in a sealed sandbox \|/,
+    /\| ⬢ \| \*\*Execution Proof\*\* \| Every posted finding was reproduced in a sealed sandbox \|/,
   );
   assert.match(built.submission.body, /!\[Execution Proof: 1 verified\]\(\S+-047857\?/);
 });

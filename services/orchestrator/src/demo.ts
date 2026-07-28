@@ -154,6 +154,14 @@ async function main() {
   const elapsed = Date.now() - started;
 
   const review = github.lastReview()!;
+
+  console.log("\n── checks box (acme/widget#42) ───────────────────────────────");
+  for (const c of github.checkRuns) {
+    console.log(`Cavix Review  ${c.status}${c.conclusion ? ` / ${c.conclusion}` : ""}  ${c.title}`);
+  }
+  const finalCheck = github.lastCheckRun();
+  if (finalCheck) console.log(`\n${finalCheck.summary}`);
+
   console.log("\n── PR description (acme/widget#42) ───────────────────────────");
   console.log(`PATCH /repos/acme/widget/pulls/42  → summary written: ${outcome.descriptionUpdated}`);
   console.log("\n" + github.pullBody);

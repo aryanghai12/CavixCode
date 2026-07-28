@@ -267,6 +267,8 @@ function withFailure(github: FakeGitHubClient, fail: () => never): GitHubClient 
     createComment: (ref, body) => github.createComment(ref, body),
     findComment: (ref, marker) => github.findComment(ref, marker),
     updateComment: (ref, id, body) => github.updateComment(ref, id, body),
+    createCheckRun: (r, i) => github.createCheckRun(r, i),
+    updateCheckRun: (r, id, i) => github.updateCheckRun(r, id, i),
     whoAmI: () => github.whoAmI(),
   };
 }
@@ -285,6 +287,8 @@ test("command job: a failure reacts 😕 and explains the cause in a comment", a
     createComment: (ref, body) => github.createComment(ref, body),
     findComment: (ref, marker) => github.findComment(ref, marker),
     updateComment: (ref, id, body) => github.updateComment(ref, id, body),
+    createCheckRun: (r, i) => github.createCheckRun(r, i),
+    updateCheckRun: (r, id, i) => github.updateCheckRun(r, id, i),
     whoAmI: () => github.whoAmI(),
   };
   const handler = makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) });

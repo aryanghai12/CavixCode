@@ -697,11 +697,37 @@ are skipped automatically.
 
 ### Step 7 — Make Cavix a required check (block risky merges)
 
-Cavix puts a ✓/✗ **status mark** on every PR. To make a *failing* Cavix review
-actually **block the merge button**, add it as a required check:
-**Repo (or Org) → Settings → Branches → Branch protection rule → tick "Require status
-checks to pass" → choose the Cavix check.** Combine that with the rules gate turned
-on, and regulated teams get a quality gate nobody can bypass.
+Cavix appears in the pull request's **Checks** box, next to your CI, under the
+name **`Cavix Review`**. It opens as *in progress* the moment the job is picked
+up, so a reviewer can see Cavix working before there is anything to read, and it
+closes when the review is posted. Expand it and you get the same Review Scope &
+Effort table the review comment opens with, plus a **Details** link straight to
+the review.
+
+What it concludes, and why:
+
+| Conclusion | When | Effect on a required check |
+|---|---|---|
+| ✓ success | The review posted and nothing you asked Cavix to block on failed | passes |
+| ✕ failure | You turned **Let Cavix request changes** on, and a pre-merge rule failed or a finding hit your blocking severity | **blocks the merge** |
+| ○ neutral | Cavix could not finish (a bad API key, a provider outage) | passes |
+
+That last row is deliberate. A Cavix outage is our problem, not a reason to
+freeze every merge in your org, so a run that never happened never blocks anyone.
+The check title says plainly that no review was completed, and on a command job a
+comment explains the cause.
+
+To make a *failing* Cavix review actually **block the merge button**:
+**Repo (or Org) → Settings → Branches → Branch protection rule → tick "Require
+status checks to pass" → search for `Cavix Review` and select it.** The check has
+to have run on the branch at least once before GitHub will offer it in that list,
+so open one pull request first. Combine that with the rules gate turned on, and
+regulated teams get a quality gate nobody can bypass.
+
+If no Cavix check appears at all, the App is missing the **Checks: Read & write**
+permission (Step 5's table), or the deployment is running on a personal access
+token rather than a GitHub App. Only an App can write check runs. Reviews still
+post normally in that case; all you lose is the status row.
 
 ### How Cavix compares to CodeRabbit / other AI reviewers
 

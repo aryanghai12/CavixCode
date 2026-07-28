@@ -1,5 +1,6 @@
 import type {
   AuthIdentity,
+  CheckRunInput,
   GitHubClient,
   PullRef,
   PostedReview,
@@ -24,6 +25,12 @@ export interface FakeGitHubOptions {
   body?: string;
   /** Repo contents at head, keyed by path — what the verifier reads. */
   files?: Record<string, string>;
+  /**
+   * Refuse to create a check run, the way a PAT-backed deployment or an
+   * installation without `checks: write` does. Lets a test prove the review
+   * still posts when the Checks box is unavailable.
+   */
+  noChecks?: boolean;
 }
 
 export class FakeGitHubClient implements GitHubClient {
@@ -42,6 +49,13 @@ export class FakeGitHubClient implements GitHubClient {
   readonly comments: string[] = [];
   /** How many times an existing comment was EDITED rather than duplicated. */
   commentEdits = 0;
+  /**
+   * Every state the Cavix check run passed through, in order. A review should
+   * always leave exactly two: `in_progress` when the job was picked up, then
+   * `completed` with its conclusion.
+   */
+  readonly checkRuns: Array<{ id: number } & CheckRunInput> = [];
+  private readonly noChecks: boolean;
   private readonly commentIds = new Map<number, number>();
   private seq = 0;
 
@@ -51,6 +65,7 @@ export class FakeGitHubClient implements GitHubClient {
     this.title = opts.title ?? "Fake pull request";
     this.pullBody = opts.body ?? "";
     this.files = { ...(opts.files ?? {}) };
+    this.noChecks = opts.noChecks === true;
   }
 
   async fetchPullDiff(_ref: PullRef): Promise<string> {
@@ -100,6 +115,23 @@ export class FakeGitHubClient implements GitHubClient {
     if (idx === undefined) throw new Error(`fake github: no comment ${commentId}`);
     this.comments[idx] = body;
     this.commentEdits++;
+  }
+
+  async createCheckRun(_ref: PullRef, input: CheckRunInput): Promise<number> {
+    if (this.noChecks) return 0; // as GitHub answers a PAT: 403, no check row
+    const id = 7000 + this.checkRuns.length + 1;
+    this.checkRuns.push({ id, ...input });
+    return id;
+  }
+
+  async updateCheckRun(_ref: PullRef, checkRunId: number, input: CheckRunInput): Promise<void> {
+    if (checkRunId === 0) return;
+    this.checkRuns.push({ id: checkRunId, ...input });
+  }
+
+  /** The final state of the check run, for assertions and demo logging. */
+  lastCheckRun(): ({ id: number } & CheckRunInput) | undefined {
+    return this.checkRuns.at(-1);
   }
 
   async whoAmI(): Promise<AuthIdentity> {

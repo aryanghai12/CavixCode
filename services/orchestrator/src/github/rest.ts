@@ -1,11 +1,13 @@
-import type {
-  AuthIdentity,
-  GitHubClient,
-  PullRef,
-  PostedReview,
-  PullMeta,
-  ReactionContent,
-  ReviewSubmission,
+import {
+  CHECK_NAME,
+  type AuthIdentity,
+  type CheckRunInput,
+  type GitHubClient,
+  type PullRef,
+  type PostedReview,
+  type PullMeta,
+  type ReactionContent,
+  type ReviewSubmission,
 } from "./client.ts";
 
 // RestGitHubClient is the production GitHub transport. It uses fetch (no SDK) and
@@ -216,6 +218,54 @@ export class RestGitHubClient implements GitHubClient {
   }
 
   /**
+   * Open the Cavix row in the PR's Checks box.
+   *
+   * Returns 0 instead of throwing when GitHub refuses. Two refusals are normal
+   * and neither is a reason to fail a review: a 403 means the token is a PAT
+   * (only a GitHub App may write check runs) or the installation never granted
+   * `checks: write`, and a 422 means the head SHA is not a commit in this repo,
+   * which happens on a cross-fork PR. In both cases the review is still posted;
+   * all that is missing is the status row.
+   */
+  async createCheckRun(ref: PullRef, input: CheckRunInput): Promise<number> {
+    if (!ref.headSha) return 0; // a check run is anchored to a commit
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/check-runs`;
+    const res = await this.fetchImpl(url, {
+      method: "POST",
+      headers: {
+        ...(await this.headers(ref, "application/vnd.github+json")),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ name: CHECK_NAME, head_sha: ref.headSha, ...checkPayload(input) }),
+    });
+    if (res.status === 403 || res.status === 404 || res.status === 422) return 0;
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`github: create check run HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`);
+    }
+    const data = (await res.json()) as { id?: number };
+    return data.id ?? 0;
+  }
+
+  async updateCheckRun(ref: PullRef, checkRunId: number, input: CheckRunInput): Promise<void> {
+    if (!checkRunId) return; // nothing was created, so there is nothing to move on
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/check-runs/${checkRunId}`;
+    const res = await this.fetchImpl(url, {
+      method: "PATCH",
+      headers: {
+        ...(await this.headers(ref, "application/vnd.github+json")),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(checkPayload(input)),
+    });
+    if (res.status === 403 || res.status === 404) return;
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`github: update check run HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`);
+    }
+  }
+
+  /**
    * Identify the account behind the token. GET /app succeeds only for an App JWT
    * (so comments will appear as "<slug>[bot]" with the App's own avatar); GET
    * /user succeeds for a PAT, meaning Cavix would post under a HUMAN's name and
@@ -274,4 +324,26 @@ export class RestGitHubClient implements GitHubClient {
     const data = (await res.json()) as { id: number; html_url: string };
     return { id: data.id, htmlUrl: data.html_url };
   }
+}
+
+/** GitHub caps a check-run title at 255 characters and a summary at 65535. */
+const MAX_CHECK_TITLE = 255;
+const MAX_CHECK_SUMMARY = 65000;
+
+/**
+ * The wire body for a check run. `completed_at` is set explicitly on the final
+ * update so the PR shows a real duration rather than "0s": GitHub only fills it
+ * in itself when the conclusion arrives in the same call that created the run.
+ */
+function checkPayload(input: CheckRunInput): Record<string, unknown> {
+  return {
+    status: input.status,
+    ...(input.conclusion ? { conclusion: input.conclusion } : {}),
+    ...(input.status === "completed" ? { completed_at: new Date().toISOString() } : {}),
+    ...(input.detailsUrl ? { details_url: input.detailsUrl } : {}),
+    output: {
+      title: input.title.slice(0, MAX_CHECK_TITLE),
+      summary: input.summary.slice(0, MAX_CHECK_SUMMARY),
+    },
+  };
 }

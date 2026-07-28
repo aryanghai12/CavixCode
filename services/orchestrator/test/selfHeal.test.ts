@@ -63,6 +63,14 @@ test("a retired model is replaced automatically and the review still posts", asy
   assert.deepEqual(github.reactions.map((r) => r.content), ["eyes", "rocket"], "ends in success, not confused");
   assert.equal(seen[1], "gemini-2.0-flash", "a flash tier is preferred: free keys have quota there, not on pro");
   assert.deepEqual(saved, [["acme", "gemini-2.0-flash"]], "the choice is persisted, so it heals once");
+
+  // Healing re-runs the whole review against another model. One check row has to
+  // survive that: a row per attempt would leave the pull request showing three
+  // Cavix checks, two of them spinning until GitHub times them out.
+  assert.equal(github.checkRuns.length, 2, "one open, one close, across both attempts");
+  assert.equal(github.checkRuns[0].id, github.checkRuns[1].id);
+  assert.equal(github.checkRuns[1].status, "completed");
+  assert.equal(github.checkRuns[1].conclusion, "success");
 });
 
 test("the healed model is passed explicitly, beating the gateway's cached config", async () => {
@@ -115,6 +123,8 @@ test("healing does not fire for failures that are not about the model", async ()
     createComment: (r, b) => github.createComment(r, b),
     findComment: (r, m) => github.findComment(r, m),
     updateComment: (r, i, b) => github.updateComment(r, i, b),
+    createCheckRun: (r, i) => github.createCheckRun(r, i),
+    updateCheckRun: (r, id, i) => github.updateCheckRun(r, id, i),
     whoAmI: () => github.whoAmI(),
   };
   await makeReviewHandler({

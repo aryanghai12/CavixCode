@@ -5,6 +5,35 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Cavix in the Checks box
+
+#### Added
+- **A `Cavix Review` check run on every pull request**, the way CodeRabbit and
+  the other AI reviewers appear. It opens `in_progress` the moment the job is
+  picked up, before the model is called, so a reviewer sees Cavix working rather
+  than nothing at all. It closes `completed` when the review is posted, with the
+  Review Scope table as its expanded output and a `details_url` pointing at the
+  review. `createCheckRun` / `updateCheckRun` added to the orchestrator's
+  `GitHubClient` port, with a REST implementation and a recording fake.
+- **`ReviewCheck`**, a small lifecycle object in the workflow. The handler owns
+  one per job and hands it to every attempt, so a self-heal that re-runs the
+  review against a different model moves the existing row instead of opening a
+  second one. Previously there was no row at all; naively adding one per attempt
+  would have left three Cavix checks on a healed PR, two spinning until GitHub
+  timed them out.
+- Conclusions: `success` when the review posts and nothing the owner asked to
+  block on failed, `failure` only when they turned blocking on and a nominated
+  rule or severity failed, and **`neutral` when Cavix could not finish**. GitHub
+  counts neutral as passing for a required check, which is the point: an expired
+  API key must not silently block every merge in the org.
+- Whole path is best-effort. A 403 (personal access token, or an install without
+  `checks: write`), a 404, a 422 on a fork head SHA, or an exception all leave
+  `checkRunId` at 0 and cost the status row only, never the review. New
+  `checkRun.test.ts` covers the lifecycle, the conclusions, and every one of
+  those degradations.
+- GUIDE §Step 7 now names the check, documents the conclusion table, and explains
+  why a missing row means the App lacks `Checks: Read & write`.
+
 ### Review output redesign
 
 The posted review is the product demo, so it was rebuilt to read like a document

@@ -7,9 +7,9 @@ import {
   type Severity,
 } from "@cavix/core";
 import type { GitHubClient, PostedReview, PullRef } from "../github/client.ts";
-import { refFromJob } from "../github/client.ts";
+import { CHECK_NAME, refFromJob } from "../github/client.ts";
 import type { Reviewer } from "../reviewer/reviewer.ts";
-import { buildPullDescription, buildReviewSubmission } from "../poster/poster.ts";
+import { buildCheckOutput, buildPullDescription, buildReviewSubmission } from "../poster/poster.ts";
 import type { VerifyStep } from "../verify/verify.ts";
 import { preMergeUnavailable, runPreMergeChecks, type PreMergeResult } from "../policy/preMerge.ts";
 import { changedPaths, fetchSources, MAX_SOURCE_FILES } from "../sources.ts";
@@ -118,11 +118,99 @@ export interface ReviewOutcome {
   blocked: boolean;
   /** Did this review make it onto the dashboard? False when nothing recorded it. */
   recorded: boolean;
+  /**
+   * The Cavix check run this review completed, or 0 when the deployment could
+   * not create one (a PAT, or an App install without `checks: write`).
+   */
+  checkRunId: number;
   costUsd: number;
   model: string;
 }
 
 const noopLogger: WorkflowLogger = { info() {}, error() {} };
+
+/**
+ * The Cavix row in the pull request's Checks box, from "reviewing" to a tick or
+ * a cross.
+ *
+ * It exists so a reviewer can see Cavix working before there is anything to
+ * read. GitHub shows it next to CI, it turns into a spinner the moment the job
+ * is picked up, and it settles into a conclusion when the review is posted.
+ *
+ * Everything here is best-effort and swallows its own failures. A check run is
+ * a GitHub App feature that needs `checks: write`, so plenty of working
+ * deployments cannot create one at all, and none of them should lose a review
+ * over a missing status row.
+ *
+ * It is a small object rather than two loose calls because a self-heal retries
+ * the whole review against a different model, and a fresh check run per attempt
+ * would leave three rows on the PR, two of them spinning forever.
+ */
+export class ReviewCheck {
+  private readonly github: GitHubClient;
+  private readonly log: WorkflowLogger;
+  private id = 0;
+  private open = false;
+
+  constructor(github: GitHubClient, log: WorkflowLogger = noopLogger) {
+    this.github = github;
+    this.log = log;
+  }
+
+  /** Open the row, or do nothing if it is already open (a heal retry). */
+  async begin(ref: PullRef, title = "Reviewing this pull request"): Promise<void> {
+    if (this.open) return;
+    this.open = true;
+    try {
+      this.id = await this.github.createCheckRun(ref, {
+        status: "in_progress",
+        title,
+        summary:
+          "Cavix is reading the changed lines, and reproducing anything it suspects in a sealed sandbox before it says a word.",
+      });
+      if (this.id === 0) {
+        this.log.info("no check run for this install (needs a GitHub App with checks: write)", {
+          repo: `${ref.owner}/${ref.repo}`,
+          pr: ref.number,
+        });
+      }
+    } catch (err) {
+      this.log.info("could not open the check run (continuing)", { err: (err as Error).message });
+    }
+  }
+
+  /** Close the row. `conclusion` is what a required check would gate on. */
+  async finish(
+    ref: PullRef,
+    conclusion: "success" | "failure" | "neutral",
+    title: string,
+    summary: string,
+    detailsUrl?: string,
+  ): Promise<void> {
+    if (this.id === 0) return;
+    try {
+      await this.github.updateCheckRun(ref, this.id, {
+        status: "completed",
+        conclusion,
+        title,
+        summary,
+        ...(detailsUrl ? { detailsUrl } : {}),
+      });
+    } catch (err) {
+      this.log.error("could not close the check run", {
+        repo: `${ref.owner}/${ref.repo}`,
+        pr: ref.number,
+        check: CHECK_NAME,
+        err: (err as Error).message,
+      });
+    }
+  }
+
+  /** The check run id, or 0 when this deployment could not create one. */
+  get runId(): number {
+    return this.id;
+  }
+}
 
 /**
  * React to the comment that triggered this job. Best-effort by design: a failed
@@ -207,7 +295,7 @@ export function isPermanentFailure(message: string): boolean {
 export async function runReview(
   job: ReviewJob,
   deps: ReviewWorkflowDeps,
-  overrides: { org?: string; model?: string } = {},
+  overrides: { org?: string; model?: string; check?: ReviewCheck } = {},
 ): Promise<ReviewOutcome> {
   const log = deps.logger ?? noopLogger;
   const ref = refFromJob(job);
@@ -223,6 +311,13 @@ export async function runReview(
     log.info("resolved head commit for command job", { repo: job.repo, pr: job.pr_number, head: ref.headSha });
   }
   const base = { repo: job.repo, pr: job.pr_number, head: ref.headSha };
+
+  // Step 0b — put Cavix in the Checks box before any slow work, so the pull
+  // request shows a running check rather than nothing at all while the model and
+  // the sandbox do their work. The handler passes its own instance in so a
+  // self-heal retry moves the existing row instead of opening a second one.
+  const check = overrides.check ?? new ReviewCheck(deps.github, log);
+  await check.begin(ref);
 
   // Step 1 — fetch the diff.
   const diff = await deps.github.fetchPullDiff(ref);
@@ -356,7 +451,7 @@ export async function runReview(
 
   // Step 5 — post the review itself: findings, anchored to their lines.
   const requestChanges = shouldRequestChanges(config, preMerge, result.findings.map((f) => f.severity));
-  const built = buildReviewSubmission(result, diff, {
+  const posterOpts = {
     ref: linkRef,
     includeSummary: !descriptionUpdated && summaryHasContent,
     suppressedCount,
@@ -364,7 +459,8 @@ export async function runReview(
     requestChanges,
     sections: config.sections,
     badges: deps.badges !== false,
-  });
+  };
+  const built = buildReviewSubmission(result, diff, posterOpts);
   const posted = await deps.github.postReview(ref, built.submission);
   log.info("review posted", {
     ...base,
@@ -376,6 +472,19 @@ export async function runReview(
     verified: built.verifiedCount,
     suppressed: suppressedCount,
   });
+
+  // Step 5b — close the check run now the review is on the page. It fails only
+  // when the owner turned blocking on AND something they nominated failed: a
+  // review Cavix was not asked to gate on always passes, so a team that never
+  // opted in never has Cavix standing between them and a merge.
+  const output = buildCheckOutput(result, diff, posterOpts);
+  await check.finish(
+    ref,
+    requestChanges ? "failure" : "success",
+    output.title,
+    output.summary,
+    posted.htmlUrl,
+  );
 
   // Step 6 — record it on the dashboard. This is what the org actually looks at
   // between pull requests, and it is where accept/reject decisions (the learning
@@ -413,6 +522,7 @@ export async function runReview(
     preMerge,
     blocked: requestChanges,
     recorded,
+    checkRunId: check.runId,
     costUsd: result.costUsd + verifyCost,
     model: result.model,
   };
@@ -512,11 +622,17 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       }
     }
 
+    // One check run for the whole job, handed to every attempt. A self-heal
+    // retries the review against a different model, and without this each retry
+    // would open its own row: the PR would end up with three Cavix checks, two of
+    // them spinning until GitHub times them out.
+    const check = new ReviewCheck(deps.github, log);
+
     let healedTo = "";
     try {
       let outcome;
       try {
-        outcome = await runReview(job, deps, { org });
+        outcome = await runReview(job, deps, { org, check });
       } catch (err) {
         // SELF-HEAL: providers retire models, so a model saved months ago can stop
         // working with no change on our side. Rather than fail and wait for a
@@ -532,7 +648,7 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         let lastErr = err;
         for (const candidate of candidates) {
           try {
-            outcome = await runReview(job, deps, { org, model: candidate });
+            outcome = await runReview(job, deps, { org, model: candidate, check });
             healedTo = candidate;
             const saved = deps.saveModel ? await deps.saveModel(orgId, candidate) : false;
             log.info("auto-healed an unavailable model", {
@@ -572,6 +688,7 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         description_updated: outcome.descriptionUpdated,
         recorded: outcome.recorded,
         url: outcome.posted.htmlUrl,
+        check_run: outcome.checkRunId,
         ...(healedTo ? { healed_model: healedTo } : {}),
       });
     } catch (err) {
@@ -585,6 +702,21 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         err: message,
       });
       await react(deps, job, ref, "confused");
+
+      // Close the check run rather than leaving a spinner on the PR forever.
+      //
+      // NEUTRAL, not failure. GitHub counts neutral as passing for a required
+      // check, and that is the point: Cavix being unable to run is our problem,
+      // not a reason to freeze somebody's merges. A red cross here would mean an
+      // expired API key silently blocks every merge in the org. The title says
+      // plainly that no review happened, so nobody mistakes it for a pass.
+      await check.finish(
+        ref,
+        "neutral",
+        "Review could not be completed",
+        `${explain(message)}\n\n<details><summary>Technical detail</summary>\n\n\`\`\`\n${cleanUp(message)}\n\`\`\`\n\n</details>`,
+      );
+
       if (isCommandJob(job)) {
         // A retired model is the one failure where we can name the fix exactly,
         // so fetch the org's real options instead of pointing at the dashboard.
