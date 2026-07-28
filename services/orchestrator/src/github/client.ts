@@ -49,6 +49,25 @@ export interface PostedReview {
 }
 
 /**
+ * Hidden marker on every review body Cavix posts.
+ *
+ * It is how a later run recognises its own earlier reviews so it can clean them
+ * up. Matching on the bot's login would be the obvious alternative, but the login
+ * differs per deployment (an App slug here, a PAT's human account there), and a
+ * self-hosted install that renamed its App would silently stop finding its own
+ * work. A marker in the body is stable across all of that. GitHub renders an HTML
+ * comment as nothing, so no reader ever sees it.
+ */
+export const REVIEW_MARKER = "<!-- cavix:review -->";
+
+/** One of Cavix's own past reviews on a pull request. */
+export interface OwnReview {
+  id: number;
+  /** "COMMENTED" | "CHANGES_REQUESTED" | "APPROVED" | "DISMISSED". */
+  state: string;
+}
+
+/**
  * The reaction emojis GitHub accepts. Cavix uses them as the fast, unmistakable
  * "I heard you" signal on the comment that triggered a review:
  *   eyes     👀 — picked up, working on it
@@ -118,6 +137,22 @@ export interface GitHubClient {
   findComment(ref: PullRef, marker: string): Promise<{ id: number } | null>;
   /** Edit a comment we posted earlier. */
   updateComment(ref: PullRef, commentId: number, body: string): Promise<void>;
+  /** Cavix's own past reviews on this PR, newest last, found by REVIEW_MARKER. */
+  listOwnReviews(ref: PullRef): Promise<OwnReview[]>;
+  /**
+   * Dismiss one of our past reviews.
+   *
+   * GitHub only allows this for a review in APPROVED or CHANGES_REQUESTED state;
+   * a plain COMMENTED review cannot be dismissed or deleted through the API at
+   * all. Implementations swallow that refusal, because the case that matters is
+   * exactly the one that works: a stale CHANGES_REQUESTED review left blocking a
+   * merge after the author already fixed everything.
+   */
+  dismissReview(ref: PullRef, reviewId: number, message: string): Promise<void>;
+  /** Inline comment ids belonging to the given reviews of ours. */
+  listReviewCommentIds(ref: PullRef, reviewIds: number[]): Promise<number[]>;
+  /** Delete one inline review comment. Idempotent: a missing one is a success. */
+  deleteReviewComment(ref: PullRef, commentId: number): Promise<void>;
   /**
    * Open the Cavix row in the PR's Checks box. Returns 0 when the check could
    * not be created, which is an ordinary outcome rather than an error: check

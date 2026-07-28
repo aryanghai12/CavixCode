@@ -5,6 +5,79 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Stages 3 to 9 now run on real pull requests
+
+#### Added
+- **`makeDeepReviewStep`** wires `packages/pipeline` into `runReview`: the
+  deterministic scanners (Stage 3), a call graph over the changed files (Stage
+  4), context assembly and compression (Stage 7), seven specialist agents in
+  parallel (Stage 8) and adjudication over all of it (Stage 9). Until now the
+  live service reviewed every pull request with one model and one prompt over
+  the raw diff, while the pipeline that does all of the above ran nowhere but its
+  own tests. The eval harness has scored the two side by side the whole time:
+  81.8% F1 and an 18.2% false-positive rate for the single pass, 95.7% and 8.3%
+  for the pipeline.
+- **`Reviewer.summarise`**, a cheap pass that produces only the summary,
+  walkthrough and effort. The ensemble finds defects; nobody was left writing the
+  prose the description needs, and running a second full review for it would have
+  paid twice to find the same things.
+- Fails soft, deliberately. The deep path reads files through the API and fans
+  out to seven models; any error there falls back to the single-model pass rather
+  than costing somebody their review. `CAVIX_DEEP_REVIEW=off` makes that fallback
+  permanent and roughly halves the model spend per review.
+- The Scope module's `AST Verification`, `Deterministic Pass` and `Ensemble` rows
+  now render, fed by real counts from the stages that ran. They were built for
+  this and had been dark since the module shipped.
+
+#### Fixed
+- **`runDeterministic` under-reported `toolsRun`.** The two always-on in-process
+  scanners were excluded, so a deployment without semgrep installed reported that
+  zero tools had scanned the change. `Phase1Result` now carries `toolsRun` and
+  `toolsSkipped` through, so a caller stating "N tools ran" is stating what
+  executed rather than counting findings.
+
+### Command handling and four dead settings
+
+#### Fixed
+- **Every `@cavix` command ran a full, billable review.** The Go edge recognises
+  eight commands and enqueues all of them; the orchestrator never read
+  `job.command`. Typing `@cavixcode help` made a frontier-model call, ran the
+  sandbox and posted a review comment, and `@cavixcode pause` started a review
+  instead of stopping one. New `workflow/commands.ts` dispatches: `review` and
+  `summary` reach a model, `ask` gets its own cheap prose path, and `resolve`,
+  `pause`, `resume`, `configure` and `help` are repository operations that cost
+  nothing.
+- **`force_fresh` was never read**, so `@cavix review` stacked a new review on
+  top of every earlier one. A fresh review now deletes Cavix's own inline
+  comments and dismisses a stale blocking review first. Reviews are found by a
+  hidden `REVIEW_MARKER` in the body rather than by bot login, which differs per
+  deployment. GitHub does not permit deleting or dismissing a plain COMMENTED
+  review, by anyone, so that limitation is documented rather than papered over.
+- **`pathFilters` did nothing.** Stored, served to the orchestrator, ignored. Now
+  applied to the diff *before* the model sees it, so an excluded directory is
+  neither billed for nor disclosed to the provider. A pull request with nothing
+  left after filtering closes the check as "Nothing to review" instead of posting
+  an empty one.
+- **`tone` did nothing.** It reached the settings page and the preview and never
+  the model. Five voices now append a rule to the system prompt. None of them can
+  change what is reported or how severe it is: tone is a voice control, not a
+  leniency dial.
+- **`autoReview` and `reviewDraftPRs` did nothing.** Both now suppress automatic
+  triggers only. An explicit `@cavixcode review` overrides both, and a pause,
+  because a human asking by name is the clearest signal there is.
+- Pause state lives in a hidden marker on Cavix's own PR comment, not in worker
+  memory: the orchestrator restarts and scales horizontally, so memory is the one
+  place the setting could not survive.
+
+#### Changed
+- `OrgReviewConfig` carries `autoReview`, `reviewDraftPRs`, `tone` and
+  `pathFilters`. Missing fields take the safe default, never `undefined`-as-false,
+  so an older control-plane cannot silently stop reviews for everyone.
+- README's stage table is now two columns, **Built** and **Live on a real PR**.
+  They were not the same thing, and one table saying "Built" for both was the
+  first dishonest claim in a product whose pitch is that it does not make those.
+  Stage 11 said "5 platforms"; only GitHub is reachable from the running service.
+
 ### Cavix in the Checks box
 
 #### Added

@@ -1,8 +1,10 @@
 import {
   CHECK_NAME,
+  REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
   type GitHubClient,
+  type OwnReview,
   type PullRef,
   type PostedReview,
   type PullMeta,
@@ -215,6 +217,66 @@ export class RestGitHubClient implements GitHubClient {
       const detail = await res.text().catch(() => "");
       throw new Error(`github: update comment HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`);
     }
+  }
+
+  async listOwnReviews(ref: PullRef): Promise<OwnReview[]> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews?per_page=100`;
+    const res = await this.fetchImpl(url, {
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    if (!res.ok) return []; // best-effort cleanup: never fail a review over it
+    const data = (await res.json()) as Array<{ id: number; state?: string; body?: string }>;
+    return data
+      .filter((r) => (r.body ?? "").includes(REVIEW_MARKER))
+      .map((r) => ({ id: r.id, state: r.state ?? "" }));
+  }
+
+  /**
+   * Dismiss one of our own past reviews.
+   *
+   * A 422 here is the expected answer for a COMMENTED review, which GitHub will
+   * not let anyone dismiss or delete. That is not a failure to report: it just
+   * means there was nothing blocking to clear.
+   */
+  async dismissReview(ref: PullRef, reviewId: number, message: string): Promise<void> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews/${reviewId}/dismissals`;
+    const res = await this.fetchImpl(url, {
+      method: "PUT",
+      headers: {
+        ...(await this.headers(ref, "application/vnd.github+json")),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ message, event: "DISMISS" }),
+    });
+    if (res.status === 422 || res.status === 404 || res.status === 403) return;
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`github: dismiss review HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`);
+    }
+  }
+
+  async listReviewCommentIds(ref: PullRef, reviewIds: number[]): Promise<number[]> {
+    if (reviewIds.length === 0) return [];
+    const mine = new Set(reviewIds);
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments?per_page=100`;
+    const res = await this.fetchImpl(url, {
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as Array<{ id: number; pull_request_review_id?: number }>;
+    return data.filter((c) => c.pull_request_review_id !== undefined && mine.has(c.pull_request_review_id)).map((c) => c.id);
+  }
+
+  async deleteReviewComment(ref: PullRef, commentId: number): Promise<void> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/comments/${commentId}`;
+    const res = await this.fetchImpl(url, {
+      method: "DELETE",
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    // Already gone is the outcome we wanted, so 404 is a success.
+    if (res.status === 404 || res.ok) return;
+    const detail = await res.text().catch(() => "");
+    throw new Error(`github: delete review comment HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`);
   }
 
   /**

@@ -14,6 +14,7 @@ import { FakeTestGenerator, Verifier } from "@cavix/verifier";
 import { Reviewer } from "./reviewer/reviewer.ts";
 import { FakeGitHubClient } from "./github/fake.ts";
 import { makeVerifyStep } from "./verify/verify.ts";
+import { makeDeepReviewStep } from "./pipeline/deepReview.ts";
 import { runReview, type WorkflowLogger } from "./workflow/reviewWorkflow.ts";
 
 const DIFF = `diff --git a/src/auth.mjs b/src/auth.mjs
@@ -148,9 +149,13 @@ async function main() {
     logger: jsonLogger,
   });
 
+  // Stages 3, 4, 7, 8 and 9 over the same fake provider: the deterministic
+  // scanners and the call graph are REAL here, only the models are faked.
+  const deepReview = makeDeepReviewStep({ gateway, github, logger: jsonLogger });
+
   console.log("── workflow logs ──────────────────────────────────────────────");
   const started = Date.now();
-  const outcome = await runReview(job, { github, reviewer, verify, logger: jsonLogger });
+  const outcome = await runReview(job, { github, reviewer, deepReview, verify, logger: jsonLogger });
   const elapsed = Date.now() - started;
 
   const review = github.lastReview()!;

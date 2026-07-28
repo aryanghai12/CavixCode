@@ -106,3 +106,105 @@ export function buildUserMessage(input: PromptInput): string {
     "```",
   ].join("\n");
 }
+
+/**
+ * The org's chosen writing voice, appended to the system prompt.
+ *
+ * This is a dashboard setting under "Comment tone". It used to be stored, shown
+ * in the settings page and in the sample-review preview, and then never reach the
+ * model at all, so changing it did nothing to a real review.
+ *
+ * Note what none of these can do: change what gets reported or how severe it is.
+ * Tone is a voice control, not a leniency dial, and every option below still has
+ * to obey the writing rules above it.
+ */
+const TONES: Record<string, string> = {
+  concise: "Voice: terse. Shortest sentence that carries the fact. Never two sentences where one does.",
+  detailed:
+    "Voice: thorough. After stating the problem, add the mechanism: how the failure happens and under what input. Still no filler.",
+  educational:
+    "Voice: teaching. State the problem, then one sentence on the underlying principle, so a junior engineer learns the rule and not just this fix.",
+  assertive:
+    "Voice: direct. Say what must change, in the imperative. No hedging words at all ('might', 'could', 'perhaps', 'consider').",
+  chill:
+    "Voice: relaxed and collegial, the way a friendly teammate leaves a comment. Plain words, no jargon for its own sake. Still precise, and never soften a real defect to be nice.",
+};
+
+export function toneRule(tone?: string): string {
+  const rule = TONES[(tone ?? "").toLowerCase()];
+  return rule ? `\n\n${rule}` : "";
+}
+
+/**
+ * Summary, walkthrough and effort, and nothing else.
+ *
+ * When the deep pipeline (stages 3 to 9) produces the findings, nobody has
+ * produced the prose the pull request description needs. This is that pass, and
+ * it is deliberately its own cheap call rather than a second full review: the
+ * seven specialists have already read the diff for defects, and asking an eighth
+ * model to find defects it will then not be allowed to report is pure waste.
+ */
+export const SUMMARY_SYSTEM_PROMPT = `You are Cavix. Describe a pull request. You are NOT reviewing it.
+
+Do not report bugs, risks, or anything that is wrong with the change. Another part
+of Cavix does that, and anything you say about defects is discarded.
+
+Writing style (this goes at the top of someone's pull request):
+- Plain ASCII punctuation only. NEVER use em dashes or en dashes ("—", "–"),
+  smart quotes or ellipsis characters. NO EMOJI.
+- Short, direct sentences. No filler openers, no praise, no hedging.
+- Never open with "This PR" or "This pull request". Start with the verb.
+
+Respond with ONLY a JSON object (no prose, no markdown fences):
+{
+  "summary": "<2-4 sentences: what the change DOES and WHY, in architectural terms, not in terms of the edit. 'Refunds become idempotent so a repeated Stripe webhook cannot charge twice', not 'adds an if statement to refund.ts'.>",
+  "walkthrough": [
+    { "path": "<file path exactly as in the diff>", "summary": "<one short line: what this file now does differently>" }
+  ],
+  "effort": <integer 1-5: how much human review attention this change needs>
+}
+Include a walkthrough entry for EVERY file in the diff, even unremarkable ones.
+It is the reader's map of the change.`;
+
+export interface AskInput {
+  title: string;
+  diff: string;
+  question: string;
+}
+
+/**
+ * Free-text Q&A about a pull request, for when someone types "@cavixcode does
+ * this still work if the webhook retries?".
+ *
+ * Deliberately NOT the review prompt. It answers one question in prose and is
+ * told to say when the diff does not contain the answer, because the failure
+ * mode of a Q&A bot is confidently describing code it cannot see.
+ */
+export const ASK_SYSTEM_PROMPT = `You are Cavix, answering one question about a pull request.
+
+You can see the pull request's title and its unified diff, and nothing else.
+
+Rules:
+- Answer the question asked. Do not review the code, do not list issues that were
+  not asked about, do not add a summary.
+- If the diff does not contain enough to answer, say exactly what you would need
+  to see. Never guess at code that is not in front of you.
+- Quote the relevant lines with a markdown code block when it helps.
+- Plain ASCII punctuation only. NEVER use em dashes or en dashes, smart quotes or
+  ellipsis characters. NO EMOJI.
+- Short, direct sentences. No filler openers, no praise, no restating the question.
+- Answer in GitHub-flavoured markdown. Do not wrap the whole answer in a code fence.`;
+
+export function buildAskMessage(input: AskInput): string {
+  return [
+    `Pull request title: ${input.title}`,
+    "",
+    "Unified diff:",
+    "```diff",
+    input.diff.trimEnd(),
+    "```",
+    "",
+    "Question:",
+    input.question,
+  ].join("\n");
+}

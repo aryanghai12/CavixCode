@@ -4,7 +4,7 @@ export * from "./github/client.ts";
 export { RestGitHubClient, StaticTokenProvider, type TokenProvider } from "./github/rest.ts";
 export { FakeGitHubClient } from "./github/fake.ts";
 
-export { Reviewer, type ReviewInput } from "./reviewer/reviewer.ts";
+export { Reviewer, type ReviewInput, type AskInput, type AskResult } from "./reviewer/reviewer.ts";
 export { parseModelReview, extractJsonObject } from "./reviewer/parse.ts";
 export { REVIEW_SYSTEM_PROMPT, buildUserMessage } from "./reviewer/prompt.ts";
 
@@ -38,6 +38,14 @@ export {
 } from "./verify/verify.ts";
 
 export {
+  makeDeepReviewStep,
+  type DeepReviewStep,
+  type DeepReviewInput,
+  type DeepReviewResult,
+  type DeepReviewOptions,
+} from "./pipeline/deepReview.ts";
+
+export {
   runPreMergeChecks,
   type CheckStatus,
   type PreMergeCheck,
@@ -54,6 +62,19 @@ export {
 } from "./byok/reviewConfig.ts";
 
 export { fetchSources, changedPaths, type SourceFile } from "./sources.ts";
+
+export {
+  dispatchCommand,
+  commandOf,
+  isAutomatic,
+  isPaused,
+  PAUSED_MARKER,
+  STATUS_MARKER,
+  type CommandName,
+  type Dispatch,
+  type ReviewMode,
+} from "./workflow/commands.ts";
+export { filterDiff, allowsPath, NO_FILTERS, type PathFilters } from "./workflow/pathFilter.ts";
 
 export type { WorkflowEngine, ReviewHandler } from "./workflow/engine.ts";
 export { InlineEngine } from "./workflow/inline.ts";

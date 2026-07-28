@@ -9,7 +9,7 @@ import {
   type Severity,
   type Verification,
 } from "@cavix/core";
-import type { InlineComment, ReviewEvent, ReviewSubmission } from "../github/client.ts";
+import { REVIEW_MARKER, type InlineComment, type ReviewEvent, type ReviewSubmission } from "../github/client.ts";
 import type { PreMergeResult } from "../policy/preMerge.ts";
 import { ALL_SECTIONS, type ReviewSections } from "../byok/reviewConfig.ts";
 
@@ -137,8 +137,12 @@ const VERIFIED_BADGE = "⬢ verified";
 export const SUMMARY_START = "<!-- cavix:summary:start -->";
 export const SUMMARY_END = "<!-- cavix:summary:end -->";
 
-/** The H2 the review comment opens with. */
-const TITLE = "## ◈ Cavix Review";
+/**
+ * The H2 the review comment opens with, preceded by the hidden marker that lets
+ * a later run find this review again to clean it up. GitHub renders an HTML
+ * comment as nothing, so the reader sees only the heading.
+ */
+const TITLE = `${REVIEW_MARKER}\n## ◈ Cavix Review`;
 
 /**
  * The H2 the description block opens with. Named for what is under it rather

@@ -8,9 +8,11 @@ part most review tools skip: it runs the code in a locked-down sandbox to check
 whether the bug it thinks it found is actually real. Anything it cannot reproduce
 never gets posted. What lands on your pull request is a review with receipts.
 
-It also works on GitLab, Bitbucket and Azure DevOps, runs on your own servers if
-you want it to (including with no internet access at all), and uses your own AI
-provider key so your code never touches ours.
+It runs on your own servers if you want it to (including with no internet access
+at all), and uses your own AI provider key so your code never touches ours.
+GitLab, Bitbucket and Azure DevOps adapters are written and tested in
+[packages/platforms/](packages/platforms/) but are not yet reachable from the
+running service, so today the live product is GitHub only.
 
 ---
 
@@ -244,22 +246,37 @@ a human skims the comment.
 
 Thirteen stages, from webhook to posted review.
 
-| # | Stage | Status |
-|---|-------|--------|
-| 0 | Edge ingestion and concurrency (Go webhook receiver, priority queue) | Built |
-| 1 | Durable job orchestration (BullMQ today, Temporal-swappable) | Built |
-| 2 | Ephemeral sandbox provisioning, no network egress | Built (Local, Docker, Cloudflare) |
-| 3 | Deterministic pre-analysis: linters, SAST, secret scan, policy gate | Built |
-| 4 | AST plus intra-repo semantic graph | Built (heuristic parsers) |
-| 5 | Cross-repo and microservice impact graph | Built |
-| 6 | CI/CD telemetry and regression prediction | Built |
-| 7 | Context retrieval and compression | Built |
-| 8 | Multi-agent ensemble with model routing | Built (7 agents) |
-| 9 | Adjudication: dedupe, vote, calibrate, threshold | Built |
-| 10 | Execution-grounded verification: reproduce, PoC, fix-and-run | Built |
-| 11 | Synthesis and posting | Built (5 platforms) |
-| 12 | Feedback and learning loop | Built (calibration) |
-| 13 | Teardown, zero retention, observability, cost accounting | Built (verified purge) |
+Two columns, because they are two different questions. **Built** means the code
+exists and is tested. **Live** means it runs when a real pull request is opened.
+They are not the same thing yet, and saying otherwise would be the first
+dishonest claim in a product whose whole pitch is that it does not make those.
+
+| # | Stage | Built | Live on a real PR |
+|---|-------|:---:|---|
+| 0 | Edge ingestion and concurrency (Go webhook receiver, priority queue) | yes | yes |
+| 1 | Durable job orchestration (BullMQ today, Temporal-swappable) | yes | yes |
+| 2 | Ephemeral sandbox provisioning, no network egress | yes | yes (Local, Docker, Cloudflare) |
+| 3 | Deterministic pre-analysis: linters, SAST, secret scan | yes | **yes** |
+| 3c | Optional org policy gate | yes | yes |
+| 4 | AST plus intra-repo semantic graph | yes (heuristic parsers) | **yes**, over the changed files |
+| 5 | Cross-repo and microservice impact graph | yes | not yet |
+| 6 | CI/CD telemetry and regression prediction | yes | not yet |
+| 7 | Context retrieval and compression | yes | **yes** |
+| 8 | Multi-agent ensemble with model routing | yes (7 agents) | **yes** |
+| 9 | Adjudication: dedupe, vote, calibrate, threshold | yes | **yes** |
+| 10 | Execution-grounded verification: reproduce, PoC, fix-and-run | yes | **yes** |
+| 11 | Synthesis and posting | yes (5 platforms) | yes, GitHub only |
+| 12 | Feedback and learning loop | yes | decisions are recorded, nothing consumes them yet |
+| 13 | Teardown, zero retention, observability, cost accounting | yes | sandbox teardown and cost accounting |
+
+Stages 3 through 9 are composed by [packages/pipeline/](packages/pipeline/) and
+run on every pull request. If any of it fails, the review falls back to a single
+model pass over the diff rather than failing: `CAVIX_DEEP_REVIEW=off` makes that
+fallback the permanent behaviour and roughly halves the model spend per review.
+
+Stage 4 indexes the files this pull request changed, not the whole repository. A
+full-repo index belongs to an onboarding job, not to a hot path that has to
+answer while somebody is looking at the page.
 
 The path a pull request takes:
 
@@ -355,11 +372,35 @@ description, blocking off.
 Repositories can also carry a `.cavix.yaml` or `.cavix.json` for per-repo path
 filters, disabled agents, tone and `failOn` severities.
 
-Anyone with write access can type `@cavix review` on a pull request for a fresh
-review. Stale Cavix reviews get dismissed, the cache is busted, and the new
-review replaces the old one instead of stacking on it. Cavix adds an eyes
-reaction to your comment the moment it picks the command up, so silence always
-means the webhook never arrived rather than "it is thinking".
+## Talking to Cavix on a pull request
+
+Anyone with write access to the repository can mention Cavix in a comment.
+
+| Command | What it does | Costs a model call |
+|---|---|:---:|
+| `@cavixcode review` | Full review of the current head. Deletes Cavix's earlier inline comments first, dismisses a stale blocking review, and lifts a pause. | yes |
+| `@cavixcode summary` | Rewrites just the summary in the description. No findings, no inline comments. | yes, one cheap pass |
+| `@cavixcode <question>` | Answers a question about the change, for example `@cavixcode does this handle a webhook retry?` | yes, one cheap pass |
+| `@cavixcode resolve` | Dismisses Cavix's blocking review and removes its inline comments. | no |
+| `@cavixcode pause` | Stops automatic reviews on this pull request. | no |
+| `@cavixcode resume` | Starts them again. | no |
+| `@cavixcode configure` | Points at the dashboard. | no |
+| `@cavixcode help` | The table above, posted on the PR. | no |
+
+The pause is stored as a hidden marker in Cavix's own comment on the pull
+request, not in a database. The orchestrator is a restartable, horizontally
+scaled worker, so anything held in its memory is lost on the next deploy and
+invisible to its siblings. GitHub is already the shared, durable store both of
+them can see.
+
+Cavix adds an eyes reaction to your comment the moment it picks the command up,
+so silence always means the webhook never arrived rather than "it is thinking".
+
+One thing GitHub does not allow, so neither can we: a review posted as a plain
+comment can be neither dismissed nor deleted through the API, by anyone,
+including the account that posted it. `review` and `resolve` therefore clear the
+inline comments and dismiss a blocking review, and GitHub collapses the old
+review bodies as outdated on its own once the lines move.
 
 ---
 
@@ -421,6 +462,8 @@ likely to touch:
 | `CAVIX_LLM_MODEL` | `claude-opus-5` | Fallback model. Reviews are the product, so capability wins over cost, and BYOK means the org pays their provider directly |
 | `CAVIX_SUMMARY_IN_DESCRIPTION` | on | Set to `off` to keep the summary in the review comment |
 | `CAVIX_REVIEW_BADGES` | on | Set to `off` for air-gapped GitHub Enterprise, where the image proxy cannot reach shields.io |
+| `CAVIX_DEEP_REVIEW` | on | Set to `off` to review with a single model pass instead of stages 3 to 9. Halves the model spend per review, at 81.8% F1 instead of 95.7% |
+| `CAVIX_VERIFY` | on | Set to `off` to post findings without reproducing them in a sandbox first |
 | `CAVIX_BOT_HANDLE` | `cavixcode` | The handle people type to trigger a command |
 
 See [SETUP_KEYS.md](SETUP_KEYS.md) for how to get each credential, and

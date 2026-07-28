@@ -53,6 +53,14 @@ export interface Phase1Result {
   findings: Finding[];
   context: ReviewContext;
   deterministicCount: number;
+  /**
+   * Scanners that actually executed, by name. Distinct from
+   * `deterministicCount`, which counts findings: a clean repo runs every tool and
+   * reports nothing, and a caller that wants to say "24 tools ran" must not read
+   * that number off the findings.
+   */
+  toolsRun: string[];
+  toolsSkipped: string[];
   policyCount: number;
   ensembleAbstained: string[];
   droppedCount: number;
@@ -103,6 +111,8 @@ export async function runPhase1Review(input: Phase1Input, deps: Phase1Deps): Pro
     findings: adjudicated.findings,
     context,
     deterministicCount: deterministic.findings.length,
+    toolsRun: deterministic.toolsRun,
+    toolsSkipped: deterministic.toolsSkipped,
     policyCount: policyFindings.length,
     ensembleAbstained: ensembleResult.abstainedAgents,
     droppedCount: adjudicated.dropped.length,

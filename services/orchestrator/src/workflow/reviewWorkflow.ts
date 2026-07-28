@@ -21,6 +21,16 @@ import {
 import type { ReviewHandler } from "./engine.ts";
 import { rankModels, renderSuggestions } from "../byok/models.ts";
 import type { ReviewRecorder } from "../report/recorder.ts";
+import {
+  dispatchCommand,
+  isAutomatic,
+  isPaused,
+  STATUS_MARKER,
+  type Dispatch,
+  type ReviewMode,
+} from "./commands.ts";
+import { filterDiff } from "./pathFilter.ts";
+import type { DeepReviewResult, DeepReviewStep } from "../pipeline/deepReview.ts";
 
 /** How many alternative models to try before giving up. Each try is a real call. */
 const MAX_HEAL_ATTEMPTS = 5;
@@ -69,6 +79,15 @@ export interface ReviewWorkflowDeps {
    */
   verify?: VerifyStep;
   /**
+   * Stages 3, 4, 7, 8 and 9: deterministic scanners, the call graph, context
+   * assembly, the seven-agent ensemble and adjudication.
+   *
+   * Absent, or failing, falls back to the single-model pass. That fallback is
+   * the point: the deep path reads files through the API and fans out to seven
+   * models, and neither of those is allowed to cost somebody their review.
+   */
+  deepReview?: DeepReviewStep;
+  /**
    * Write the summary + walkthrough into the PR description. On by default: the
    * description is where a reviewer looks first, and it does not scroll away
    * under later comments. Set false to keep everything in the review comment.
@@ -98,6 +117,12 @@ export interface ReviewWorkflowDeps {
    * request by then, so nothing here may fail (or retry) the job.
    */
   recordReview?: ReviewRecorder;
+  /**
+   * Answer a free-text question someone asked on the pull request. Absent means
+   * "@cavixcode <question>" replies that questions are not enabled here, rather
+   * than falling back to a full review, which is what it used to do.
+   */
+  answer?: (job: ReviewJob, ref: PullRef, org: string, question: string) => Promise<string>;
 }
 
 export interface ReviewOutcome {
@@ -237,13 +262,6 @@ async function react(
 }
 
 /**
- * Hidden marker identifying Cavix's own status comment on a PR. GitHub renders
- * HTML comments as nothing, so this is invisible to readers but lets us find the
- * comment again.
- */
-const STATUS_MARKER = "<!-- cavix:status -->";
-
-/**
  * Post Cavix's status comment, or EDIT the existing one.
  *
  * The queue retries a failed job three times. Creating a comment each attempt
@@ -295,7 +313,15 @@ export function isPermanentFailure(message: string): boolean {
 export async function runReview(
   job: ReviewJob,
   deps: ReviewWorkflowDeps,
-  overrides: { org?: string; model?: string; check?: ReviewCheck } = {},
+  overrides: {
+    org?: string;
+    model?: string;
+    check?: ReviewCheck;
+    /** "summary" rewrites only the description. Set by "@cavixcode summary". */
+    mode?: ReviewMode;
+    /** Discard Cavix's earlier reviews and inline comments before posting. */
+    fresh?: boolean;
+  } = {},
 ): Promise<ReviewOutcome> {
   const log = deps.logger ?? noopLogger;
   const ref = refFromJob(job);
@@ -319,34 +345,113 @@ export async function runReview(
   const check = overrides.check ?? new ReviewCheck(deps.github, log);
   await check.begin(ref);
 
-  // Step 1 — fetch the diff.
-  const diff = await deps.github.fetchPullDiff(ref);
-  log.info("fetched diff", { ...base, bytes: diff.length });
-
-  // Step 2 — single-model review pass through the BYOK gateway. The org id comes
-  // from the gate (the dashboard workspace that enabled this repo), NOT from the
-  // GitHub owner login — those are different names, and using the login meant the
-  // org's saved API key was never found.
+  // Step 1 — what did the repo owner ask for? Verification, summary placement,
+  // the pre-merge gate, blocking, the writing tone and which paths are in scope
+  // are all their call, made on the dashboard.
+  //
+  // This runs BEFORE the model, not after it, because two of those settings
+  // decide what the model is even shown. Fetching the config afterwards is how
+  // path filters ended up costing tokens on files the owner had excluded.
   const org = overrides.org || job.org;
-  const result = await deps.reviewer.review({
-    org,
-    title: job.title,
-    diff,
-    // Explicit override: the gateway caches org config briefly, so a model we
-    // just auto-healed to would otherwise lose to the stale cached value.
-    ...(overrides.model ? { model: overrides.model } : {}),
+  const config = deps.reviewConfig ? await deps.reviewConfig(org) : DEFAULT_REVIEW_CONFIG;
+  const mode: ReviewMode = overrides.mode ?? "full";
+
+  // Step 2 — fetch the diff, then cut out the paths the owner excluded.
+  const fullDiff = await deps.github.fetchPullDiff(ref);
+  const filtered = filterDiff(fullDiff, config.pathFilters);
+  const diff = filtered.diff;
+  log.info("fetched diff", {
+    ...base,
+    bytes: fullDiff.length,
+    reviewed_files: filtered.kept.length,
+    excluded_files: filtered.dropped.length,
   });
+  if (filtered.dropped.length > 0) {
+    log.info("path filters excluded files from this review", { ...base, excluded: filtered.dropped.slice(0, 20) });
+  }
+
+  // Everything the owner allowed us to look at was excluded, so there is nothing
+  // to review. Say so on the check rather than posting an empty review.
+  if (filtered.kept.length === 0) {
+    await check.finish(
+      ref,
+      "success",
+      "Nothing to review",
+      filtered.dropped.length > 0
+        ? "Every file in this pull request is excluded by your path filters, under **Review settings**."
+        : "This pull request changes no files Cavix can read.",
+    );
+    log.info("skipped: no reviewable files after path filters", base);
+    return emptyOutcome(check.runId);
+  }
+
+  // Step 3 — read the change. The org id comes from the gate (the dashboard
+  // workspace that enabled this repo), NOT from the GitHub owner login: those are
+  // different names, and using the login meant the org's saved API key was never
+  // found.
+  //
+  // Two paths. The deep one runs stages 3 to 9 (deterministic scanners, the call
+  // graph, context assembly, seven specialist agents, adjudication) and needs a
+  // separate cheap pass for the prose. The shallow one is a single model over the
+  // raw diff, which is what shipped in Phase 0 and what every deployment falls
+  // back to when the deep path is off or breaks.
+  //
+  // Summary mode never takes the deep path: nobody typing "@cavixcode summary"
+  // wants seven agents billed to produce a paragraph.
+  const modelOverride = overrides.model ? { model: overrides.model } : {};
+  const proseInput = { org, title: job.title, diff, tone: config.tone, ...modelOverride };
+
+  // "@cavixcode summary" asked for the description and nothing else. One cheap
+  // pass produces it: no findings, no ensemble, no sandbox. Handled before the
+  // branch below so it can never fall into the full review path.
+  if (mode === "summary") {
+    const prose = await deps.reviewer.summarise(proseInput);
+    log.info("summary refreshed", { ...base, org, cost_usd: prose.costUsd, model: prose.model });
+    return await runSummaryOnly(job, ref, deps, config, prose, diff, check, log);
+  }
+
+  const deep = deps.deepReview;
+  let signals: DeepReviewResult | undefined;
+  let result;
+
+  if (deep) {
+    try {
+      const [pipeline, prose] = await Promise.all([
+        deep({ org, title: job.title, diff, ref }),
+        deps.reviewer.summarise(proseInput),
+      ]);
+      signals = pipeline;
+      result = { ...prose, findings: pipeline.findings, costUsd: prose.costUsd + pipeline.costUsd };
+    } catch (err) {
+      // The deep path reads files through the API and fans out to seven models.
+      // Plenty can go wrong there that has nothing to do with this pull request,
+      // and none of it is worth the customer's review.
+      log.error("deep review failed; falling back to the single-model pass", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
+  if (!result) result = await deps.reviewer.review(proseInput);
+
   log.info("review complete", {
     ...base,
     org,
+    mode,
+    path: signals ? "deep" : "single-model",
     findings: result.findings.length,
+    ...(signals
+      ? {
+          deterministic: signals.deterministicCount,
+          agents_reporting: signals.ensembleAgents,
+          dropped_by_adjudication: signals.droppedCount,
+          ast_symbols: signals.astSymbols,
+        }
+      : {}),
     cost_usd: result.costUsd,
     model: result.model,
   });
-
-  // Step 2b — what did the repo owner ask for? Verification, summary placement,
-  // the pre-merge gate and blocking are all their call, made on the dashboard.
-  const config = deps.reviewConfig ? await deps.reviewConfig(org) : DEFAULT_REVIEW_CONFIG;
 
   // Step 2c — the org's pre-merge gate. Deterministic checks over the files this
   // PR changes, compiled from the owner's own plain-English rules. These run
@@ -459,8 +564,28 @@ export async function runReview(
     requestChanges,
     sections: config.sections,
     badges: deps.badges !== false,
+    // The Scope module's AST, Deterministic Pass and Ensemble rows exist for
+    // exactly this: real counts from stages that actually ran. When the deep path
+    // did not run there are no counts, so those rows do not render, which is the
+    // behaviour the module was built around.
+    ...(signals
+      ? {
+          signals: {
+            astSymbols: signals.astSymbols,
+            tools: signals.toolsRun,
+            agents: signals.ensembleAgents,
+          },
+        }
+      : {}),
   };
   const built = buildReviewSubmission(result, diff, posterOpts);
+
+  // A fresh review replaces the last one instead of piling on top of it. This is
+  // what "@cavixcode review" means: look again, and let what you said last time
+  // go. Best-effort, and always before the new review is posted, so a reader
+  // never sees two Cavix reviews at once.
+  if (overrides.fresh) await clearPrevious(deps, ref, log);
+
   const posted = await deps.github.postReview(ref, built.submission);
   log.info("review posted", {
     ...base,
@@ -526,6 +651,158 @@ export async function runReview(
     costUsd: result.costUsd + verifyCost,
     model: result.model,
   };
+}
+
+/**
+ * Should an AUTOMATIC review be skipped? Returns the reason, or "" to proceed.
+ *
+ * These three switches only ever apply to a webhook Cavix reacted to on its own.
+ * A human typing "@cavixcode review" has overridden all of them by asking, and
+ * silently ignoring that would be the more confusing behaviour by far.
+ *
+ * All three used to be settings a customer could change on the dashboard with no
+ * effect whatsoever on a real pull request.
+ */
+async function shouldSkipAutomatic(
+  deps: ReviewWorkflowDeps,
+  ref: PullRef,
+  org: string,
+  log: WorkflowLogger,
+): Promise<string> {
+  const config = deps.reviewConfig ? await deps.reviewConfig(org) : DEFAULT_REVIEW_CONFIG;
+
+  if (!config.autoReview) return "automatic reviews are off for this workspace";
+
+  if (!config.reviewDraftPRs) {
+    try {
+      const meta = await deps.github.getPull(ref);
+      if (meta.draft) return "the pull request is a draft and this workspace does not review drafts";
+    } catch (err) {
+      // Could not tell whether it is a draft. Review it: a missed review is a
+      // worse outcome than reviewing a draft the org would rather we skipped.
+      log.info("could not read draft state, reviewing anyway", { err: (err as Error).message });
+    }
+  }
+
+  if (await isPaused(deps.github, ref)) return "Cavix is paused on this pull request";
+  return "";
+}
+
+/**
+ * The outcome shape for a run that decided there was nothing to do. Every count
+ * is zero and `posted` carries no url, so a caller cannot mistake it for a review.
+ */
+function emptyOutcome(checkRunId: number): ReviewOutcome {
+  return {
+    posted: { id: 0, htmlUrl: "" },
+    summary: "",
+    findingCount: 0,
+    inlineCount: 0,
+    offDiffCount: 0,
+    verifiedCount: 0,
+    suppressedCount: 0,
+    descriptionUpdated: false,
+    blocked: false,
+    recorded: false,
+    checkRunId,
+    costUsd: 0,
+    model: "",
+  };
+}
+
+/**
+ * "@cavixcode summary": rewrite the description block and stop.
+ *
+ * The model still reads the diff (a summary of a change cannot be produced any
+ * other way), but nothing is posted as a review. Someone asking for a refreshed
+ * summary after a rebase does not want a second review comment and a fresh set
+ * of inline comments on lines they already dealt with.
+ */
+async function runSummaryOnly(
+  job: ReviewJob,
+  ref: PullRef,
+  deps: ReviewWorkflowDeps,
+  config: OrgReviewConfig,
+  result: Awaited<ReturnType<Reviewer["review"]>>,
+  diff: string,
+  check: ReviewCheck,
+  log: WorkflowLogger,
+): Promise<ReviewOutcome> {
+  const linkRef = { owner: ref.owner, repo: ref.repo, headSha: ref.headSha };
+  let descriptionUpdated = false;
+  try {
+    const meta = await deps.github.getPull(ref);
+    const body = buildPullDescription(meta.body ?? "", result, diff, linkRef, config.sections);
+    if (body !== (meta.body ?? "")) await deps.github.updatePullBody(ref, body);
+    descriptionUpdated = true;
+  } catch (err) {
+    log.error("could not update the PR description for a summary command", {
+      repo: job.repo,
+      pr: job.pr_number,
+      err: (err as Error).message,
+    });
+  }
+
+  await check.finish(
+    ref,
+    "success",
+    descriptionUpdated ? "Summary refreshed" : "Summary could not be written",
+    descriptionUpdated
+      ? "The pull request description now describes the current head. No findings were posted, because `@cavixcode summary` asks only for the summary."
+      : "Cavix could not write to this pull request's description. On a fork PR that permission does not exist; comment `@cavixcode review` for a full review instead.",
+  );
+
+  return {
+    ...emptyOutcome(check.runId),
+    summary: result.summary,
+    descriptionUpdated,
+    costUsd: result.costUsd,
+    model: result.model,
+  };
+}
+
+/**
+ * Remove what the last Cavix review left on this pull request.
+ *
+ * What GitHub actually permits is narrower than it sounds. A CHANGES_REQUESTED
+ * review can be dismissed, which is the one that matters because it is the one
+ * holding the merge button. A COMMENTED review can be neither dismissed nor
+ * deleted through the API by anyone, including the account that posted it, so
+ * those bodies stay in the conversation and GitHub collapses them as outdated on
+ * its own. Inline comments we can and do delete, which is where the real clutter
+ * accumulates across re-reviews.
+ *
+ * Every failure here is swallowed. Tidying up is worth less than the review that
+ * follows it.
+ */
+async function clearPrevious(deps: ReviewWorkflowDeps, ref: PullRef, log: WorkflowLogger): Promise<void> {
+  try {
+    const mine = await deps.github.listOwnReviews(ref);
+    if (mine.length === 0) return;
+
+    let dismissed = 0;
+    for (const r of mine) {
+      if (r.state !== "CHANGES_REQUESTED") continue;
+      await deps.github.dismissReview(ref, r.id, "Superseded by a fresh Cavix review.");
+      dismissed++;
+    }
+    const commentIds = await deps.github.listReviewCommentIds(ref, mine.map((r) => r.id));
+    for (const id of commentIds) await deps.github.deleteReviewComment(ref, id);
+
+    log.info("cleared the previous Cavix review", {
+      repo: `${ref.owner}/${ref.repo}`,
+      pr: ref.number,
+      reviews_found: mine.length,
+      dismissed,
+      comments_deleted: commentIds.length,
+    });
+  } catch (err) {
+    log.info("could not fully clear the previous review (continuing)", {
+      repo: `${ref.owner}/${ref.repo}`,
+      pr: ref.number,
+      err: (err as Error).message,
+    });
+  }
 }
 
 /**
@@ -622,17 +899,53 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       }
     }
 
+    // What did this trigger actually ask for? Seven of the eight commands are
+    // repository operations that must never reach a model, and until this
+    // dispatch existed every one of them ran a full, billable review: typing
+    // "@cavixcode help" posted a review, and "@cavixcode pause" started one.
+    let dispatch: Dispatch;
+    try {
+      dispatch = await dispatchCommand(job, ref, {
+        github: deps.github,
+        say: (body) => say(deps, job, ref, body),
+        logger: log,
+        ...(deps.answer ? { ask: (q: string) => deps.answer!(job, ref, org ?? job.org, q) } : {}),
+      });
+    } catch (err) {
+      log.error("command failed", { repo: job.repo, pr: job.pr_number, command: job.command, err: (err as Error).message });
+      await react(deps, job, ref, "confused");
+      return;
+    }
+    if (!dispatch.review) {
+      log.info("command handled without a review", { repo: job.repo, pr: job.pr_number, command: job.command });
+      await react(deps, job, ref, "rocket");
+      return;
+    }
+
+    // Automatic triggers, and only automatic ones, answer to the owner's
+    // auto-review and draft settings and to a pause someone set on this PR. An
+    // explicit "@cavixcode review" always runs: a human asking for a review by
+    // name is a clearer signal than any default.
+    if (isAutomatic(job)) {
+      const skip = await shouldSkipAutomatic(deps, ref, org ?? job.org, log);
+      if (skip !== "") {
+        log.info(`skipped: ${skip}`, { repo: job.repo, pr: job.pr_number });
+        return;
+      }
+    }
+
     // One check run for the whole job, handed to every attempt. A self-heal
     // retries the review against a different model, and without this each retry
     // would open its own row: the PR would end up with three Cavix checks, two of
     // them spinning until GitHub times them out.
     const check = new ReviewCheck(deps.github, log);
+    const modes = { mode: dispatch.mode, fresh: dispatch.fresh };
 
     let healedTo = "";
     try {
       let outcome;
       try {
-        outcome = await runReview(job, deps, { org, check });
+        outcome = await runReview(job, deps, { org, check, ...modes });
       } catch (err) {
         // SELF-HEAL: providers retire models, so a model saved months ago can stop
         // working with no change on our side. Rather than fail and wait for a
@@ -648,7 +961,7 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         let lastErr = err;
         for (const candidate of candidates) {
           try {
-            outcome = await runReview(job, deps, { org, model: candidate, check });
+            outcome = await runReview(job, deps, { org, model: candidate, check, ...modes });
             healedTo = candidate;
             const saved = deps.saveModel ? await deps.saveModel(orgId, candidate) : false;
             log.info("auto-healed an unavailable model", {

@@ -1,12 +1,14 @@
-import type {
-  AuthIdentity,
-  CheckRunInput,
-  GitHubClient,
-  PullRef,
-  PostedReview,
-  PullMeta,
-  ReactionContent,
-  ReviewSubmission,
+import {
+  REVIEW_MARKER,
+  type AuthIdentity,
+  type CheckRunInput,
+  type GitHubClient,
+  type OwnReview,
+  type PullRef,
+  type PostedReview,
+  type PullMeta,
+  type ReactionContent,
+  type ReviewSubmission,
 } from "./client.ts";
 
 // FakeGitHubClient serves a canned diff and captures every review submitted to
@@ -25,6 +27,8 @@ export interface FakeGitHubOptions {
   body?: string;
   /** Repo contents at head, keyed by path — what the verifier reads. */
   files?: Record<string, string>;
+  /** Report the PR as a draft, so the draft setting can be exercised. */
+  draft?: boolean;
   /**
    * Refuse to create a check run, the way a PAT-backed deployment or an
    * installation without `checks: write` does. Lets a test prove the review
@@ -55,8 +59,15 @@ export class FakeGitHubClient implements GitHubClient {
    * `completed` with its conclusion.
    */
   readonly checkRuns: Array<{ id: number } & CheckRunInput> = [];
+  /** Reviews dismissed, in order, with the reason given. */
+  readonly dismissed: Array<{ id: number; message: string }> = [];
+  /** Inline review comments deleted, in order. */
+  readonly deletedComments: number[] = [];
   private readonly noChecks: boolean;
+  private readonly draft: boolean;
   private readonly commentIds = new Map<number, number>();
+  /** Review state per posted review id, so dismissal can behave like GitHub's. */
+  private readonly reviewState = new Map<number, string>();
   private seq = 0;
 
   constructor(opts: FakeGitHubOptions) {
@@ -66,6 +77,7 @@ export class FakeGitHubClient implements GitHubClient {
     this.pullBody = opts.body ?? "";
     this.files = { ...(opts.files ?? {}) };
     this.noChecks = opts.noChecks === true;
+    this.draft = opts.draft === true;
   }
 
   async fetchPullDiff(_ref: PullRef): Promise<string> {
@@ -77,7 +89,7 @@ export class FakeGitHubClient implements GitHubClient {
       headSha: this.headSha,
       baseSha: "basesha",
       title: this.title,
-      draft: false,
+      draft: this.draft,
       state: "open",
       body: this.pullBody,
     };
@@ -140,11 +152,44 @@ export class FakeGitHubClient implements GitHubClient {
 
   async postReview(ref: PullRef, review: ReviewSubmission): Promise<PostedReview> {
     this.seq++;
+    const id = 1000 + this.seq;
     this.submissions.push({ ref, review });
+    this.reviewState.set(id, review.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED");
     return {
-      id: 1000 + this.seq,
-      htmlUrl: `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}#pullrequestreview-${1000 + this.seq}`,
+      id,
+      htmlUrl: `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}#pullrequestreview-${id}`,
     };
+  }
+
+  async listOwnReviews(_ref: PullRef): Promise<OwnReview[]> {
+    return this.submissions
+      .map((s, i) => ({ id: 1001 + i, state: this.reviewState.get(1001 + i) ?? "COMMENTED", body: s.review.body }))
+      .filter((r) => r.body.includes(REVIEW_MARKER))
+      .map(({ id, state }) => ({ id, state }));
+  }
+
+  async dismissReview(_ref: PullRef, reviewId: number, message: string): Promise<void> {
+    // GitHub refuses to dismiss a COMMENTED review. The fake refuses too, so a
+    // test cannot pass against behaviour the real API does not have.
+    if (this.reviewState.get(reviewId) !== "CHANGES_REQUESTED") return;
+    this.reviewState.set(reviewId, "DISMISSED");
+    this.dismissed.push({ id: reviewId, message });
+  }
+
+  async listReviewCommentIds(_ref: PullRef, reviewIds: number[]): Promise<number[]> {
+    const out: number[] = [];
+    for (const id of reviewIds) {
+      const idx = id - 1001;
+      const sub = this.submissions[idx];
+      if (!sub) continue;
+      // Deterministic synthetic ids, one per inline comment of that review.
+      sub.review.comments.forEach((_, i) => out.push(id * 100 + i));
+    }
+    return out.filter((id) => !this.deletedComments.includes(id));
+  }
+
+  async deleteReviewComment(_ref: PullRef, commentId: number): Promise<void> {
+    this.deletedComments.push(commentId);
   }
 
   /** The most recently posted review, for assertions / demo logging. */

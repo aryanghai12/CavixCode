@@ -28,6 +28,7 @@ import { runBridge } from "./bridge/bridge.ts";
 import { GatewayTestGenerator, Verifier } from "@cavix/verifier";
 import { selectBackend } from "@cavix/sandbox";
 import { makeVerifyStep } from "./verify/verify.ts";
+import { makeDeepReviewStep } from "./pipeline/deepReview.ts";
 import { makeControlPlaneResolver } from "./byok/resolver.ts";
 import { makeRepoGate } from "./byok/gate.ts";
 import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
@@ -168,6 +169,26 @@ async function main() {
     : undefined;
   if (suggestModels) log("info", "model self-heal on: a retired model is replaced automatically");
 
+  // Stages 3, 4, 7, 8 and 9 — the deep review path: deterministic scanners, the
+  // call graph over the changed files, context assembly, seven specialist agents
+  // in parallel, then adjudication over all of it.
+  //
+  // ON unless disabled. The eval scores this path at 95.7% F1 against 81.8% for
+  // the single-model pass it replaces, and it fails soft: any error inside it
+  // falls back to that single pass rather than costing anybody their review.
+  // Turn it off with CAVIX_DEEP_REVIEW=off to halve the model spend per PR.
+  let deepReview;
+  if (process.env.CAVIX_DEEP_REVIEW !== "off") {
+    deepReview = makeDeepReviewStep({
+      gateway,
+      github,
+      logger: { info: (m, meta) => log("info", m, meta) },
+    });
+    log("info", "deep review on: 7-agent ensemble over a call graph, adjudicated");
+  } else {
+    log("info", "deep review off: reviewing with a single model pass over the diff");
+  }
+
   // Stage 10 — execution-grounded verification. This is the product's moat, so it
   // is ON unless explicitly disabled: findings get reproduced in a sealed,
   // network-less sandbox before they are posted, and the ones that fail to
@@ -233,9 +254,16 @@ async function main() {
     gate,
     suggestModels,
     saveModel,
+    deepReview,
     verify,
     reviewConfig,
     recordReview,
+    // "@cavixcode <question>" answers in prose instead of running a review.
+    answer: async (job, ref, orgId, question) => {
+      const diff = await github.fetchPullDiff(ref);
+      const { answer } = await reviewer.ask({ org: orgId, title: job.title ?? "", diff, question });
+      return answer;
+    },
     // The summary belongs in the PR description; opt out with =off.
     summaryInDescription: process.env.CAVIX_SUMMARY_IN_DESCRIPTION !== "off",
     // Coloured badges on the review header. Turn off for air-gapped GitHub

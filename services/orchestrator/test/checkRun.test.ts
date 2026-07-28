@@ -81,6 +81,10 @@ function config(over: Partial<OrgReviewConfig> = {}): OrgReviewConfig {
     failOn: ["critical"],
     preMergeChecks: { enabled: false, rules: [] },
     sections: ALL_SECTIONS,
+    autoReview: true,
+    reviewDraftPRs: true,
+    tone: "concise",
+    pathFilters: { include: [], exclude: [] },
     ...over,
   };
 }

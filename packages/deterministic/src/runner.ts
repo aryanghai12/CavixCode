@@ -48,7 +48,12 @@ export async function runDeterministic(opts: DeterministicOptions): Promise<Dete
   const inProcess = [new SecretScanner(), new BuiltinRuleScanner()];
   const builtinFindings = (await Promise.all(inProcess.map((s) => s.run(opts.files)))).flat();
 
-  const toolsRun: string[] = [];
+  // The two in-process scanners always run, on every deployment, with nothing
+  // installed. They belong in toolsRun for the same reason the external ones do:
+  // a caller reporting "N tools scanned this change" is stating what executed,
+  // and leaving these out made that number 0 on every install without semgrep,
+  // which reads as "we ran nothing".
+  const toolsRun: string[] = inProcess.map((s) => s.id);
   const toolsSkipped: string[] = [];
   let toolFindings: Finding[] = [];
 

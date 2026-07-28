@@ -8,9 +8,16 @@
   },
   "types": "./src/index.ts",
   "dependencies": {
+    "@cavix/adjudicator": "*",
+    "@cavix/agents": "*",
+    "@cavix/analyzer": "*",
+    "@cavix/context": "*",
     "@cavix/core": "*",
+    "@cavix/deterministic": "*",
     "@cavix/gateway": "*",
+    "@cavix/pipeline": "*",
     "@cavix/policy": "*",
+    "@cavix/repoconfig": "*",
     "@cavix/sandbox": "*",
     "@cavix/verifier": "*"
   },

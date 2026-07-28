@@ -29,6 +29,12 @@ export interface ReviewSections {
   proof: boolean;
 }
 
+/** Which files Cavix may review. Empty include means "everything not excluded". */
+export interface PathFilterConfig {
+  include: string[];
+  exclude: string[];
+}
+
 export interface OrgReviewConfig {
   verifyFindings: boolean;
   summaryInDescription: boolean;
@@ -38,6 +44,17 @@ export interface OrgReviewConfig {
   failOn: string[];
   preMergeChecks: PreMergeConfig;
   sections: ReviewSections;
+  /**
+   * Review automatically on open and on every push. Off means Cavix only runs
+   * when a human types "@cavixcode review", which is how a team dials the cost
+   * and the noise down without turning the product off.
+   */
+  autoReview: boolean;
+  /** Review draft pull requests too. Off by default: a draft is not ready. */
+  reviewDraftPRs: boolean;
+  /** The org's chosen writing voice for everything the model produces. */
+  tone: string;
+  pathFilters: PathFilterConfig;
 }
 
 export const ALL_SECTIONS: ReviewSections = {
@@ -55,6 +72,10 @@ export const DEFAULT_REVIEW_CONFIG: OrgReviewConfig = {
   failOn: ["critical"],
   preMergeChecks: { enabled: false, rules: [] },
   sections: ALL_SECTIONS,
+  autoReview: true,
+  reviewDraftPRs: false,
+  tone: "concise",
+  pathFilters: { include: [], exclude: [] },
 };
 
 export type ReviewConfigFetcher = (org: string) => Promise<OrgReviewConfig>;
@@ -136,6 +157,11 @@ export function coerce(value: unknown): OrgReviewConfig {
   const rs = (typeof v.reviewSections === "object" && v.reviewSections !== null
     ? v.reviewSections
     : {}) as Record<string, unknown>;
+  const pf = (typeof v.pathFilters === "object" && v.pathFilters !== null
+    ? v.pathFilters
+    : {}) as Record<string, unknown>;
+  const globs = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map(String).filter((g) => g.trim() !== "") : [];
   return {
     verifyFindings: v.verifyFindings !== false,
     summaryInDescription: v.summaryInDescription !== false,
@@ -152,5 +178,12 @@ export function coerce(value: unknown): OrgReviewConfig {
       inlineFindings: rs.inlineFindings !== false,
       proof: rs.proof !== false,
     },
+    // Absent means the safe default, never `undefined`-as-false. An older
+    // control-plane that does not send autoReview must not stop reviewing for
+    // everyone the moment the orchestrator learns the field exists.
+    autoReview: v.autoReview !== false,
+    reviewDraftPRs: v.reviewDraftPRs === true,
+    tone: typeof v.tone === "string" && v.tone.trim() !== "" ? v.tone : DEFAULT_REVIEW_CONFIG.tone,
+    pathFilters: { include: globs(pf.include), exclude: globs(pf.exclude) },
   };
 }
