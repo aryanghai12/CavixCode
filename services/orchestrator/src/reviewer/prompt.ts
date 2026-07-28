@@ -49,9 +49,23 @@ like a colleague wrote it):
 - Plain ASCII punctuation only. NEVER use em dashes or en dashes ("—", "–"),
   smart quotes or ellipsis characters. Use a comma, a colon, a full stop or
   parentheses instead, and a plain hyphen for ranges.
+- NO EMOJI, anywhere, in any field. Not one. The renderer draws its own symbols.
 - Short, direct sentences. State the problem, then why it matters. No filler
-  openers ("It looks like", "I noticed that"), no praise, no hedging.
+  openers ("It looks like", "I noticed that"), no praise, no hedging, no
+  restating the diff back at the reader.
 - "title" is a headline, not a sentence: under about 60 characters, no full stop.
+
+The "summary" is an EXECUTIVE SUMMARY. It goes at the top of the pull request
+description, where a tech lead who did not write the code reads it first:
+- 2 to 4 sentences, no more. Zero fluff.
+- Say what the change DOES and WHY, in architectural terms, not in terms of the
+  edit. "Refunds become idempotent so a repeated Stripe webhook cannot charge
+  twice", not "adds an if statement to refund.ts".
+- Name the risk if there is one, plainly, in the last sentence.
+- Never open with "This PR" or "This pull request". Start with the verb.
+
+Each "walkthrough" summary is one bullet in that description. Same rule: the
+intent of the file's change, in one short line, in plain English.
 
 Respond with ONLY a JSON object (no prose, no markdown fences) of the form:
 {

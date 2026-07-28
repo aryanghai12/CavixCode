@@ -29,6 +29,16 @@ diff --git a/README.md b/README.md
 
 const REF = { owner: "acme", repo: "widgets", headSha: "abc123" };
 
+/**
+ * Real emoji, as opposed to the geometric marks the house style is built from.
+ *
+ * Emoji_Presentation catches anything that renders as a colour pictograph by
+ * default (🔬 ✅ 🟧), and U+FE0F catches a text glyph forced into emoji
+ * presentation. The marks Cavix does use (◆ ◈ ◇ ▪ ⬢ ▲ ✓) are text-presentation
+ * shapes and pass this cleanly.
+ */
+const EMOJI = /\p{Emoji_Presentation}|️/u;
+
 function finding(over: Partial<Finding> = {}): Finding {
   return {
     path: "src/auth.js",
@@ -65,7 +75,9 @@ test("buildReviewSubmission: anchors a finding on an added line as an inline com
   assert.equal(c.startLine, undefined);
   assert.match(c.body, /SQL injection/);
   assert.match(c.body, /```suggestion/); // one-click fix block present
-  assert.match(c.body, /<sub>high · security · confidence 92%<\/sub>/); // provenance under the headline
+  // The severity is the colour of the callout the headline arrives in.
+  assert.match(c.body, /^> \[!WARNING\]\n> \*\*◈ SQL injection via string concatenation\*\*/);
+  assert.match(c.body, /<kbd>high<\/kbd> <kbd>security<\/kbd> <kbd>confidence 92%<\/kbd>/);
   assert.match(c.body, /<sub>`src\/auth\.js` line 12<\/sub>/); // location travels with the body
 });
 
@@ -96,14 +108,14 @@ test("buildReviewSubmission: the comment groups findings under their file with l
   );
   const body = built.submission.body;
 
-  assert.match(body, /## 🔬 Cavix review/);
+  assert.match(body, /## ◈ Cavix Review/);
   // The verdict is a GitHub alert callout: amber, because a high was found.
   assert.match(body, /> \[!WARNING\]\n> \*\*3 findings\*\* across \*\*2 files\*\*/);
-  assert.match(body, /> 🟧 high 1 · 🟨 medium 1 · 🟦 low 1/);
+  assert.match(body, /> ◈ 1 high · ◇ 1 medium · ▪ 1 low/);
 
   // A heading per file, worst-affected first, each with a per-finding table.
-  const authHeading = body.indexOf("#### 🟧 [`src/auth.js`]");
-  const readmeHeading = body.indexOf("#### 🟦 [`README.md`]");
+  const authHeading = body.indexOf("#### ◈ [`src/auth.js`]");
+  const readmeHeading = body.indexOf("#### ▪ [`README.md`]");
   assert.ok(authHeading > -1 && readmeHeading > -1, "both files get a heading");
   assert.ok(authHeading < readmeHeading, "the file with the worst finding leads");
   assert.match(body, /\| \| Line \| Finding \| Detail \|/);
@@ -112,16 +124,16 @@ test("buildReviewSubmission: the comment groups findings under their file with l
   // the headline in bold over a dim line of provenance.
   assert.match(
     body,
-    /\| 🟧 \| \[12\]\(https:\/\/github\.com\/acme\/widgets\/blob\/abc123\/src\/auth\.js#L12\) \| \*\*SQL injection via string concatenation\*\*<br><sub>high · security · confidence 92%<\/sub> \|/,
+    /\| ◈ \| \[12\]\(https:\/\/github\.com\/acme\/widgets\/blob\/abc123\/src\/auth\.js#L12\) \| \*\*SQL injection via string concatenation\*\*<br><sub>high · security · confidence 92%<\/sub> \|/,
   );
-  assert.match(body, /\| 🟨 \| \[13\]\(\S+#L13\) \| \*\*Token returned unchecked\*\*<br><sub>medium · correctness/);
-  assert.match(body, /💬 inline/); // detail lives on the line itself
+  assert.match(body, /\| ◇ \| \[13\]\(\S+#L13\) \| \*\*Token returned unchecked\*\*<br><sub>medium · correctness/);
+  assert.match(body, /▸ inline/); // detail lives on the line itself
 });
 
 test("buildReviewSubmission: without a ref the comment still names paths and lines, just unlinked", () => {
   const built = buildReviewSubmission(resultWith(finding()), DIFF);
-  assert.match(built.submission.body, /#### 🟧 `src\/auth\.js`/);
-  assert.match(built.submission.body, /\| 🟧 \| 12 \| \*\*SQL injection/);
+  assert.match(built.submission.body, /#### ◈ `src\/auth\.js`/);
+  assert.match(built.submission.body, /\| ◈ \| 12 \| \*\*SQL injection/);
   assert.doesNotMatch(built.submission.body, /https:\/\/github\.com/);
 });
 
@@ -130,11 +142,14 @@ test("buildReviewSubmission: a finding off the diff keeps its full explanation i
   assert.equal(built.inlineCount, 0);
   assert.equal(built.offDiffCount, 1);
   const body = built.submission.body;
-  assert.match(body, /\| 🟧 \| 999 \| \*\*SQL injection via string concatenation\*\*/);
-  assert.match(body, /📄 below/);
+  assert.match(body, /\| ◈ \| 999 \| \*\*SQL injection via string concatenation\*\*/);
+  assert.match(body, /▾ below/);
   assert.match(body, /Full detail for 1 finding not on a changed line/);
   assert.match(body, /`src\/auth\.js` line 999/);
   assert.match(body, /user\.id is concatenated into SQL\./); // the body is not lost
+  // Off the diff there is no one-click Apply button, so the fix is a highlighted
+  // code block instead of a bare fence.
+  assert.match(body, /\*\*Suggested fix\*\*\n\n```js\n/);
 });
 
 test("buildReviewSubmission: a pipe in a title cannot break the table", () => {
@@ -145,7 +160,7 @@ test("buildReviewSubmission: a pipe in a title cannot break the table", () => {
 test("buildReviewSubmission: the summary lives in the description, not the comment", () => {
   const body = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF }).submission.body;
   assert.doesNotMatch(body, /### Summary/);
-  assert.doesNotMatch(body, /### Changed files/);
+  assert.doesNotMatch(body, /### What Changed/);
   assert.match(body, /summary and walkthrough are in the PR description/);
   assert.match(body, /### Findings/); // the findings are still here
 });
@@ -156,9 +171,13 @@ test("buildReviewSubmission: the summary falls back into the comment when the de
     includeSummary: true,
   }).submission.body;
   assert.match(body, /### Summary\n\nAdds a DB query during login\./);
-  assert.match(body, /### Changed files/);
+  assert.match(body, /### What Changed/);
   assert.doesNotMatch(body, /are in the PR description/);
-  assert.equal(body.split("> [!").length - 1, 1, "exactly one verdict callout, not one per block");
+  assert.equal(
+    body.split("> [!WARNING]\n> **1 finding**").length - 1,
+    1,
+    "exactly one verdict callout, not one per block",
+  );
 });
 
 test("buildReviewSubmission: clean review still posts a comment saying so", () => {
@@ -171,9 +190,12 @@ test("buildReviewSubmission: clean review still posts a comment saying so", () =
   };
   const built = buildReviewSubmission(clean, DIFF, { ref: REF });
   assert.equal(built.submission.comments.length, 0);
-  assert.match(built.submission.body, /> \[!TIP\]\n> \*\*No issues found\*\* in 2 changed files\./);
+  assert.match(built.submission.body, /> \[!TIP\]\n> \*\*Clean pass\.\*\* Nothing to raise on the changed lines\./);
   // Nothing was proven, so the footer must not talk about the sandbox.
   assert.doesNotMatch(built.submission.body, /sealed sandbox/);
+  // A clean review still states its security read: "we looked and found nothing"
+  // is the fact the reviewer wants on the record.
+  assert.match(built.submission.body, /\| ⬢ \| \*\*Security Gate\*\* \| Clear, nothing raised on the changed lines \|/);
 });
 
 test("buildReviewSubmission: a huge review is trimmed to fit GitHub's comment limit", () => {
@@ -191,11 +213,110 @@ test("buildReviewSubmission: a huge review is trimmed to fit GitHub's comment li
   const built = buildReviewSubmission(resultWith(...many), DIFF, { ref: REF });
   const body = built.submission.body;
   assert.ok(body.length <= 60000, `body stays under the poster's own cap (was ${body.length})`);
-  assert.match(body, /## 🔬 Cavix review/);
+  assert.match(body, /## ◈ Cavix Review/);
   // Prove the truncation path actually ran, rather than the fixture just fitting.
   assert.match(body, /further sections? omitted\. This review is too large/);
   // Sections are dropped whole: no heading may be left with its table missing.
   assert.doesNotMatch(body, /#### [^\n]*\n\n\| \| Line \| Finding \| Detail \|\n\| :--: \| ---: \| :--- \| :--- \|\n\n/);
+});
+
+// ── the Review Scope & Effort module: the block that opens the review ─────────
+
+test("the review opens with a Scope module of measured signals, not git stats", () => {
+  const result = resultWith(finding());
+  result.effort = 3;
+  const body = buildReviewSubmission(result, DIFF, { ref: REF }).submission.body;
+
+  // It leads: nothing but the title and the badge strip sits above it.
+  assert.ok(body.indexOf("### ◈ Review Scope & Effort") < body.indexOf("> [!WARNING]"));
+  assert.match(body, /\| \| Signal \| Reading \|/);
+
+  // Reach, in terms Cavix derived rather than the counts GitHub already prints.
+  assert.match(body, /\| ◇ \| \*\*Deep Scan\*\* \| 2 subsystems traversed · 2 changed regions · JavaScript, Markdown \|/);
+  // The named symbols the change lands inside, read off the hunk headers.
+  assert.match(body, /\| ◇ \| \*\*Symbol Scope\*\* \| `login`, `Project` \|/);
+  assert.match(body, /\| ▲ \| \*\*Security Gate\*\* \| ◈ 1 exposure, highest \*\*high\*\* \|/);
+  assert.match(body, /\| ◇ \| \*\*Confidence Score\*\* \| ●●●●● 92% mean across the findings below \|/);
+  assert.match(body, /\| ◇ \| \*\*Review Effort\*\* \| ◆◆◆◇◇ \*\*3 of 5\*\*, a focused read \|/);
+
+  // The banned git stats: GitHub renders all three directly above this comment.
+  assert.doesNotMatch(body, /\+\d+ \/ -\d+/);
+  assert.doesNotMatch(body, /files? changed/i);
+});
+
+test("the Scope module never claims a stage that did not run, and reports one that did", () => {
+  const bare = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF }).submission.body;
+  assert.doesNotMatch(bare, /AST Verification/, "no AST row without a Stage 4 measurement");
+  assert.doesNotMatch(bare, /Blast Radius/);
+  assert.doesNotMatch(bare, /Execution Proof/, "nothing was proven and nothing disproven");
+
+  const rich = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: REF,
+    signals: { astSymbols: 128, tools: 24, agents: 7, consumers: 3 },
+  }).submission.body;
+  assert.match(rich, /\*\*AST Verification\*\* \| 128 symbols resolved, cross-file impact mapped/);
+  assert.match(rich, /\*\*Deterministic Pass\*\* \| 24 linter, SAST and secret tools run over the change/);
+  assert.match(rich, /\*\*Ensemble\*\* \| 7 specialist agents read this diff independently/);
+  assert.match(rich, /\*\*Blast Radius\*\* \| 3 downstream call sites checked in other repositories/);
+});
+
+test("the badge strip is bounded, coloured, and switchable off for an air gap", () => {
+  const on = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF }).submission.body;
+  const badges = on.match(/!\[[^\]]*\]\(https:\/\/img\.shields\.io\/\S+?\)/g) ?? [];
+  assert.ok(badges.length > 0 && badges.length <= 5, `bounded strip, got ${badges.length}`);
+  assert.match(on, /!\[Security: 1 high\]\(https:\/\/img\.shields\.io\/badge\/Security-1_high-C2410C\?/);
+  assert.match(on, /!\[Review Effort: 1 of 5\]\(\S+Review_Effort-1_of_5-475569\?/);
+
+  const off = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF, badges: false }).submission.body;
+  assert.doesNotMatch(off, /img\.shields\.io/);
+  // The facts survive the switch: only the colour was in the images.
+  assert.match(off, /\*\*Security Gate\*\* \| ◈ 1 exposure, highest \*\*high\*\*/);
+  assert.match(off, /### ◈ Review Scope & Effort/);
+});
+
+test("the Scope module is one of the dashboard's section toggles", () => {
+  const body = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: REF,
+    sections: { summary: true, changedFiles: true, reviewEffort: false, inlineFindings: true, proof: true },
+  }).submission.body;
+  assert.doesNotMatch(body, /Review Scope & Effort/);
+  assert.doesNotMatch(body, /img\.shields\.io/);
+  assert.match(body, /### Findings/, "the findings are untouched by that toggle");
+});
+
+test("findings at high or above are called out before the tables, worst flavour first", () => {
+  const body = buildReviewSubmission(
+    resultWith(
+      finding({ line: 12, severity: "critical", title: "SQL injection via string concatenation" }),
+      finding({ line: 13, severity: "high", title: "Token returned unchecked" }),
+      finding({ path: "README.md", line: 2, severity: "low", title: "Stale wording" }),
+    ),
+    DIFF,
+    { ref: REF },
+  ).submission.body;
+
+  assert.match(body, /### Findings\n\n> \[!CAUTION\]\n> \*\*Fix these first\*\*/);
+  assert.match(
+    body,
+    /> ◆ \*\*SQL injection via string concatenation\*\* · \[`src\/auth\.js` line 12\]\(\S+#L12\)/,
+  );
+  assert.match(body, /> ◈ \*\*Token returned unchecked\*\* · \[`src\/auth\.js` line 13\]\(\S+#L13\)/);
+  assert.doesNotMatch(body, /> ▪ \*\*Stale wording\*\*/, "a low is not a must-fix");
+});
+
+test("the must-fix callout caps itself rather than listing thirty items", () => {
+  const many = Array.from({ length: 9 }, (_, i) =>
+    finding({ line: 12, severity: "high", title: `Issue ${i}` }),
+  );
+  const body = buildReviewSubmission(resultWith(...many), DIFF, { ref: REF }).submission.body;
+  assert.match(body, /> \[!WARNING\]\n> \*\*Fix these first\*\*/);
+  assert.match(body, /and 4 more at high or above, listed below/);
+});
+
+test("no finding at high or above means no must-fix callout at all", () => {
+  const body = buildReviewSubmission(resultWith(finding({ severity: "low" })), DIFF, { ref: REF }).submission.body;
+  assert.match(body, /### Findings/);
+  assert.doesNotMatch(body, /Fix these first/);
 });
 
 // ── verification: the proof a reader can check ────────────────────────────────
@@ -219,16 +340,22 @@ test("buildReviewSubmission: a verified finding carries its sandbox transcript i
   const built = buildReviewSubmission(resultWith(finding({ verification: PROOF })), DIFF, { ref: REF });
   assert.equal(built.verifiedCount, 1);
   const c = built.submission.comments[0].body;
-  assert.match(c, /\*\*🟧 SQL injection via string concatenation\*\*/);
-  assert.match(c, /<sub>✅ verified · high · security · confidence 92%<\/sub>/);
-  assert.match(c, /\*\*Proof\.\*\* Reproduced in a sealed sandbox:/);
+  assert.match(c, /> \*\*◈ SQL injection via string concatenation\*\*/);
+  assert.match(c, /<kbd>⬢ verified<\/kbd> <kbd>high<\/kbd> <kbd>security<\/kbd> <kbd>confidence 92%<\/kbd>/);
+  assert.match(c, /\*\*⬢ Execution proof\.\*\* Reproduced in a sealed sandbox:/);
   assert.match(c, /\[repro\] +node --test auth\.repro\.test\.mjs +→ exit 1 +bug reproduced/);
   assert.match(c, /\[after-fix\] .*→ exit 0 +suggested fix resolves it/);
   assert.match(c, /\[suite\] .*→ exit 0 +existing suite still green/);
   assert.match(c, /Reproduction: `auth\.repro\.test\.mjs`/);
   // And the row is marked, so the badge is visible without opening the file.
-  assert.match(built.submission.body, /\*\*SQL injection via string concatenation\*\* ✅<br>/);
-  assert.match(built.submission.body, /✅ 1 reproduced in a sandbox/);
+  assert.match(built.submission.body, /\*\*SQL injection via string concatenation\*\* ⬢<br>/);
+  assert.match(built.submission.body, /⬢ 1 reproduced in a sandbox/);
+  // The proof is the product claim, so it gets its own row in the Scope module.
+  assert.match(
+    built.submission.body,
+    /\| ⬢ \| \*\*Execution Proof\*\* \| Every finding below was reproduced in a sealed sandbox \|/,
+  );
+  assert.match(built.submission.body, /!\[Execution Proof: 1 verified\]\(\S+-047857\?/);
 });
 
 test("buildReviewSubmission: an exploit proof is described as an exploit", () => {
@@ -238,7 +365,7 @@ test("buildReviewSubmission: an exploit proof is described as an exploit", () =>
     { ref: REF },
   );
   const c = built.submission.comments[0].body;
-  assert.match(c, /\*\*Proof\.\*\* The PoC exploit ran against this code in a sealed sandbox/);
+  assert.match(c, /\*\*⬢ Execution proof\.\*\* The PoC exploit ran against this code in a sealed sandbox/);
   assert.match(c, /→ exit 1 +exploit succeeded/);
 });
 
@@ -246,7 +373,11 @@ test("buildReviewSubmission: suppressed findings are stated, not hidden", () => 
   const built = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF, suppressedCount: 2 });
   assert.match(
     built.submission.body,
-    /🔕 2 findings suppressed after the sandbox could not reproduce them/,
+    /◇ 2 findings suppressed after the sandbox could not reproduce them/,
+  );
+  assert.match(
+    built.submission.body,
+    /\| ◇ \| \*\*Execution Proof\*\* \| 2 findings discarded, the sandbox could not reproduce them \|/,
   );
 });
 
@@ -260,24 +391,46 @@ test("buildPullDescription: writes the summary and walkthrough below the author'
 
   assert.match(body, /^Fixes #42\.\n\nMy own notes\./, "the author's description is kept, first");
   assert.ok(body.includes(SUMMARY_START) && body.includes(SUMMARY_END), "the block is marked");
-  assert.match(body, /## 🔬 Cavix review/);
-  assert.match(body, /> \[!WARNING\]\n> \*\*1 finding\*\* across \*\*1 file\*\*/);
-  assert.match(body, /### Summary\n\nAdds a DB query during login\./);
-  assert.match(body, /\| Scope \| Review effort \|/);
-  assert.match(body, /\| \*\*2 files\*\* changed · `\+3 \/ -1` \| ●●●●○ \*\*4 of 5\*\* \|/);
+  // The summary paragraph sits straight under the block's own heading: a second
+  // heading that says "Summary" under one that already does is noise.
+  assert.match(body, /## ◈ Cavix Summary\n\nAdds a DB query during login\./);
 
-  // The walkthrough: every changed file, what it now does, and which lines moved.
-  assert.match(body, /### Changed files/);
-  assert.match(body, /\| File \| What changed \| Lines \| Findings \|/);
-  assert.match(body, /\| \[`src\/auth\.js`\]\S+ \| Look up the user during login \| `\+2 \/ -0`<br><sub>L12-L13<\/sub> \| 1 \|/);
-  // README.md has no walkthrough entry: the row still exists, described from the
-  // diff, so a file can never vanish from the map because the model skipped it.
-  assert.match(body, /\| \[`README\.md`\]\S+ \| In `# Project` \| `\+1 \/ -1`<br><sub>L2<\/sub> \| 0 \|/);
+  // The walkthrough: every changed file and what it now does, as bullets. No
+  // line counts, no size column: GitHub prints those a few pixels away.
+  assert.match(body, /### What Changed/);
+  assert.match(body, /- \[`src\/auth\.js`\]\S+ · Look up the user during login$/m);
+  // README.md has no walkthrough entry: the bullet still exists, described from
+  // the diff, so a file can never vanish from the map because the model skipped it.
+  assert.match(body, /- \[`README\.md`\]\S+ · In `# Project`$/m);
+  assert.doesNotMatch(body, /\+\d+ \/ -\d+/, "no diff stats in the description");
+
+  // The Scope module belongs to the review comment. Duplicating it here would
+  // make a reader read the same table twice on one page.
+  assert.doesNotMatch(body, /Review Scope & Effort/);
 });
 
-test("buildPullDescription: review effort falls back to a size estimate when the model gives none", () => {
-  const body = buildPullDescription("", resultWith(finding()), DIFF, REF);
-  assert.match(body, /●○○○○ \*\*1 of 5\*\*/); // 4 changed lines across 2 files
+test("the description says nothing that a fix would make untrue", () => {
+  // Everything about a finding goes stale the moment the author pushes the fix,
+  // and the author cannot edit Cavix's block to correct it. So none of it is
+  // allowed in the description: no verdict, no counts, no severity, no marks.
+  const result = resultWith(
+    finding({ severity: "critical" }),
+    finding({ line: 13, severity: "high", title: "Token returned unchecked" }),
+    finding({ path: "README.md", line: 2, severity: "low", title: "Stale wording" }),
+  );
+  result.walkthrough = [{ path: "src/auth.js", summary: "Look up the user during login" }];
+  const body = buildPullDescription("Author notes.", result, DIFF, REF);
+  const heading = "## ◈ Cavix Summary";
+  const owned = body.slice(body.indexOf(heading) + heading.length);
+
+  assert.doesNotMatch(owned, /> \[!/, "no verdict callout");
+  assert.doesNotMatch(owned, /finding/i);
+  assert.doesNotMatch(owned, /critical|high|medium|low|severity/i);
+  assert.doesNotMatch(owned, /[◆◈◇▪▫⬢▲]/, "no severity marks either");
+  assert.doesNotMatch(owned, /Fix these first|Findings|Pre-merge|Confidence/);
+  // What it DOES say survives any number of fixes.
+  assert.match(owned, /Adds a DB query during login\./);
+  assert.match(owned, /- \[`src\/auth\.js`\]\S+ · Look up the user during login$/m);
 });
 
 test("buildPullDescription: a re-review replaces its own block instead of stacking", () => {
@@ -297,10 +450,50 @@ test("buildPullDescription: an empty description gets the block alone, with no s
   const body = buildPullDescription("", resultWith(finding()), DIFF, REF);
   assert.ok(body.startsWith(SUMMARY_START));
   assert.ok(body.endsWith(SUMMARY_END));
-  assert.doesNotMatch(body, /^---/m);
+  // The rules inside the block are section spacing between Summary and What
+  // Changed. The one that must NOT be there is the separator that divides the
+  // author's text from ours, when there is no author text to divide.
+  assert.ok(body.startsWith(`${SUMMARY_START}\n## ◈ Cavix Summary\n`), "the title follows the marker directly");
 });
 
-// ── house style: plain punctuation, everywhere, including the model's own words ─
+// ── house style: no emoji, plain punctuation, everywhere ─────────────────────
+
+test("nothing Cavix posts contains an emoji", () => {
+  const loud = resultWith(
+    finding({ verification: PROOF }),
+    finding({ line: 13, severity: "critical", title: "Second issue" }),
+    finding({ line: 999, severity: "low", title: "Off-diff note" }),
+    finding({ path: "README.md", line: 2, severity: "info", category: "docs", title: "Stale wording" }),
+  );
+  loud.walkthrough = [{ path: "src/auth.js", summary: "Look up the user during login" }];
+
+  const built = buildReviewSubmission(loud, DIFF, {
+    ref: REF,
+    includeSummary: true,
+    suppressedCount: 1,
+    requestChanges: true,
+    preMerge: {
+      checks: [
+        { rule: "No console.log", detail: "2 files scanned", status: "pass", findings: [] },
+        { rule: "No raw SQL", detail: "1 violation", status: "fail", findings: [] },
+        { rule: "Something vague", detail: "Cavix could not run this check", status: "skipped", findings: [] },
+      ],
+      findings: [],
+      passed: 1,
+      failed: 1,
+      skipped: 1,
+    },
+  });
+
+  const surfaces = [
+    buildPullDescription("Author notes.", loud, DIFF, REF),
+    built.submission.body,
+    ...built.submission.comments.map((c) => c.body),
+  ];
+  for (const surface of surfaces) {
+    assert.doesNotMatch(surface, EMOJI, `an emoji survived into:\n${surface}`);
+  }
+});
 
 test("plain: rewrites the typography a model reaches for", () => {
   assert.equal(plain("Refactors the refund flow — one verified issue."), "Refactors the refund flow, one verified issue.");

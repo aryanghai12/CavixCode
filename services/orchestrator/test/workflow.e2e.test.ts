@@ -101,7 +101,7 @@ test("e2e: stream → bridge → engine → workflow → posted PR review", asyn
   assert.equal(review.comments[0].path, "src/auth.js");
   assert.equal(review.comments[0].line, 12);
   assert.match(review.comments[0].body, /SQL injection/);
-  assert.match(review.body, /Cavix review/);
+  assert.match(review.body, /Cavix Review/);
 
   // Cost accounting happened (Stage 13 seam).
   assert.equal(gateway.costLog().length, 1);
@@ -180,7 +180,7 @@ test("e2e: a clean diff posts a no-issues summary and no inline comments", async
   const outcome = await runReview(makeJob(), { github, reviewer: new Reviewer({ gateway }) });
   assert.equal(outcome.findingCount, 0);
   assert.equal(outcome.inlineCount, 0);
-  assert.match(github.lastReview()!.body, /No issues found/);
+  assert.match(github.lastReview()!.body, /Clean pass/);
 });
 
 test("gatekeeper: a repo toggled OFF is skipped — no review is posted", async () => {

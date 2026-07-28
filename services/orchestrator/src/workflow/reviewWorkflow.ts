@@ -78,6 +78,15 @@ export interface ReviewWorkflowDeps {
    */
   summaryInDescription?: boolean;
   /**
+   * Render the coloured badge strip at the top of the review.
+   *
+   * On by default. Turn it off (CAVIX_REVIEW_BADGES=off) for a GitHub Enterprise
+   * install behind an air gap: GitHub's image proxy cannot reach shields.io from
+   * there, so the badges would render as broken images. The same facts stay in
+   * the Review Scope table either way.
+   */
+  badges?: boolean;
+  /**
    * The org's own settings, as chosen on the dashboard: verification on/off,
    * where the summary goes, the pre-merge gate and its rules, and whether Cavix
    * may block a merge. Absent = the safe defaults in DEFAULT_REVIEW_CONFIG.
@@ -354,6 +363,7 @@ export async function runReview(
     preMerge,
     requestChanges,
     sections: config.sections,
+    badges: deps.badges !== false,
   });
   const posted = await deps.github.postReview(ref, built.submission);
   log.info("review posted", {

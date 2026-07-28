@@ -161,8 +161,10 @@ test("the gate runs over the changed files and blocks when the owner asked for i
   const review = github.lastReview()!;
   assert.equal(review.event, "REQUEST_CHANGES");
   assert.match(review.body, /Changes requested: 1 pre-merge check failed/);
-  assert.match(review.body, /### Pre-merge checks\n\n\*\*1 check failing\*\*/);
-  assert.match(review.body, /\| ❌ \| Disallow calls to console\.log \|/);
+  assert.match(review.body, /### Pre-merge Checks\n\n\*\*1 check failing\*\*/);
+  assert.match(review.body, /\| ✕ \| Disallow calls to console\.log \|/);
+  // The gate also earns a row in the Scope module at the top of the review.
+  assert.match(review.body, /\| ▲ \| \*\*Policy Gate\*\* \| 1 of 1 org rule failing \|/);
 });
 
 test("the same failing gate only reports when blocking is off", async () => {
@@ -202,7 +204,8 @@ test("a gate that cannot run says so on the PR instead of quietly passing", asyn
   assert.equal(outcome.preMerge?.skipped, 1);
   assert.equal(outcome.blocked, false, "never claim a failure that was not measured");
   const body = github.lastReview()!.body;
-  assert.match(body, /### Pre-merge checks\n\n\*\*No checks ran\*\*/);
+  assert.match(body, /### Pre-merge Checks\n\n\*\*No checks ran\*\*/);
+  assert.match(body, /\| ▲ \| \*\*Policy Gate\*\* \| No rule compiled into a check, nothing was verified \|/);
   assert.match(body, /Cavix could not run this check/);
 });
 
@@ -305,9 +308,9 @@ test("turning the walkthrough and effort off strips them from the description", 
     reviewConfig: async () => config({ sections: { ...ALL_SECTIONS, changedFiles: false, reviewEffort: false } }),
   });
 
-  assert.match(github.pullBody, /### Summary/, "the summary itself stays");
-  assert.doesNotMatch(github.pullBody, /### Changes/);
-  assert.doesNotMatch(github.pullBody, /review effort/);
+  assert.match(github.pullBody, /## ◈ Cavix Summary/, "the summary itself stays");
+  assert.doesNotMatch(github.pullBody, /### What Changed/);
+  assert.doesNotMatch(github.pullBody, /Review Scope/);
 });
 
 // Switching both off leaves nothing worth saying, so don't edit the author's
@@ -349,8 +352,8 @@ test("turning proof off drops the sandbox transcript but keeps the verified badg
   });
 
   const inline = github.lastReview()!.comments[0].body;
-  assert.match(inline, /✅ verified/, "the finding is still marked as proven");
-  assert.doesNotMatch(inline, /\*\*Proof\*\*/, "but the transcript is not shown");
+  assert.match(inline, /⬢ verified/, "the finding is still marked as proven");
+  assert.doesNotMatch(inline, /Execution proof/, "but the transcript is not shown");
 });
 
 test("coerce: review sections default to on and survive a partial payload", () => {

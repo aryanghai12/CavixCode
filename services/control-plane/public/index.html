@@ -83,37 +83,80 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
   <div class="container">
     <div class="section-head">
       <div><div class="eyebrow">Sample review</div><h2>What Cavix leaves on your pull request</h2></div>
-      <p>A summary comment, inline findings with the proof attached, and an optional pre-merge gate. This is the whole surface your team sees.</p>
+      <p>A durable summary in the description, the review itself in a comment, inline findings with the proof attached, and an optional pre-merge gate. This is the whole surface your team sees.</p>
     </div>
     <div>
       <div class="showcase-tabs" id="showcaseTabs">
-        <button class="on" data-panel="summary">PR summary</button>
+        <button class="on" data-panel="summary">PR description</button>
+        <button data-panel="review">Review comment</button>
         <button data-panel="inline">Inline finding</button>
         <button data-panel="premerge">Pre-merge checks</button>
       </div>
     </div>
 
-    <!-- Panel: PR summary. This mirrors what services/orchestrator's poster
-         actually renders into the pull request DESCRIPTION — keep the two in
-         step; a sample that has drifted from the product is a broken promise. -->
+    <!-- Panel: the PR description block. This mirrors what services/orchestrator's
+         poster renders into the pull request DESCRIPTION, so keep the two in step;
+         a sample that has drifted from the product is a broken promise.
+         Note what is NOT here: no verdict, no counts, no severities. What a change
+         does stays true until merge. What is wrong with it stops being true the
+         moment someone pushes a fix, and nobody can edit Cavix's block to correct
+         it, so it lives on the comment instead. -->
     <div class="showcase-panel on" data-panel="summary">
       <div class="summary-card">
         <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">pull request description</span> <span class="ago">now</span></div>
         <div class="sc-body">
-          <h4>Summary</h4>
+          <h4>◈ Cavix Summary</h4>
           <p>Refactors the refund flow and adds Stripe retry handling. The refund path is no longer idempotent, so a webhook re-delivery can issue a second refund.</p>
-          <p style="color:var(--text-dim)"><b>2 findings</b> across <b>1 file</b> — <span class="badge badge-high">high</span> 1 · <span class="badge badge-low">low</span> 1</p>
-          <div class="chip-row">
-            <span class="badge">3 files changed · <code>+73 −8</code></span>
-            <span class="badge">Review effort <span class="effort" style="margin-left:6px"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> 3/5</span>
+          <h4>What Changed</h4>
+          <ul class="wt-list">
+            <li><code>services/payments/refund.ts</code> · Issue the refund against the original charge</li>
+            <li><code>services/payments/webhook.ts</code> · Handle Stripe retry deliveries</li>
+            <li><code>test/refund.test.ts</code> · New retry regression test</li>
+          </ul>
+          <p style="color:var(--text-faint);font-size:13px;margin:14px 0 0">Written into the description once and rewritten in place on every re-review, so it never stacks. Whatever the author wrote is left exactly as they wrote it.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel: the review comment. Opens with the Review Scope & Effort module,
+         then the verdict, then the findings. -->
+    <div class="showcase-panel" data-panel="review">
+      <div class="summary-card">
+        <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">review comment</span> <span class="ago">now</span></div>
+        <div class="sc-body">
+          <div class="scope-strip">
+            <span class="sbadge sb-sev">Security · 1 high</span>
+            <span class="sbadge sb-ok">Execution Proof · 1 verified</span>
+            <span class="sbadge sb-ok">Confidence · 86%</span>
+            <span class="sbadge">Review Effort · 3 of 5</span>
           </div>
-          <h4>Changes</h4>
-          <table class="changes-table">
-            <thead><tr><th>File</th><th>What changed</th><th>Lines</th><th>Findings</th></tr></thead>
+          <h4 style="margin-top:14px">◈ Review Scope &amp; Effort</h4>
+          <table class="changes-table" style="margin-bottom:18px">
+            <thead><tr><th></th><th>Signal</th><th>Reading</th></tr></thead>
             <tbody>
-              <tr><td>services/payments/refund.ts</td><td>Issue the refund against the original charge</td><td><code>+18 −6</code> · L86–L97</td><td>2</td></tr>
-              <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td><td><code>+31 −2</code> · L12–L42</td><td>—</td></tr>
-              <tr><td>test/refund.test.ts</td><td>New retry regression test</td><td><code>+24 −0</code> · L1–L24</td><td>—</td></tr>
+              <tr><td>◇</td><td>Deep Scan</td><td>2 subsystems traversed · 9 changed regions · TypeScript</td></tr>
+              <tr><td>◇</td><td>Symbol Scope</td><td><code>issueRefund</code>, <code>onWebhook</code></td></tr>
+              <tr><td><span class="mark-att">▲</span></td><td>Security Gate</td><td><span class="mark-high">◈</span> 1 exposure, highest <b>high</b></td></tr>
+              <tr><td><span class="mark-ok">⬢</span></td><td>Execution Proof</td><td>1 of 2 findings reproduced in a sealed sandbox</td></tr>
+              <tr><td>◇</td><td>Confidence Score</td><td>●●●●○ 86% mean across the findings below</td></tr>
+              <tr><td>◇</td><td>Review Effort</td><td>◆◆◆◇◇ <b>3 of 5</b>, a focused read</td></tr>
+            </tbody>
+          </table>
+          <div class="gh-alert warning">
+            <div class="ga-title">2 findings across 1 file</div>
+            <div class="ga-body"><span class="badge badge-high">◈ 1 high</span> <span class="badge badge-low">▪ 1 low</span></div>
+          </div>
+          <h4>Findings</h4>
+          <div class="gh-alert warning">
+            <div class="ga-title">Fix these first</div>
+            <div class="ga-body"><span class="mark-high">◈</span> <b>Refund can double-apply on retry</b> · <code>services/payments/refund.ts</code> line 87</div>
+          </div>
+          <h4><span class="mark-high">◈</span> services/payments/refund.ts · 2 findings</h4>
+          <table class="changes-table">
+            <thead><tr><th></th><th>Line</th><th>Finding</th><th>Detail</th></tr></thead>
+            <tbody>
+              <tr><td><span class="mark-high">◈</span></td><td>87</td><td><b>Refund can double-apply on retry</b> <span class="mark-ok">⬢</span><div class="t-faint">high · correctness · confidence 86%</div></td><td>▸ inline</td></tr>
+              <tr><td>▪</td><td>12</td><td><b>Duplicated retry constant</b><div class="t-faint">low · maintainability · confidence 52%</div></td><td>▸ inline</td></tr>
             </tbody>
           </table>
         </div>
@@ -131,8 +174,8 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
 <div class="cr-line"><span class="ln">88</span>  <span class="k">return</span> { <span class="f">ok</span>: <span class="n2">true</span> }</div>
         </div>
         <div class="cr-comment">
-          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span><span class="badge badge-verified">verified</span><span class="badge badge-high">high</span></div>
-          <div class="cc-body"><b>Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund. I reproduced it and confirmed the guard fixes it:</div>
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span><span class="badge badge-verified">⬢ verified</span><span class="badge badge-high">high</span></div>
+          <div class="cc-body"><b><span class="mark-high">◈</span> Refund can double-apply on retry.</b> On a webhook re-delivery this path issues a second refund. I reproduced it and confirmed the guard fixes it:</div>
           <div class="cc-proof"><span class="t-purple">[repro]</span>     node --test refund.retry.test.mjs → <span class="t-red">exit 1</span>  <span class="t-dim">bug reproduced</span>
 <span class="t-purple">[after-fix]</span> node --test refund.retry.test.mjs → <span class="t-green">exit 0</span>  <span class="t-dim">fix resolves it</span>
 <span class="t-purple">[suite]</span>     node --test                       → <span class="t-green">exit 0</span>  <span class="t-dim">suite still green</span></div>
@@ -144,9 +187,9 @@ status: <span class="t-cyan">UNVERIFIED</span> → suppressed</pre>
     <!-- Panel: pre-merge checks -->
     <div class="showcase-panel" data-panel="premerge">
       <div class="premerge">
-        <div class="pm-head"><div><b>Pre-merge checks</b> <span class="badge badge-policy">optional · org rules</span></div><span class="badge badge-high">1 failing</span></div>
-        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">Every new endpoint must have an authentication check<div class="pm-sub">pass — nothing in the added lines</div></div><span class="badge badge-verified">pass</span></div>
-        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">No TODO or FIXME markers in committed code<div class="pm-sub">pass — nothing in the added lines</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-head"><div><b>Pre-merge Checks</b> <span class="badge badge-policy">optional · org rules</span></div><span class="badge badge-high">1 failing</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">Every new endpoint must have an authentication check<div class="pm-sub">pass, nothing in the added lines</div></div><span class="badge badge-verified">pass</span></div>
+        <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">No TODO or FIXME markers in committed code<div class="pm-sub">pass, nothing in the added lines</div></div><span class="badge badge-verified">pass</span></div>
         <div class="pm-row pass"><span class="pm-ico">✓</span><div class="pm-rule">Files must be under 500 lines<div class="pm-sub">3 changed files scanned · pass</div></div><span class="badge badge-verified">pass</span></div>
         <div class="pm-row fail"><span class="pm-ico">✕</span><div class="pm-rule">Disallow calls to console.log<div class="pm-sub">1 violation in this change · refund.ts:87</div></div><span class="badge badge-critical">fail</span></div>
       </div>

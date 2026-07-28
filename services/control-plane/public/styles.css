@@ -571,6 +571,21 @@ select option { background: #0D1526; color: var(--text); }
 .effort { display: inline-flex; gap: 3px; }
 .effort .dot2 { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
 .effort .dot2.on { background: var(--brand); }
+/* The walkthrough: bullets, not a table. One line per changed file. */
+.wt-list { list-style: none; margin: 0 0 16px; padding: 0; font-size: 13.5px; color: var(--text-dim); }
+.wt-list li { padding: 7px 0; border-bottom: 1px solid var(--border-soft); }
+.wt-list li:last-child { border-bottom: none; }
+.wt-list code { font-family: var(--mono); color: var(--text); }
+/* The badge strip above the Review Scope table. Stands in for the shields.io
+   images the poster renders on the pull request itself. */
+.scope-strip { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.sbadge { font-family: var(--mono); font-size: 11px; letter-spacing: .2px; padding: 3px 8px; border-radius: 4px;
+  background: #1F2937; color: #cbd5e1; border: 1px solid var(--border-soft); white-space: nowrap; }
+.sbadge.sb-ok { background: #047857; color: #d1fae5; border-color: rgba(16,185,129,.4); }
+.sbadge.sb-sev { background: #C2410C; color: #ffedd5; border-color: rgba(234,88,12,.45); }
+/* The severity marks. Geometry carries the shape, colour carries the weight. */
+.mark-crit { color: #f87171; } .mark-high { color: #fb923c; } .mark-med { color: #fbbf24; }
+.mark-att { color: #fbbf24; } .mark-ok { color: #34d399; }
 .premerge { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .premerge .pm-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border-soft); }
 .pm-row { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border-soft); font-size: 14px; }

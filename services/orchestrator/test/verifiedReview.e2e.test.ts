@@ -141,13 +141,13 @@ test("a real bug is reproduced in the sandbox and posted with its proof", async 
 
   const review = github.lastReview()!;
   const inline = review.comments[0].body;
-  assert.match(inline, /✅ verified/);
-  assert.match(inline, /\*\*Proof\.\*\* Reproduced in a sealed sandbox/);
+  assert.match(inline, /⬢ verified/);
+  assert.match(inline, /\*\*⬢ Execution proof\.\*\* Reproduced in a sealed sandbox/);
   // The transcript is real: the repro FAILED before the fix and PASSED after it.
   assert.match(inline, /\[repro\].*→ exit 1 +bug reproduced/);
   assert.match(inline, /\[after-fix\].*→ exit 0 +suggested fix resolves it/);
   assert.doesNotMatch(review.body, /Imagined second bug/, "a disproven finding is never shown");
-  assert.match(review.body, /🔕 1 finding suppressed/);
+  assert.match(review.body, /◇ 1 finding suppressed/);
 });
 
 test("the summary lands in the PR description, keeping what the author wrote", async () => {
@@ -157,8 +157,12 @@ test("the summary lands in the PR description, keeping what the author wrote", a
   assert.equal(outcome.descriptionUpdated, true);
   assert.match(github.pullBody, /^Fixes #1\./, "the author's description is preserved");
   assert.ok(github.pullBody.includes(SUMMARY_START));
-  assert.match(github.pullBody, /### Summary\n\nRewrites the lastN loop bound\./);
-  assert.match(github.pullBody, /\| \[`calc\.mjs`\]\S+ \| Change the loop bound in lastN \|/);
+  assert.match(github.pullBody, /## ◈ Cavix Summary\n\nRewrites the lastN loop bound\./);
+  assert.match(github.pullBody, /- \[`calc\.mjs`\]\S+ · Change the loop bound in lastN/);
+  // The description says only what the change does. A verified finding is real
+  // work, and it still does not go here: the author fixes it and the description
+  // would keep claiming it forever.
+  assert.doesNotMatch(github.pullBody, /verified|finding|Execution Proof/i);
   // …and not in the review comment, which is for findings.
   assert.doesNotMatch(github.lastReview()!.body, /### Summary/);
 });

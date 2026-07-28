@@ -155,7 +155,7 @@
     if (!reviews.length) {
       content.innerHTML = `
         <div class="empty">
-          <div class="big">🔬</div>
+          <div class="big">◈</div>
           <div><b>No reviews yet.</b></div>
           <div style="margin-top:6px">Connect a repository and open a pull request. Every review Cavix posts shows up here with its findings.</div>
           <div style="margin-top:16px"><button class="btn btn-soft btn-sm" onclick="location.hash='repos'">Connect a repository</button></div>
@@ -249,36 +249,59 @@
 
     // Where the summary block lands is itself a setting.
     const target = s.summaryInDescription ? "pull request description" : "review comment";
-    const changesTable = rs.changedFiles ? `<h4>Changed files</h4><table class="changes-table"><thead><tr><th>File</th><th>What changed</th><th>Lines</th><th>Findings</th></tr></thead><tbody>
-        <tr><td>services/payments/refund.ts</td><td>Add idempotency guard before issuing a refund</td><td><code>+18 / -6</code><div class="t-faint">L86-L97</div></td><td>2</td></tr>
-        <tr><td>services/payments/webhook.ts</td><td>Handle Stripe retry deliveries</td><td><code>+31 / -2</code><div class="t-faint">L12-L42</div></td><td>0</td></tr>
-        <tr><td>test/refund.test.ts</td><td>New retry regression test</td><td><code>+24 / -0</code><div class="t-faint">L1-L24</div></td><td>0</td></tr></tbody></table>` : "";
-    const effort = rs.reviewEffort
-      ? `<table class="changes-table" style="margin-bottom:16px"><thead><tr><th>Scope</th><th>Review effort</th></tr></thead><tbody>
-          <tr><td style="font-family:var(--font)"><b>3 files</b> changed · <code>+73 / -8</code></td><td><span class="effort"><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2 on"></span><span class="dot2"></span><span class="dot2"></span></span> <b>3 of 5</b></td></tr></tbody></table>`
-      : "";
+
+    // The walkthrough is bullets, not a table. No line counts (GitHub prints
+    // those a few pixels above) and no finding counts: the description has to
+    // still be true after the author pushes a fix, and a count is not.
+    const walkthrough = rs.changedFiles ? `<h4>What Changed</h4><ul class="wt-list">
+        <li><code>services/payments/refund.ts</code> · Add idempotency guard before issuing a refund</li>
+        <li><code>services/payments/webhook.ts</code> · Handle Stripe retry deliveries</li>
+        <li><code>test/refund.test.ts</code> · New retry regression test</li></ul>` : "";
 
     // The verdict callout, the same alert GitHub renders at the top of the post.
+    // It lives on the review COMMENT, never in the description.
     const verdict = `<div class="gh-alert warning">
-        <div class="ga-title">⚠ 2 findings across 1 file</div>
-        <div class="ga-body"><span class="badge badge-high">high</span> 1 · <span class="badge badge-low">low</span> 1${s.requestChangesOnFail ? ` · <b>changes requested</b>` : ""}</div>
+        <div class="ga-title">2 findings across 1 file</div>
+        <div class="ga-body"><span class="badge badge-high">◈ 1 high</span> <span class="badge badge-low">▪ 1 low</span>${s.requestChangesOnFail ? ` · <b>changes requested</b>` : ""}</div>
       </div>`;
 
+    // The description block: what the change does, and nothing about what is
+    // wrong with it. Findings get fixed within the hour and the author cannot
+    // edit Cavix's block to correct a stale count, so none of that goes here.
     const summaryCard = (rs.summary || rs.changedFiles) ? `
       <div class="summary-card" style="margin-bottom:18px">
         <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">${esc(target)}</span> <span class="ago">preview</span></div>
         <div class="sc-body">
-          ${verdict}
           ${rs.summary ? `<h4>Summary</h4><p>${esc(toneBlurb[s.tone] || toneBlurb.concise)}</p>` : ""}
-          ${effort}
-          ${changesTable}
+          ${walkthrough}
         </div>
       </div>` : "";
+
+    // The Review Scope & Effort module: the block that opens the review comment.
+    // Every row is a measurement, never an estimate dressed up as one, so a row
+    // with no data behind it simply is not here.
+    const scopeCard = rs.reviewEffort ? `
+      <div class="scope-strip">
+        <span class="sbadge sb-sev">Security · 1 high</span>
+        ${s.verifyFindings ? `<span class="sbadge sb-ok">Execution Proof · 1 verified</span>` : ""}
+        <span class="sbadge sb-ok">Confidence · 86%</span>
+        <span class="sbadge">Review Effort · 3 of 5</span>
+      </div>
+      <h4 style="margin-top:14px">◈ Review Scope &amp; Effort</h4>
+      <table class="changes-table"><thead><tr><th></th><th>Signal</th><th>Reading</th></tr></thead><tbody>
+        <tr><td>◇</td><td style="font-family:var(--font)"><b>Deep Scan</b></td><td>2 subsystems traversed · 9 changed regions · TypeScript</td></tr>
+        <tr><td>◇</td><td style="font-family:var(--font)"><b>Symbol Scope</b></td><td><code>issueRefund</code>, <code>onWebhook</code></td></tr>
+        <tr><td><span class="mark-att">▲</span></td><td style="font-family:var(--font)"><b>Security Gate</b></td><td><span class="mark-high">◈</span> 1 exposure, highest <b>high</b></td></tr>
+        ${s.verifyFindings ? `<tr><td><span class="mark-ok">⬢</span></td><td style="font-family:var(--font)"><b>Execution Proof</b></td><td>1 of 2 findings reproduced in a sealed sandbox, 1 discarded as unreproducible</td></tr>` : ""}
+        <tr><td>◇</td><td style="font-family:var(--font)"><b>Confidence Score</b></td><td>●●●●○ 86% mean across the findings below</td></tr>
+        <tr><td>◇</td><td style="font-family:var(--font)"><b>Review Effort</b></td><td>◆◆◆◇◇ <b>3 of 5</b>, a focused read</td></tr>
+      </tbody></table>
+      <div style="height:18px"></div>` : "";
 
     // The gate panel only exists if the owner turned it on and wrote rules.
     const gateCard = (pm.enabled && pm.rules.length) ? `
       <div class="premerge" style="margin-bottom:18px">
-        <div class="pm-head"><div><b>Pre-merge checks</b> <span class="badge badge-policy">your org's rules</span></div>
+        <div class="pm-head"><div><b>Pre-merge Checks</b> <span class="badge badge-policy">your org's rules</span></div>
           <span class="badge ${s.requestChangesOnFail ? "badge-high" : ""}">${s.requestChangesOnFail ? "a failure blocks merge" : "reporting only"}</span></div>
         ${pm.rules.slice(0, 4).map((r) => {
           // Three states, not two: an unknown compile status means we have not
@@ -286,7 +309,8 @@
           // preview must never do.
           const c = ruleCompile[r];
           const state = !c ? "pending" : c.ok ? "pass" : "skipped";
-          const ico = { pending: "…", pass: "✓", skipped: "⚠" }[state];
+          // Same glyphs the poster uses on the pull request: pass, fail, did not run.
+          const ico = { pending: "…", pass: "✓", skipped: "◇" }[state];
           const sub = {
             pending: "checking whether this compiles into a check…",
             pass: "3 changed files scanned · pass",
@@ -300,10 +324,17 @@
       <div class="summary-card" style="margin-bottom:18px">
         <div class="sc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="who">cavix</span> <span class="badge">review comment</span> <span class="ago">preview</span></div>
         <div class="sc-body">
-          <h4>🟧 services/payments/refund.ts · 2 findings</h4>
+          ${scopeCard}
+          ${verdict}
+          <h4>Findings</h4>
+          <div class="gh-alert warning">
+            <div class="ga-title">Fix these first</div>
+            <div class="ga-body"><span class="mark-high">◈</span> <b>Refund can double-apply on retry</b> · <code>services/payments/refund.ts</code> line 87</div>
+          </div>
+          <h4><span class="mark-high">◈</span> services/payments/refund.ts · 2 findings</h4>
           <table class="changes-table"><thead><tr><th></th><th>Line</th><th>Finding</th><th>Detail</th></tr></thead><tbody>
-            <tr><td>🟧</td><td>87</td><td style="font-family:var(--font)"><b>Refund can double-apply on retry</b>${rs.proof ? " ✅" : ""}<div class="t-faint">high · correctness · confidence 86%</div></td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
-            <tr><td>🟦</td><td>12</td><td style="font-family:var(--font)"><b>Duplicated retry constant</b><div class="t-faint">low · maintainability · confidence 52%</div></td><td>${rs.inlineFindings ? "💬 inline" : "📄 below"}</td></tr>
+            <tr><td><span class="mark-high">◈</span></td><td>87</td><td style="font-family:var(--font)"><b>Refund can double-apply on retry</b>${rs.proof ? ` <span class="mark-ok">⬢</span>` : ""}<div class="t-faint">high · correctness · confidence 86%</div></td><td>${rs.inlineFindings ? "▸ inline" : "▾ below"}</td></tr>
+            <tr><td>▪</td><td>12</td><td style="font-family:var(--font)"><b>Duplicated retry constant</b><div class="t-faint">low · maintainability · confidence 52%</div></td><td>${rs.inlineFindings ? "▸ inline" : "▾ below"}</td></tr>
           </tbody></table>
         </div>
       </div>`;
@@ -316,11 +347,11 @@
 <div class="cr-line add"><span class="ln">87</span><span class="k">  if</span> (!refund.<span class="f">isSettled</span>(id)) <span class="k">await</span> charge.<span class="f">refund</span>(amount)</div>
         </div>
         <div class="cr-comment">
-          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span>${rs.proof ? `<span class="badge badge-verified">✅ verified</span>` : ""}<span class="badge badge-high">high</span></div>
-          <div class="cc-body"><b>🟧 Refund can double-apply on retry</b>
-            <div class="t-faint" style="margin:4px 0 8px">${rs.proof ? "✅ verified · " : ""}high · correctness · confidence 86%</div>
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span>${rs.proof ? `<span class="badge badge-verified">⬢ verified</span>` : ""}<span class="badge badge-high">high</span></div>
+          <div class="cc-body"><b><span class="mark-high">◈</span> Refund can double-apply on retry</b>
+            <div class="t-faint" style="margin:4px 0 8px">${rs.proof ? "⬢ verified · " : ""}high · correctness · confidence 86%</div>
             On a webhook re-delivery this path issues a second refund.</div>
-          ${rs.proof ? `<div class="cc-proof"><b style="font-family:var(--font)">Proof.</b> Reproduced in a sealed sandbox:
+          ${rs.proof ? `<div class="cc-proof"><b style="font-family:var(--font)">⬢ Execution proof.</b> Reproduced in a sealed sandbox:
 
 <span class="t-purple">[repro]</span>     node --test refund.retry.test.mjs → <span class="t-red">exit 1</span>  bug reproduced
 <span class="t-purple">[after-fix]</span> node --test refund.retry.test.mjs → <span class="t-green">exit 0</span>  fix resolves it
@@ -579,8 +610,8 @@
         <div class="panel-head"><div><h2>Review comment structure</h2><span class="sub">What the posted PR review includes</span></div><a class="btn btn-soft btn-sm" onclick="location.hash='sample'">Preview</a></div>
         <div class="panel-body" style="padding-top:6px">
           ${rsToggle("summary", "Summary", "A plain-English description of what the change does.")}
-          ${rsToggle("changedFiles", "Changed-files walkthrough", "A table of every changed file, what it now does, and the lines that moved.")}
-          ${rsToggle("reviewEffort", "Size &amp; review-effort", "Files changed, lines added/removed, and a 1 to 5 estimate of how much review this needs.")}
+          ${rsToggle("changedFiles", "Changed-files walkthrough", "A bullet for every changed file saying what it now does, in the pull request description.")}
+          ${rsToggle("reviewEffort", "Review Scope &amp; Effort", "The module that opens the review comment: how far the scan reached, what the security and policy gates read, how much of it was proven by execution, and a 1 to 5 estimate of the review left to do.")}
           ${rsToggle("inlineFindings", "Inline findings", "Line-level comments with severity and one-click suggestions. Off moves every explanation into the review comment instead.")}
           ${rsToggle("proof", "Verification proof", "The sandbox transcript, commands and exit codes, that proves a verified finding.")}
           ${rsSoon("Sequence diagram", "A diagram of the new flow when relevant.")}

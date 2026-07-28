@@ -17,6 +17,7 @@ export {
   type BuiltReview,
   type PosterOptions,
   type ReviewLinkRef,
+  type ScopeSignals,
 } from "./poster/poster.ts";
 
 export {

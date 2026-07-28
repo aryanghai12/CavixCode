@@ -5,6 +5,57 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Review output redesign
+
+The posted review is the product demo, so it was rebuilt to read like a document
+a staff engineer would forward rather than a bot comment.
+
+#### Changed
+- **The PR description carries no findings at all.** No verdict callout, no
+  finding counts, no severities, not even a severity mark beside a file in the
+  walkthrough. What a change does stays true until merge; what is wrong with it
+  stops being true the moment the author pushes a fix, and nobody but Cavix can
+  edit that block to correct it. The description block is now the executive
+  summary plus the per-file walkthrough and nothing else, under its own heading
+  (`## ◈ Cavix Summary`). The verdict, the Scope module and every finding live on
+  the review comment, which is dated, supersedable, and marked outdated by GitHub
+  once the lines move. `renderSummarySection` split into `renderNarrative` (the
+  durable half) and the comment's own head.
+- **No emoji anywhere in posted output.** The severity scale is geometric now
+  (`◆` critical, `◈` high, `◇` medium, `▪` low, `▫` info), `⬢` marks anything
+  proven by execution, `▲` marks attention, and `✓`/`✕` are the policy check
+  states. A test scans every posted surface and fails the build if one emoji
+  gets through.
+- **New `Review Scope & Effort` module opens the review comment.** Deep Scan,
+  Symbol Scope, Security Gate, Execution Proof, Policy Gate, Confidence Score
+  and Review Effort, each a measurement. Rows with no data behind them are
+  omitted rather than filled in, so nothing in the module is invented. Optional
+  `ScopeSignals` on `PosterOptions` lets earlier pipeline stages contribute an
+  AST Verification, Deterministic Pass, Ensemble or Blast Radius row.
+- **No git stats in the review.** Files changed, lines added and lines removed
+  are rendered by GitHub directly above the comment, so the size table and the
+  per-file line columns are gone. Line counts are still computed internally, but
+  only to estimate review effort when the model does not supply one.
+- **Colour comes from GitHub-native rendering.** Findings are introduced by alert
+  callouts coloured by severity (`CAUTION`, `WARNING`, `IMPORTANT`, `NOTE`),
+  provenance is a row of `<kbd>` chips, and suggested fixes off the diff get a
+  real language fence for syntax highlighting.
+- **New "Fix these first" callout** above the findings tables, naming only the
+  findings at high severity or above, capped at five.
+- **The walkthrough is bullets, not a table**, and leads with what each file now
+  does rather than how many lines moved.
+- Dashboard sample-review preview and the landing page sample were updated to
+  match, so neither has drifted from what actually gets posted.
+
+#### Added
+- **Bounded shields.io badge strip** above the Scope table, in muted hex
+  (crimson, burnt amber, amber gold, slate, emerald). At most five per review,
+  never one per finding. `CAVIX_REVIEW_BADGES=off` turns it off for air-gapped
+  GitHub Enterprise, where the image proxy cannot reach shields.io; the same
+  facts stay in the table underneath.
+- Review prompt now specifies the summary as a 2 to 4 sentence executive summary
+  written in architectural intent, and bans emoji in every model-written field.
+
 ### Phase 5 — production GitHub App + `@cavix` commands + competitor parity
 
 #### Added

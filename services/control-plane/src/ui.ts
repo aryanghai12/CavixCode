@@ -8,7 +8,7 @@ export function renderDashboardHtml(reviews: ReviewRecord[]): string {
     .map((r) => {
       const findings = r.findings
         .map((f) => {
-          const badge = f.immutable ? "🔒 policy" : f.source;
+          const badge = f.immutable ? "⬢ policy" : f.source;
           const decided = f.decision ? `<em>${f.decision.state} by ${f.decision.user}</em>` : "";
           return `<li data-fid="${f.id}">
             <b>${esc(f.severity)}</b> · ${esc(badge)} · ${esc(f.path)}:${f.line} — ${esc(f.title)}
@@ -18,14 +18,14 @@ export function renderDashboardHtml(reviews: ReviewRecord[]): string {
           </li>`;
         })
         .join("");
-      return `<section><h3>${esc(r.org)}/${esc(r.repo)} #${r.pr} — ${esc(r.title)}</h3><ul>${findings}</ul></section>`;
+      return `<section><h3>${esc(r.org)}/${esc(r.repo)} #${r.pr} · ${esc(r.title)}</h3><ul>${findings}</ul></section>`;
     })
     .join("");
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>Cavix</title>
 <style>body{font:14px system-ui;margin:2rem;max-width:900px}section{border:1px solid #ddd;border-radius:8px;padding:1rem;margin:1rem 0}button{margin-left:.5rem}.d{margin-left:.5rem;color:#070}</style>
 </head><body>
-<h1>🔬 Cavix — reviews</h1>
+<h1>Cavix reviews</h1>
 ${rows || "<p>No reviews yet.</p>"}
 <script>
 async function decide(id, state){

@@ -238,6 +238,9 @@ async function main() {
     recordReview,
     // The summary belongs in the PR description; opt out with =off.
     summaryInDescription: process.env.CAVIX_SUMMARY_IN_DESCRIPTION !== "off",
+    // Coloured badges on the review header. Turn off for air-gapped GitHub
+    // Enterprise, where the image proxy cannot reach shields.io.
+    badges: process.env.CAVIX_REVIEW_BADGES !== "off",
     logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
   });
 
