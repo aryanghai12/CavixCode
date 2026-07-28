@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Finding } from "@cavix/core";
+import { computeOrgRollup, InMemoryAnalyticsStore, type ReviewEvent } from "@cavix/analytics";
 import { hashPassword, verifyPassword, encryptSecret, decryptSecret, fingerprint } from "./auth.ts";
 
 // The control-plane store. In-memory for Phase 1; the same port backs Postgres in
@@ -209,6 +210,19 @@ export interface ReviewRecord {
   url?: string;
   createdAt: string;
   findings: StoredFinding[];
+  /**
+   * What this review cost and how it ran. The orchestrator has known all of it
+   * since Phase 0 and simply never sent it, so the dashboard could show what
+   * Cavix found and never what it cost to find, which is half of the question
+   * anyone renewing a budget is actually asking.
+   */
+  costUsd?: number;
+  model?: string;
+  durationMs?: number;
+  /** Findings reproduced in the sandbox before posting. */
+  verifiedCount?: number;
+  /** Findings the sandbox DISPROVED, which were never posted. */
+  suppressedCount?: number;
 }
 
 export interface SaveReviewInput {
@@ -218,6 +232,82 @@ export interface SaveReviewInput {
   title: string;
   url?: string;
   findings: Array<Finding & { verified?: boolean }>;
+  costUsd?: number;
+  model?: string;
+  durationMs?: number;
+  verifiedCount?: number;
+  suppressedCount?: number;
+}
+
+/**
+ * A workspace turning Cavix off, in whole or in part.
+ *
+ * The roadmap calls this "your single most important leading indicator of
+ * churn", and nothing was recording it. A repo toggled off, or a pull request
+ * paused, is the moment a customer starts leaving, and it is invisible in a
+ * findings table.
+ */
+export interface MuteEvent {
+  org: string;
+  /** "repo" (toggled off in the dashboard) or "pr" ("@cavixcode pause"). */
+  scope: "repo" | "pr";
+  target: string;
+  /** True when Cavix was turned back on. */
+  restored: boolean;
+  at: string;
+}
+
+/** One day of the trend series. Dates are YYYY-MM-DD in UTC. */
+export interface DayPoint {
+  date: string;
+  reviews: number;
+  findings: number;
+  verified: number;
+  accepted: number;
+  rejected: number;
+  costUsd: number;
+}
+
+/** One repository's contribution, for the per-repo rollup. */
+export interface RepoRollup {
+  repo: string;
+  reviews: number;
+  findings: number;
+  verified: number;
+  actionRate: number;
+  hoursSaved: number;
+  costUsd: number;
+}
+
+/**
+ * Everything the Reports page needs, computed once.
+ *
+ * The ROI numbers come from `@cavix/analytics`, not from a second model written
+ * here: the package already owns an explicit, tunable minutes-per-severity model
+ * and having two of them is how a dashboard and a sales deck end up quoting
+ * different hours for the same month.
+ */
+export interface OrgAnalytics {
+  days: DayPoint[];
+  repos: RepoRollup[];
+  totalFindings: number;
+  actionRate: number;
+  defectsCaught: number;
+  reviewerHoursSaved: number;
+  /** Mean cost of a review over the window, in USD. 0 when nothing reported it. */
+  costPerReview: number;
+  totalCostUsd: number;
+  /** Verified findings as a share of all findings posted. */
+  verifiedShare: number;
+  /** Cavix switched off somewhere in the window. The churn signal. */
+  muteEvents: MuteEvent[];
+  /**
+   * Action rate over the first half of the window versus the second, as a
+   * percentage-point change. Negative means the team is acting on fewer of
+   * Cavix's comments than it was, which is the earliest sign of a workspace on
+   * its way out.
+   */
+  actionRateTrend: number;
 }
 
 /** Aggregate numbers for the dashboard Overview page. */
@@ -253,6 +343,15 @@ export interface Store {
   listReviews(org?: string, limit?: number): ReviewRecord[];
   getReview(id: string): ReviewRecord | undefined;
   reviewCountSince(org: string, sinceMs: number): number;
+  /** Record Cavix being switched off (or back on) somewhere. See MuteEvent. */
+  recordMute(e: Omit<MuteEvent, "at">): void;
+  listMutes(org: string, sinceMs?: number): MuteEvent[];
+  /** Stage 5's contract graph for a workspace, or null before anything indexed it. */
+  orgGraph(org: string): StoredOrgGraph | null;
+  /** Replace the graph and mark `repo` as indexed now. */
+  saveOrgGraph(org: string, repo: string, graph: unknown): StoredOrgGraph;
+  /** Trends, ROI and the per-repo rollup for the Reports page. */
+  analytics(org: string, days?: number): OrgAnalytics;
   getFinding(id: string): StoredFinding | undefined;
   recordDecision(findingId: string, state: DecisionState, user: string): StoredFinding;
   listDecisions(): Array<{ findingId: string; reviewId: string; state: DecisionState; user: string; at: string; source: string }>;
@@ -326,6 +425,24 @@ export interface StoreSnapshot {
   settings: Array<[string, OrgSettings]>;
   apiKeys: Array<[string, string]>;
   oauthTokens: Array<[string, string]>;
+  /** Optional so a snapshot written before these existed still restores. */
+  mutes?: MuteEvent[];
+  /** Stage 5's cross-repo contract graph, per workspace. See `orgGraph`. */
+  orgGraphs?: Array<[org: string, graph: StoredOrgGraph]>;
+}
+
+/**
+ * A workspace's contract graph as stored: the JSON the orggraph package
+ * serialises, plus when each repository was last indexed.
+ *
+ * The per-repo timestamps are what make indexing incremental. Without them the
+ * only options are re-indexing an entire organisation on every push or never
+ * refreshing at all, and the second one is how a graph quietly starts describing
+ * a codebase that no longer exists.
+ */
+export interface StoredOrgGraph {
+  graph: unknown;
+  indexedAt: Record<string, string>;
 }
 
 export class InMemoryStore implements Store {
@@ -339,6 +456,8 @@ export class InMemoryStore implements Store {
   private settings = new Map<string, OrgSettings>();
   private apiKeys = new Map<string, string>();  // org → encrypted key blob
   private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
+  private mutes: MuteEvent[] = [];
+  private orgGraphs = new Map<string, StoredOrgGraph>();
 
   createOrg(name: string, opts: { tier?: OrgTier; provenFeedOptIn?: boolean } = {}): Org {
     const org: Org = { id: id8("org"), name, tier: opts.tier ?? "paid", provenFeedOptIn: opts.provenFeedOptIn ?? false, createdAt: new Date().toISOString() };
@@ -432,6 +551,11 @@ export class InMemoryStore implements Store {
       ...(input.url ? { url: input.url } : {}),
       createdAt: new Date().toISOString(),
       findings,
+      ...(typeof input.costUsd === "number" ? { costUsd: input.costUsd } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(typeof input.durationMs === "number" ? { durationMs: input.durationMs } : {}),
+      ...(typeof input.verifiedCount === "number" ? { verifiedCount: input.verifiedCount } : {}),
+      ...(typeof input.suppressedCount === "number" ? { suppressedCount: input.suppressedCount } : {}),
     };
     this.reviews.unshift(record); // newest first
 
@@ -474,11 +598,47 @@ export class InMemoryStore implements Store {
   }
 
   listDecisions() {
-    const out: Array<{ findingId: string; reviewId: string; state: DecisionState; user: string; at: string; source: string }> = [];
+    // Carries what the decision was ABOUT, not just its id.
+    //
+    // This used to return the finding id and nothing else, so the Learnings page
+    // rendered a column of hashes. The page exists to show a customer that Cavix
+    // is being tuned to their bar, and "f_3b91c204 · rejected" demonstrates
+    // nothing to anyone.
+    const out: Array<{
+      findingId: string;
+      reviewId: string;
+      state: DecisionState;
+      user: string;
+      at: string;
+      source: string;
+      title: string;
+      path: string;
+      line: number;
+      severity: string;
+      category: string;
+      verified: boolean;
+      repo: string;
+    }> = [];
+    const repoOf = new Map(this.reviews.map((r) => [r.id, r.repo]));
     for (const f of this.findings.values()) {
-      if (f.decision) out.push({ findingId: f.id, reviewId: f.reviewId, state: f.decision.state, user: f.decision.user, at: f.decision.at, source: f.source });
+      if (!f.decision) continue;
+      out.push({
+        findingId: f.id,
+        reviewId: f.reviewId,
+        state: f.decision.state,
+        user: f.decision.user,
+        at: f.decision.at,
+        source: f.source,
+        title: f.title,
+        path: f.path,
+        line: f.line,
+        severity: f.severity,
+        category: f.category,
+        verified: f.verified === true,
+        repo: repoOf.get(f.reviewId) ?? "",
+      });
     }
-    return out;
+    return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   }
 
   // ---------- accounts & team ----------
@@ -661,6 +821,115 @@ export class InMemoryStore implements Store {
     };
   }
 
+  // ---------- mute tracking + analytics ----------
+
+  recordMute(e: Omit<MuteEvent, "at">): void {
+    this.mutes.push({ ...e, at: new Date().toISOString() });
+  }
+
+  listMutes(org: string, sinceMs?: number): MuteEvent[] {
+    const cutoff = sinceMs ? Date.now() - sinceMs : 0;
+    return this.mutes.filter((m) => m.org === org && (!sinceMs || Date.parse(m.at) >= cutoff));
+  }
+
+  orgGraph(org: string): StoredOrgGraph | null {
+    return this.orgGraphs.get(org) ?? null;
+  }
+
+  saveOrgGraph(org: string, repo: string, graph: unknown): StoredOrgGraph {
+    const prev = this.orgGraphs.get(org);
+    const next: StoredOrgGraph = {
+      graph,
+      indexedAt: { ...(prev?.indexedAt ?? {}), [repo]: new Date().toISOString() },
+    };
+    this.orgGraphs.set(org, next);
+    return next;
+  }
+
+  analytics(org: string, days = 30): OrgAnalytics {
+    const windowMs = days * 86_400_000;
+    const cutoff = Date.now() - windowMs;
+    const reviews = this.reviews.filter((r) => r.org === org && Date.parse(r.createdAt) >= cutoff);
+
+    // ROI comes from the analytics package. One event per posted finding, keyed
+    // by repo so "team" in its vocabulary is a repository here.
+    const events: ReviewEvent[] = reviews.flatMap((r) =>
+      r.findings.map((f) => ({
+        team: r.repo,
+        repo: r.repo,
+        reviewId: r.id,
+        findingId: f.id,
+        severity: f.severity,
+        source: f.source,
+        ...(f.agent ? { agent: f.agent } : {}),
+        verified: f.verified === true,
+        // The fix-PR agent is a Phase 4 package that does not run in this
+        // deployment yet, so this is honestly false rather than optimistically
+        // derived from something else.
+        fixPrOpened: false,
+        decision: (f.decision?.state ?? "none") as "accepted" | "rejected" | "none",
+        at: r.createdAt,
+      })),
+    );
+
+    const analyticsStore = new InMemoryAnalyticsStore();
+    for (const e of events) analyticsStore.ingest(e);
+    const rollup = computeOrgRollup(analyticsStore);
+
+    // Daily buckets, oldest first, keyed on the UTC date so a chart's x-axis
+    // labels and its data cannot disagree about which day a point belongs to.
+    const byDay = new Map<string, DayPoint>();
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10);
+      byDay.set(d, { date: d, reviews: 0, findings: 0, verified: 0, accepted: 0, rejected: 0, costUsd: 0 });
+    }
+    for (const r of reviews) {
+      const point = byDay.get(r.createdAt.slice(0, 10));
+      if (!point) continue;
+      point.reviews++;
+      point.findings += r.findings.length;
+      point.costUsd += r.costUsd ?? 0;
+      for (const f of r.findings) {
+        if (f.verified) point.verified++;
+        if (f.decision?.state === "accepted") point.accepted++;
+        if (f.decision?.state === "rejected") point.rejected++;
+      }
+    }
+    const series = [...byDay.values()];
+
+    const priced = reviews.filter((r) => typeof r.costUsd === "number");
+    const totalCostUsd = priced.reduce((n, r) => n + (r.costUsd ?? 0), 0);
+    const findings = reviews.flatMap((r) => r.findings);
+    const verified = findings.filter((f) => f.verified).length;
+
+    return {
+      days: series,
+      repos: rollup.teams
+        .map((t) => {
+          const forRepo = reviews.filter((r) => r.repo === t.team);
+          return {
+            repo: t.team,
+            reviews: forRepo.length,
+            findings: t.totalFindings,
+            verified: t.defectsCaught,
+            actionRate: t.actionRate,
+            hoursSaved: t.reviewerHoursSaved,
+            costUsd: round2(forRepo.reduce((n, r) => n + (r.costUsd ?? 0), 0)),
+          };
+        })
+        .sort((a, b) => b.findings - a.findings),
+      totalFindings: rollup.totalFindings,
+      actionRate: rollup.actionRate,
+      defectsCaught: rollup.defectsCaught,
+      reviewerHoursSaved: rollup.reviewerHoursSaved,
+      costPerReview: priced.length ? round4(totalCostUsd / priced.length) : 0,
+      totalCostUsd: round4(totalCostUsd),
+      verifiedShare: findings.length ? round2(verified / findings.length) : 0,
+      muteEvents: this.listMutes(org, windowMs),
+      actionRateTrend: halfOverHalfActionRate(series),
+    };
+  }
+
   // ---------- founder / platform admin ----------
 
   effectiveReviewsPerDay(org: string): number {
@@ -836,6 +1105,8 @@ export class InMemoryStore implements Store {
       settings: [...this.settings.entries()],
       apiKeys: [...this.apiKeys.entries()],
       oauthTokens: [...this.oauthTokens.entries()],
+      mutes: this.mutes,
+      orgGraphs: [...this.orgGraphs.entries()],
     };
   }
 
@@ -854,6 +1125,11 @@ export class InMemoryStore implements Store {
     this.settings = new Map(s.settings ?? []);
     this.apiKeys = new Map(s.apiKeys ?? []);
     this.oauthTokens = new Map(s.oauthTokens ?? []);
+    // Both default to empty rather than being left alone, so a restore replaces
+    // every field. Skipping them left the previous process's mutes and graph
+    // sitting in memory beside freshly loaded orgs they no longer belonged to.
+    this.mutes = s.mutes ?? [];
+    this.orgGraphs = new Map(s.orgGraphs ?? []);
   }
 
   /** True when the store has no data yet (used to decide whether to seed). */
@@ -868,4 +1144,37 @@ function toPublic(u: User): PublicUser {
 
 function id8(prefix: string): string {
   return `${prefix}_${randomUUID().slice(0, 8)}`;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+function round4(n: number): number {
+  return Math.round(n * 10_000) / 10_000;
+}
+
+/**
+ * Action rate over the first half of the window against the second, in
+ * percentage points.
+ *
+ * A single action rate says how a team feels about Cavix; the DIRECTION says
+ * whether they are on their way out. The roadmap is explicit that a falling
+ * action rate is the earliest churn signal there is, so the number that matters
+ * is the change, not the level.
+ *
+ * Returns 0 when either half decided nothing: a team that made no decisions is
+ * not trending anywhere, and reporting a swing from an empty denominator would
+ * fire the alarm on a quiet fortnight.
+ */
+function halfOverHalfActionRate(days: DayPoint[]): number {
+  const mid = Math.floor(days.length / 2);
+  const rate = (slice: DayPoint[]): number | null => {
+    const accepted = slice.reduce((n, d) => n + d.accepted, 0);
+    const decided = accepted + slice.reduce((n, d) => n + d.rejected, 0);
+    return decided === 0 ? null : accepted / decided;
+  };
+  const before = rate(days.slice(0, mid));
+  const after = rate(days.slice(mid));
+  if (before === null || after === null) return 0;
+  return Math.round((after - before) * 1000) / 10;
 }

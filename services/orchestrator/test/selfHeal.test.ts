@@ -123,6 +123,7 @@ test("healing does not fire for failures that are not about the model", async ()
     createComment: (r, b) => github.createComment(r, b),
     findComment: (r, m) => github.findComment(r, m),
     updateComment: (r, i, b) => github.updateComment(r, i, b),
+    listTree: (r) => github.listTree(r),
     listOwnReviews: (r) => github.listOwnReviews(r),
     dismissReview: (r, id, m) => github.dismissReview(r, id, m),
     listReviewCommentIds: (r, ids) => github.listReviewCommentIds(r, ids),

@@ -161,6 +161,10 @@ export class FakeGitHubClient implements GitHubClient {
     };
   }
 
+  async listTree(_ref: PullRef): Promise<string[]> {
+    return Object.keys(this.files);
+  }
+
   async listOwnReviews(_ref: PullRef): Promise<OwnReview[]> {
     return this.submissions
       .map((s, i) => ({ id: 1001 + i, state: this.reviewState.get(1001 + i) ?? "COMMENTED", body: s.review.body }))

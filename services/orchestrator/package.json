@@ -15,6 +15,7 @@
     "@cavix/core": "*",
     "@cavix/deterministic": "*",
     "@cavix/gateway": "*",
+    "@cavix/orggraph": "*",
     "@cavix/pipeline": "*",
     "@cavix/policy": "*",
     "@cavix/repoconfig": "*",

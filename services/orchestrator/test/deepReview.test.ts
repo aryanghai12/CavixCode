@@ -228,6 +228,36 @@ test("a deep review that cannot read the changed files fails soft, not loud", as
   assert.equal(outcome.findingCount, 1, "and the review lands anyway");
 });
 
+test("a wide pull request still gets the ensemble, and does not claim a full scan", async () => {
+  // Refusing outright was the first behaviour here, and it meant any PR touching
+  // more than the file budget fell all the way back to one model over the raw
+  // diff. That is most real pull requests. The agents read the DIFF, so they lose
+  // nothing; only the graph and the scanners see less, and the review must not
+  // then claim they saw everything.
+  const wide = Array.from(
+    { length: 20 },
+    (_, i) => `diff --git a/src/f${i}.js b/src/f${i}.js\n--- a/src/f${i}.js\n+++ b/src/f${i}.js\n@@ -1,1 +1,2 @@ function f${i}() {\n const a = 1;\n+const b = ${i};\n`,
+  ).join("");
+
+  const files: Record<string, string> = {};
+  for (let i = 0; i < 20; i++) files[`src/f${i}.js`] = `function f${i}() {\n const a = 1;\n const b = ${i};\n}\n`;
+
+  const { reviewer, gateway } = wire();
+  const github = new FakeGitHubClient({ diff: wide, files });
+  const deepReview = makeDeepReviewStep({ gateway, github });
+
+  await runReview({ ...job(), title: "Wide change" }, { github, reviewer, deepReview });
+  const body = github.lastReview()!.body;
+
+  assert.match(body, /\*\*Ensemble\*\*/, "the seven agents still ran");
+  assert.match(body, /\*\*AST Verification\*\*/, "and the graph covered what it could read");
+  assert.doesNotMatch(
+    body,
+    /Deterministic Pass/,
+    "but the scanners saw part of the change, so that row is withheld rather than overstated",
+  );
+});
+
 test("summary mode never pays for the ensemble", async () => {
   // Nobody typing "@cavixcode summary" wants seven agents billed to produce a
   // paragraph, so the deep path is skipped for that mode entirely.

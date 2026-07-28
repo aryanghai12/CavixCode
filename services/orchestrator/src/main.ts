@@ -29,6 +29,9 @@ import { GatewayTestGenerator, Verifier } from "@cavix/verifier";
 import { selectBackend } from "@cavix/sandbox";
 import { makeVerifyStep } from "./verify/verify.ts";
 import { makeDeepReviewStep } from "./pipeline/deepReview.ts";
+import { makeGraphStore } from "./orggraph/store.ts";
+import { makeGraphIndexer } from "./orggraph/indexer.ts";
+import { makeBlastRadiusStep } from "./orggraph/blastRadius.ts";
 import { makeControlPlaneResolver } from "./byok/resolver.ts";
 import { makeRepoGate } from "./byok/gate.ts";
 import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
@@ -232,6 +235,27 @@ async function main() {
     : undefined;
   if (reviewConfig) log("info", "per-org review settings come from the dashboard");
 
+  // Stage 5 — the cross-repo contract graph. Two halves: a query that runs
+  // during a review and an indexer that runs after one. Both need the
+  // control-plane, because the graph has to outlive this process and be shared
+  // by every worker; without one, reviews simply have no cross-repo section.
+  let blastRadius;
+  let indexGraph;
+  if (cpUrl && internalToken && process.env.CAVIX_CROSS_REPO !== "off") {
+    const graphStore = makeGraphStore({
+      url: cpUrl,
+      token: internalToken,
+      logger: { warn: (m, meta) => log("warn", m, meta) },
+    });
+    blastRadius = makeBlastRadiusStep({ store: graphStore, logger: { info: (m, meta) => log("info", m, meta) } });
+    indexGraph = makeGraphIndexer({
+      github,
+      store: graphStore,
+      logger: { info: (m, meta) => log("info", m, meta) },
+    });
+    log("info", "cross-repo impact on: a changed interface is traced to its consumers in other repos");
+  }
+
   // The other half of that conversation: every finished review is written back
   // so the dashboard, the accept/reject learning signal and the proven-catches
   // feed have something to show. Without a control-plane there is nowhere to
@@ -255,6 +279,8 @@ async function main() {
     suggestModels,
     saveModel,
     deepReview,
+    blastRadius,
+    indexGraph,
     verify,
     reviewConfig,
     recordReview,

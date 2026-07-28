@@ -44,8 +44,16 @@ export function makeRepoGate(opts: RepoGateOptions): RepoGate {
           { headers: { authorization: `Bearer ${opts.token}` } },
         );
         if (res.ok) {
-          const data = (await res.json()) as { enabled?: boolean; org?: string };
-          return { enabled: data.enabled === true, org: data.org };
+          const data = (await res.json()) as { enabled?: boolean; org?: string; reason?: string };
+          return {
+            enabled: data.enabled === true,
+            org: data.org,
+            // Present when the repo IS connected but this review may not run
+            // (suspended workspace, daily allowance spent). The workflow shows it
+            // verbatim, so a human learns the real reason instead of being sent
+            // to a toggle that is already on.
+            ...(data.reason ? { reason: data.reason } : {}),
+          };
         }
         lastProblem = `HTTP ${res.status}`;
         // 401/404 are configuration mistakes, not cold starts — retrying is pointless.

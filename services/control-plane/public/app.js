@@ -96,32 +96,51 @@
   }
 
   // ---------- OVERVIEW ----------
+  /**
+   * Severity as labelled meters, not a five-colour chart.
+   *
+   * critical/high/medium/low/info forces red, orange and yellow next to each
+   * other, and that trio cannot clear the normal-vision separation floor at any
+   * stepping. So the name, the geometric mark (the same one the posted review
+   * uses) and the count carry identity, and length carries magnitude.
+   */
+  const SEV_ROWS = [
+    { key: "critical", mark: "◆", color: "#F0857E" },
+    { key: "high", mark: "◈", color: "#E6B45F" },
+    { key: "medium", mark: "◇", color: "#C98500" },
+    { key: "low", mark: "▪", color: "#8FBCFF" },
+    { key: "info", mark: "▫", color: "#7C93B5" },
+  ];
+  const severityMeters = (bySeverity) =>
+    CavixCharts.meters(
+      SEV_ROWS.map((r) => ({ label: r.key, mark: r.mark, color: r.color, value: bySeverity[r.key] || 0 })),
+    );
+
   async function renderOverview() {
-    const s = await api(`/api/orgs/${org}/stats`);
-    const maxBar = Math.max(1, ...s.reviewsLast7Days);
-    const bars = s.reviewsLast7Days.map((n) => `<div class="bar" style="height:${Math.round((n / maxBar) * 100)}%" title="${n} reviews"></div>`).join("");
-    const sevRows = ["critical", "high", "medium", "low"].map((sev) => {
-      const n = s.bySeverity[sev] || 0;
-      return `<div class="settings-row"><div style="display:flex;align-items:center;gap:10px">${sevBadge(sev)}</div><b>${n}</b></div>`;
-    }).join("");
+    const [s, a] = await Promise.all([
+      api(`/api/orgs/${org}/stats`),
+      api(`/api/orgs/${org}/analytics?days=30`),
+    ]);
 
     content.innerHTML = `
       <div class="stat-grid">
-        <div class="stat"><div class="label">${ic("reviews")} Reviews run</div><div class="value">${s.reviews}</div><div class="delta">all time</div></div>
-        <div class="stat"><div class="label">${ic("check")} Verified findings</div><div class="value grad">${s.verified}</div><div class="delta">proven in a sandbox</div></div>
-        <div class="stat"><div class="label">${ic("target")} Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div><div class="delta">accepted of decided</div></div>
-        <div class="stat"><div class="label">${ic("clock")} Reviewer-hours saved</div><div class="value">${s.hoursSaved}</div><div class="delta">est. this period</div></div>
+        ${CavixCharts.tile("Reviews run", s.reviews, { note: "all time" })}
+        ${CavixCharts.tile("Verified findings", s.verified, { note: "proven in a sandbox" })}
+        ${CavixCharts.tile("Action rate", `${Math.round(s.actionRate * 100)}%`, {
+          delta: a.actionRateTrend,
+          unit: "pt",
+          note: a.actionRateTrend ? "vs the previous fortnight" : "accepted of decided",
+        })}
+        ${CavixCharts.tile("Reviewer-hours saved", a.reviewerHoursSaved, { note: "last 30 days" })}
       </div>
       <div class="grid grid-2">
         <div class="panel">
-          <div class="panel-head"><h2>Reviews, last 7 days</h2></div>
-          <div class="panel-body"><div class="spark">${bars}</div>
-            <div style="display:flex;justify-content:space-between;color:var(--text-faint);font-size:12px;margin-top:10px"><span>7d ago</span><span>today</span></div>
-          </div>
+          <div class="panel-head"><h2>Activity, last 30 days</h2></div>
+          <div class="panel-body">${CavixCharts.trend(a.days)}</div>
         </div>
         <div class="panel">
           <div class="panel-head"><h2>Findings by severity</h2></div>
-          <div class="panel-body" style="padding-top:6px">${sevRows}</div>
+          <div class="panel-body">${severityMeters(s.bySeverity)}</div>
         </div>
       </div>
       <div class="panel">
@@ -771,43 +790,145 @@
   }
 
   // ---------- REPORTS (ROI + quality) ----------
+  /** The window the Reports page is showing. Persists while the tab is open. */
+  let reportDays = 30;
+
   async function renderReports() {
-    const s = await api(`/api/orgs/${org}/stats`);
-    const total = s.accepted + s.rejected;
-    const bars = ["critical", "high", "medium", "low"].map((sev) => {
-      const n = s.bySeverity[sev] || 0; const max = Math.max(1, ...Object.values(s.bySeverity));
-      return `<div style="display:flex;align-items:center;gap:12px;margin:8px 0"><div style="width:70px">${sevBadge(sev)}</div><div style="flex:1;background:var(--bg-elev);border-radius:6px;height:10px;overflow:hidden"><div style="height:100%;width:${Math.round((n / max) * 100)}%;background:var(--brand-grad)"></div></div><b style="width:24px;text-align:right">${n}</b></div>`;
-    }).join("");
+    const [s, a] = await Promise.all([
+      api(`/api/orgs/${org}/stats`),
+      api(`/api/orgs/${org}/analytics?days=${reportDays}`),
+    ]);
+    const decided = s.accepted + s.rejected;
+    const money = (n) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`);
+
+    // Mutes lead when there are any. A repo switched off is the earliest churn
+    // signal there is, and it is worth more than any number below it.
+    const mutes = a.muteEvents.filter((mm) => !mm.restored);
+    const muteCard = mutes.length
+      ? `<div class="panel" style="border-color:rgba(240,133,126,.35)">
+          <div class="panel-head"><div><h2>Cavix was switched off</h2><span class="sub">${mutes.length} time${mutes.length === 1 ? "" : "s"} in the last ${reportDays} days</span></div><span class="badge badge-high">worth a look</span></div>
+          <div class="panel-body">
+            ${mutes.slice(0, 8).map((mm) => `<div class="mute-row"><span class="mark-att">▲</span><code>${esc(mm.target)}</code><span class="badge">${esc(mm.scope === "repo" ? "repository" : "pull request")}</span><span class="mr-when">${new Date(mm.at).toLocaleDateString()}</span></div>`).join("")}
+            <div class="ch-note">A team turning Cavix off is the first thing that happens before they stop paying for it. Worth asking why while the reason is still fresh.</div>
+          </div>
+        </div>`
+      : "";
+
     content.innerHTML = `
+      <div class="panel"><div class="panel-body" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div><div class="sr-label">Reporting window</div><div class="sr-desc">Trends, ROI and the per-repository rollup are computed over this period.</div></div>
+        <div style="display:flex;gap:8px">
+          ${[7, 30, 90].map((d) => `<button class="btn ${d === reportDays ? "btn-primary" : "btn-soft"} btn-sm" data-days="${d}">${d} days</button>`).join("")}
+        </div>
+      </div></div>
+
       <div class="stat-grid">
-        <div class="stat"><div class="label">${ic("reviews")} Reviews</div><div class="value">${s.reviews}</div></div>
-        <div class="stat"><div class="label">${ic("check")} Verified</div><div class="value grad">${s.verified}</div></div>
-        <div class="stat"><div class="label">${ic("target")} Action rate</div><div class="value">${Math.round(s.actionRate * 100)}%</div></div>
-        <div class="stat"><div class="label">${ic("clock")} Hours saved</div><div class="value">${s.hoursSaved}</div></div>
+        ${CavixCharts.tile("Action rate", `${Math.round(a.actionRate * 100)}%`, {
+          delta: a.actionRateTrend,
+          unit: "pt",
+          note: a.actionRateTrend ? "vs the first half of the window" : "acted on, of everything posted",
+        })}
+        ${CavixCharts.tile("Defects caught", a.defectsCaught, { note: "proven by execution" })}
+        ${CavixCharts.tile("Reviewer-hours saved", a.reviewerHoursSaved, { note: `over ${reportDays} days` })}
+        ${CavixCharts.tile("Cost per review", a.costPerReview ? money(a.costPerReview) : "not reported", {
+          note: a.totalCostUsd ? `${money(a.totalCostUsd)} total` : "older reviews predate cost reporting",
+        })}
       </div>
+
+      ${muteCard}
+
+      <div class="panel">
+        <div class="panel-head"><div><h2>Reviews and proven findings</h2><span class="sub">Per day, over the window</span></div></div>
+        <div class="panel-body">${CavixCharts.trend(a.days)}</div>
+      </div>
+
       <div class="grid grid-2">
-        <div class="panel"><div class="panel-head"><h2>Findings by severity</h2></div><div class="panel-body">${bars}</div></div>
-        <div class="panel"><div class="panel-head"><h2>Decisions</h2></div><div class="panel-body">
+        <div class="panel">
+          <div class="panel-head"><div><h2>Where the findings are</h2><span class="sub">By repository</span></div></div>
+          <div class="panel-body">${CavixCharts.ranked(
+            a.repos.map((r) => ({ label: r.repo, value: r.findings, display: `${r.findings}` })),
+            { emptyText: "No reviews in this window." },
+          )}</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Hours saved</h2><span class="sub">By repository</span></div></div>
+          <div class="panel-body">${CavixCharts.ranked(
+            [...a.repos].sort((x, y) => y.hoursSaved - x.hoursSaved).map((r) => ({ label: r.repo, value: r.hoursSaved, display: `${r.hoursSaved}h` })),
+            { emptyText: "No reviews in this window." },
+          )}</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="panel"><div class="panel-head"><h2>Findings by severity</h2></div><div class="panel-body">${severityMeters(s.bySeverity)}</div></div>
+        <div class="panel"><div class="panel-head"><h2>Quality</h2></div><div class="panel-body">
           <div class="settings-row"><div class="sr-label">Accepted</div><b style="color:var(--green)">${s.accepted}</b></div>
           <div class="settings-row"><div class="sr-label">Rejected</div><b style="color:var(--red)">${s.rejected}</b></div>
-          <div class="settings-row"><div class="sr-label">False-positive rate</div><b>${Math.round(s.falsePositiveRate * 100)}%</b></div>
-          <div class="settings-row"><div class="sr-label">Repositories</div><b>${s.reposConnected}</b></div>
+          <div class="settings-row"><div class="sr-label">False-positive rate</div><b>${decided ? Math.round(s.falsePositiveRate * 100) : 0}%</b></div>
+          <div class="settings-row"><div class="sr-label">Verified share of findings</div><b>${Math.round(a.verifiedShare * 100)}%</b></div>
+          <div class="settings-row"><div class="sr-label">Repositories connected</div><b>${s.reposConnected}</b></div>
         </div></div>
       </div>
-      <div class="panel"><div class="panel-body"><div class="sr-desc">Reviewer-hours saved uses a per-severity model (minutes to find + author a fix − false-alarm overhead). Export and per-team rollups ship in the analytics package; wire it to your BI tool for board-ready ROI. ${total === 0 ? "Accept or reject some findings to populate action rate." : ""}</div></div></div>`;
+
+      <div class="panel"><div class="panel-body"><div class="ch-note">
+        Reviewer-hours saved uses an explicit per-severity model: how long a human would have spent finding and confirming an issue of that severity, less the overhead a false alarm costs. It is the same model the analytics package exports, so this page and any report built on it quote the same number.
+        ${decided === 0 ? " Accept or reject some findings on the Reviews page to populate action rate." : ""}
+      </div></div></div>`;
+
+    content.querySelectorAll("[data-days]").forEach((b) =>
+      b.addEventListener("click", () => {
+        reportDays = Number(b.dataset.days);
+        renderReports();
+      }),
+    );
   }
 
   // ---------- LEARNINGS ----------
   async function renderLearnings() {
     const decisions = await api(`/api/decisions`);
     const mine = decisions.slice(0, 100);
+    const accepted = mine.filter((d) => d.state === "accepted").length;
+    const rejected = mine.length - accepted;
+
+    // What the team keeps rejecting is the single most useful thing on this
+    // page: it is the category Cavix should stop raising for them, stated in
+    // their own data rather than asserted.
+    const byCategory = {};
+    for (const d of mine) {
+      if (d.state !== "rejected") continue;
+      byCategory[d.category] = (byCategory[d.category] || 0) + 1;
+    }
+    const noisiest = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    const sevMark = (s) => (SEV_ROWS.find((r) => r.key === s) || { mark: "▫", color: "#7C93B5" });
+
     content.innerHTML = `
+      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
+        ${CavixCharts.tile("Preferences learned", mine.length, { note: "from your accept and reject history" })}
+        ${CavixCharts.tile("Confirmed real", accepted, { note: "raised again without hesitation" })}
+        ${CavixCharts.tile("Told to stop", rejected, { note: "the bar Cavix is calibrating to" })}
+      </div>
+
+      ${noisiest.length ? `<div class="panel">
+        <div class="panel-head"><div><h2>What your team keeps rejecting</h2><span class="sub">Cavix weights these down first</span></div></div>
+        <div class="panel-body">${CavixCharts.ranked(noisiest.map(([c, n]) => ({ label: c, value: n })), { limit: 5 })}</div>
+      </div>` : ""}
+
       <div class="panel">
-        <div class="panel-head"><div><h2>What Cavix has learned</h2><span class="sub">${mine.length} preference${mine.length === 1 ? "" : "s"} from your accept/reject history</span></div><span class="badge badge-verified">personalization lock-in</span></div>
+        <div class="panel-head"><div><h2>Every decision</h2><span class="sub">Newest first</span></div></div>
         <div class="panel-body">
-          <p class="sr-desc" style="margin-bottom:16px">Every accept/reject tunes Cavix to <b>your</b> team's bar, thresholds, which nits to suppress, what's worth proving. A competitor starts cold; Cavix starts tuned.</p>
-          ${mine.length ? `<table class="table"><thead><tr><th>Signal</th><th>Source</th><th>Decision</th><th>By</th></tr></thead><tbody>
-            ${mine.map((d) => `<tr><td class="mono" style="color:var(--text-faint)">${esc(d.findingId)}</td><td><span class="badge">${esc(d.source)}</span></td><td><span class="decided ${esc(d.state)}">${esc(d.state)}</span></td><td style="color:var(--text-dim)">${esc(d.user)}</td></tr>`).join("")}
+          <p class="sr-desc" style="margin-bottom:16px">Every accept and reject tunes Cavix to <b>your</b> team's bar: thresholds, which nits to suppress, what is worth proving. A competitor starts cold; Cavix starts tuned.</p>
+          ${mine.length ? `<table class="table"><thead><tr><th>Finding</th><th>Where</th><th>Source</th><th>Decision</th><th>By</th></tr></thead><tbody>
+            ${mine.map((d) => {
+              const sv = sevMark(d.severity);
+              return `<tr>
+                <td><b style="color:${sv.color}">${sv.mark}</b> ${esc(d.title)}${d.verified ? ` <span class="mark-ok" title="proven by execution">⬢</span>` : ""}<div class="t-faint">${esc(d.severity)} · ${esc(d.category)}</div></td>
+                <td class="mono" style="color:var(--text-faint);font-size:12px">${esc(d.repo)}<div>${esc(d.path)}:${d.line}</div></td>
+                <td><span class="badge">${esc(d.source)}</span></td>
+                <td><span class="decided ${esc(d.state)}">${esc(d.state)}</span></td>
+                <td style="color:var(--text-dim)">${esc(d.user)}</td>
+              </tr>`;
+            }).join("")}
           </tbody></table>` : `<div class="empty" style="padding:40px">No learnings yet. Accept or reject findings on the Reviews page and they'll appear here.</div>`}
         </div>
       </div>`;

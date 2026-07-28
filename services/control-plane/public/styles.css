@@ -583,6 +583,31 @@ select option { background: #0D1526; color: var(--text); }
   background: #1F2937; color: #cbd5e1; border: 1px solid var(--border-soft); white-space: nowrap; }
 .sbadge.sb-ok { background: #047857; color: #d1fae5; border-color: rgba(16,185,129,.4); }
 .sbadge.sb-sev { background: #C2410C; color: #ffedd5; border-color: rgba(234,88,12,.45); }
+/* ── charts (see public/charts.js) ────────────────────────────────────────── */
+.ch { position: relative; }
+.ch svg { width: 100%; height: 200px; display: block; overflow: visible; }
+/* The crosshair and its dots are invisible until the day's band is hovered.
+   Doing it in CSS rather than JS keeps the chart a static string of SVG. */
+.ch-hit:hover .ch-cross, .ch-hit:hover .ch-dot { opacity: 1; }
+.ch-hit { cursor: crosshair; }
+.ch-legend { display: flex; gap: 16px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
+.ch-key { display: inline-flex; align-items: center; gap: 7px; }
+.ch-key i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.ch-axis { display: flex; justify-content: space-between; color: var(--text-faint); font-size: 11.5px; margin-top: 6px; }
+.ch-empty { color: var(--text-faint); font-size: 13.5px; padding: 28px 0; text-align: center; }
+.ch-meters { display: flex; flex-direction: column; gap: 11px; }
+.ch-meter { display: grid; grid-template-columns: 116px 1fr 46px; align-items: center; gap: 12px; font-size: 13px; }
+.ch-meter.ch-wide { grid-template-columns: 210px 1fr 64px; }
+.ch-mlabel { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-track { background: var(--bg-elev); border-radius: 5px; height: 9px; overflow: hidden; }
+.ch-track i { display: block; height: 100%; border-radius: 5px; min-width: 3px; }
+.ch-mval { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.ch-note { color: var(--text-faint); font-size: 12.5px; margin-top: 14px; line-height: 1.6; }
+/* The mute log: a workspace switching Cavix off. Read before a renewal call. */
+.mute-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+.mute-row:last-child { border-bottom: none; }
+.mute-row .mr-when { color: var(--text-faint); margin-left: auto; font-size: 12px; }
+
 /* The severity marks. Geometry carries the shape, colour carries the weight. */
 .mark-crit { color: #f87171; } .mark-high { color: #fb923c; } .mark-med { color: #fbbf24; }
 .mark-att { color: #fbbf24; } .mark-ok { color: #34d399; }

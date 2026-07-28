@@ -5,6 +5,130 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Stage 5 live: cross-repo impact on a real pull request
+
+`packages/orggraph` was written, tested and imported by nothing. It now runs, in
+two halves with different timing.
+
+#### Added
+- **The query.** Before a review is posted, a changed public interface is traced
+  to its consumers in OTHER repositories, and each becomes one finding naming the
+  repositories and the exact call sites. This is the finding no single-repo
+  reviewer can produce: a change to `DELETE /orders/{id}` reads as a clean,
+  well-tested diff inside the orders service, and the only thing wrong with it
+  lives in a repository nobody in the pull request has open.
+- **The indexer**, which runs AFTER the review is posted and only when this
+  repository's slice of the graph has gone stale (12 hours). A tree listing and a
+  few dozen file reads do not belong in front of somebody waiting for a review,
+  and none of it changes the review that was just posted.
+- **`listTree` on the GitHub client**: the repository's whole file list in one
+  call, via the git trees API. Stage 5 has to FIND the contract files before it
+  can read them, and there was no way to do that without cloning.
+- **Graph storage in the control-plane** (`/api/internal/orgs/:org/graph`), with
+  per-repository index timestamps so refreshes are incremental. The split is
+  forced: only the orchestrator holds GitHub App installation tokens, which are
+  the one credential that reads a private repository without borrowing a human's
+  OAuth token, and only the control-plane has Postgres and knows which
+  repositories a workspace connected. A graph naming a repository the workspace
+  never connected is rejected.
+- `CAVIX_CROSS_REPO=off` turns the whole stage off. It fails soft either way: a
+  broken trace costs the cross-repo section, never the review.
+- The Scope module's `Blast Radius` row now renders, from real call-site counts.
+
+#### Fixed
+Four bugs in `packages/orggraph`, all of which would have shipped:
+
+- **A concrete call never matched a templated route.** A provider declares
+  `/orders/{id}`, normalized to `/orders/*`; a caller writes `/orders/abc123`.
+  Those were compared as strings, so they never matched, and that is the single
+  most common shape in any real organisation. Paths are now compared segment by
+  segment, aligned on their tails, with a variable on either side matching
+  anything. A route made entirely of variables matches nothing rather than
+  everything.
+- **Removing an operation did not count as changing the path that owns it.**
+  Deleting an endpoint from an OpenAPI document removes the `"delete": {}` line
+  while `"/orders/{id}":` sits above it as unchanged context, so reading only
+  changed lines saw a method with no path and concluded nothing had changed. The
+  enclosing path is now tracked across context lines.
+- **Generic method names manufactured consumers.** `redisClient.get(key)` and
+  `dbClient.get(id)` were reported as callers of `orders.OrderService/Get`, so
+  changing one RPC would have told three unrelated teams their code was about to
+  break. That is precisely the noise this product exists to be incapable of. A
+  gRPC match now requires the receiver to name the service, unless the method
+  name is distinctive enough to stand alone.
+- **One row per call site.** A monorepo importing one package from four hundred
+  files produced four hundred identical edges, all held, persisted and shipped to
+  every review. References now dedupe by what they are, keeping the first eight
+  locations.
+
+Also added: `toJSON`/`fromJSON` so a graph outlives the process that built it,
+and `fromJSON` returns an empty graph for anything it does not recognise rather
+than throwing.
+
+#### Fixed elsewhere
+- **`mutes` was missing from the store snapshot**, so every mute event was lost
+  on restart. Added, along with the graph, and `restore` now resets both rather
+  than leaving the previous process's data beside freshly loaded orgs.
+- **A temporal dead zone crash in the control-plane router.** A new route used
+  the shared `mm` match variable above its `let`, which threw on every request
+  that reached it and 500'd every route below. Caught by the existing suite.
+
+### Dashboard analytics, and the churn signals nobody was recording
+
+#### Added
+- **`@cavix/analytics` is wired into the control-plane.** The Reports page's ROI
+  numbers now come from the package's explicit minutes-per-severity model rather
+  than a second one hand-written in the store, so the dashboard and anything
+  built on the package quote the same hours for the same month.
+- **Mute tracking (`MuteEvent`).** A repository toggled off, or a pull request
+  paused, is recorded and surfaced at the top of Reports. The roadmap calls this
+  "your single most important leading indicator of churn" and nothing was
+  capturing it.
+- **Action-rate trend**, first half of the window against the second, in
+  percentage points. A single action rate says how a team feels about Cavix; the
+  direction says whether they are leaving. Returns 0 when either half decided
+  nothing, so a quiet fortnight does not fire the alarm.
+- **Cost, model, duration, verified and suppressed counts** on every recorded
+  review. The workflow has had all of them since Phase 0 and threw them away at
+  the recorder boundary, so the dashboard could report what Cavix found and never
+  what finding it cost. Cost per review is computed over the reviews that
+  actually reported one: "not measured" is not "free".
+- **`GET /api/orgs/:org/analytics`** with daily series, per-repository rollup,
+  ROI and mute log. `days` is clamped to 7..90.
+- **`public/charts.js`**: dependency-free inline SVG (the site ships static with
+  a strict CSP, so a CDN chart library is not an option). Series colours were
+  validated against the dark card surface rather than chosen by eye.
+
+#### Changed
+- Severity is rendered as a labelled meter list, not a five-colour chart.
+  critical/high/medium/low/info forces red, orange and yellow adjacent, and that
+  trio cannot clear the normal-vision separation floor at any stepping (worst
+  adjacent pair ΔE ~13 against a floor of 15). Name, geometric mark and count
+  carry identity; length carries magnitude. That is the correct form for an
+  ordered scale regardless.
+- **The Learnings page showed a column of hashes.** `listDecisions` now carries
+  the finding's title, path, severity, category, repo and verified flag, and the
+  page leads with the categories a team keeps rejecting, which is the one thing
+  on it that changes what Cavix does next.
+
+#### Fixed
+- **Tier limits and suspension were enforced after the money was spent.** The
+  daily allowance and the suspended flag were checked only when a finished review
+  was recorded, which is after the diff was fetched, the models were called and
+  the comment was already on the pull request. A suspended workspace kept getting
+  full reviews and simply stopped appearing on its own dashboard: the customer
+  sees Cavix working and sees nothing to show for it, and the tokens are spent
+  either way. Both are now decided at `/api/internal/repos/enabled`, before
+  anything is spent, and the gate returns a `reason` so a command job says
+  "this workspace is suspended" instead of "turn the repo on" for a repo whose
+  toggle is already green.
+- **The deep review path silently degraded on any pull request touching more
+  than 12 files**, which is most real pull requests: it threw, and the workflow
+  fell all the way back to a single model over the raw diff. It now indexes the
+  files it can read and runs anyway (the agents read the DIFF, so they lose
+  nothing), and reports `fullyScanned` so the Scope module withholds the
+  Deterministic Pass row rather than claiming coverage it did not have.
+
 ### Stages 3 to 9 now run on real pull requests
 
 #### Added

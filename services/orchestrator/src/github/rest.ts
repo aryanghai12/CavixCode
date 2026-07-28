@@ -219,6 +219,26 @@ export class RestGitHubClient implements GitHubClient {
     }
   }
 
+  /**
+   * The repository's file list at a commit, via the git trees API.
+   *
+   * `recursive=1` returns the whole tree in one request, which is the difference
+   * between one API call and one per directory. GitHub truncates the response
+   * past ~100k entries and says so; a truncated tree is still a usable map of
+   * the repository, so it is returned rather than refused.
+   */
+  async listTree(ref: PullRef, sha?: string): Promise<string[]> {
+    const commit = sha ?? ref.headSha;
+    if (!commit) return [];
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/git/trees/${encodeURIComponent(commit)}?recursive=1`;
+    const res = await this.fetchImpl(url, {
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { tree?: Array<{ path?: string; type?: string }> };
+    return (data.tree ?? []).filter((t) => t.type === "blob" && t.path).map((t) => t.path!);
+  }
+
   async listOwnReviews(ref: PullRef): Promise<OwnReview[]> {
     const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews?per_page=100`;
     const res = await this.fetchImpl(url, {

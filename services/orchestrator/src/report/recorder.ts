@@ -28,6 +28,19 @@ export interface RecordReviewInput {
   /** Link back to the posted review, so a dashboard row opens the pull request. */
   url?: string;
   findings: Finding[];
+  /**
+   * What the review cost and how it ran.
+   *
+   * The workflow has had every one of these since Phase 0 and threw them away
+   * at this boundary, so the dashboard could report what Cavix found and never
+   * what finding it cost. Cost per review is half of the question anyone
+   * renewing a budget is actually asking.
+   */
+  costUsd?: number;
+  model?: string;
+  durationMs?: number;
+  verifiedCount?: number;
+  suppressedCount?: number;
 }
 
 export type ReviewRecorder = (input: RecordReviewInput) => Promise<boolean>;
@@ -98,6 +111,11 @@ export function makeReviewRecorder(opts: RecorderOptions): ReviewRecorder {
       title: input.title,
       ...(input.url ? { url: input.url } : {}),
       findings: input.findings.map(toWireFinding),
+      ...(typeof input.costUsd === "number" ? { costUsd: input.costUsd } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(typeof input.durationMs === "number" ? { durationMs: input.durationMs } : {}),
+      ...(typeof input.verifiedCount === "number" ? { verifiedCount: input.verifiedCount } : {}),
+      ...(typeof input.suppressedCount === "number" ? { suppressedCount: input.suppressedCount } : {}),
     });
 
     let lastProblem = "";

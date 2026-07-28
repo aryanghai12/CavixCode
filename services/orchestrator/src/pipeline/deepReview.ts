@@ -3,7 +3,7 @@ import { CodeIndex, HeuristicParser } from "@cavix/analyzer";
 import { runPhase1Review } from "@cavix/pipeline";
 import type { Gateway } from "@cavix/gateway";
 import type { GitHubClient, PullRef } from "../github/client.ts";
-import { changedPaths, fetchSources, MAX_SOURCE_FILES } from "../sources.ts";
+import { changedPaths, fetchSources } from "../sources.ts";
 
 // Stages 3, 4, 7, 8 and 9, on a real pull request.
 //
@@ -40,6 +40,12 @@ export interface DeepReviewResult {
   deterministicCount: number;
   /** Scanners that executed. NOT the finding count: a clean repo runs them all. */
   toolsRun: number;
+  /**
+   * Did the scanners see every changed file? False on a pull request wider than
+   * the per-review file budget. The caller must not claim a full deterministic
+   * pass when this is false.
+   */
+  fullyScanned: boolean;
   ensembleAgents: number;
   abstained: string[];
   droppedCount: number;
@@ -75,15 +81,30 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
     // A full-repo index belongs to the onboarding indexer, not to a hot path that
     // has to answer inside a pull request's attention span.
     const paths = changedPaths(input.diff);
-    if (paths.length === 0 || paths.length > MAX_SOURCE_FILES) {
-      throw new Error(
-        paths.length === 0
-          ? "no readable paths in the diff"
-          : `${paths.length} changed files, more than the ${MAX_SOURCE_FILES} Cavix reads per review`,
-      );
-    }
+    if (paths.length === 0) throw new Error("no readable paths in the diff");
+
+    // A wide pull request reads its first MAX_SOURCE_FILES files and runs anyway.
+    //
+    // Refusing outright was the first thing this did, and it was wrong: any PR
+    // touching thirteen files fell all the way back to one model over the raw
+    // diff, which is most real pull requests. Stage 8 reads the DIFF, not these
+    // files, so the seven agents lose nothing; only the graph and the scanners
+    // see less. Partial file coverage is a smaller loss than no ensemble at all.
+    //
+    // What it must not do is then CLAIM full coverage, so `fullyScanned` is
+    // reported and the caller drops the Deterministic Pass row when it is false.
     const sourceFiles = await fetchSources(opts.github, input.ref, paths);
     if (sourceFiles.length === 0) throw new Error("could not read any of the changed files");
+    const fullyScanned = sourceFiles.length === paths.length;
+    if (!fullyScanned) {
+      opts.logger?.info("deep review is reading part of a wide change", {
+        repo: `${input.ref.owner}/${input.ref.repo}`,
+        pr: input.ref.number,
+        changed_files: paths.length,
+        files_read: sourceFiles.length,
+        note: "the agents still see the whole diff; the graph and scanners see these files",
+      });
+    }
 
     // Stage 4 — parse and resolve the call graph over what we fetched.
     const index = new CodeIndex(new HeuristicParser());
@@ -121,6 +142,7 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
       findings: result.findings,
       deterministicCount: result.deterministicCount,
       toolsRun: result.toolsRun.length,
+      fullyScanned,
       // Seven specialists run; the ones that had nothing to say abstain.
       ensembleAgents: 7 - result.ensembleAbstained.length,
       abstained: result.ensembleAbstained,

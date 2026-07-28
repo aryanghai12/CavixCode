@@ -380,6 +380,29 @@ test("a draft is skipped unless the workspace opted into reviewing drafts", asyn
   assert.equal(on.github.submissions.length, 1);
 });
 
+test("a workspace refused by the gate is told the real reason", async () => {
+  // Two different situations, two different messages. Telling someone whose
+  // workspace is over quota to "turn the repo on" sends them to a settings page
+  // where the toggle is already green.
+  const { github, reviewer, calls } = wire();
+  await makeReviewHandler({
+    github,
+    reviewer,
+    gate: async () => ({ enabled: false, org: "acme", reason: "This workspace is suspended. Contact support." }),
+  })(commandJob("review"));
+
+  assert.equal(calls.length, 0, "refused before anything is spent");
+  assert.equal(github.submissions.length, 0);
+  assert.match(github.comments[0], /This workspace is suspended\./);
+  assert.doesNotMatch(github.comments[0], /Turn it on/, "the repo is on; that is not the problem");
+});
+
+test("a repo that was never connected still gets the connect instructions", async () => {
+  const { github, reviewer } = wire();
+  await makeReviewHandler({ github, reviewer, gate: async () => ({ enabled: false }) })(commandJob("review"));
+  assert.match(github.comments[0], /Turn it on in the Cavix dashboard/);
+});
+
 test("a draft still gets reviewed when someone asks for it by name", async () => {
   const { github, reviewer } = wire({ github: { draft: true } });
   await handler({ github, reviewer, reviewConfig: async () => config({ reviewDraftPRs: false }) })(

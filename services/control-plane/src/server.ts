@@ -313,6 +313,7 @@ async function apiRoute(
       if (!fullName.includes("/")) return void sendJson(res, 400, { error: "fullName (owner/repo) required" });
       try {
         const repo = store.setRepoEnabled(user.org, fullName, true, body.private === false ? "public" : "private");
+        store.recordMute({ org: user.org, scope: "repo", target: fullName, restored: true });
         return void sendJson(res, 201, { enabled: true, repo });
       } catch (err) {
         return void sendJson(res, 403, { error: (err as Error).message });
@@ -323,6 +324,10 @@ async function apiRoute(
     if (m === "DELETE" && p === "/api/github/repos") {
       const fullName = url.searchParams.get("fullName") ?? "";
       store.setRepoEnabled(user.org, fullName, false);
+      // A repo turned off is the earliest churn signal there is, and nothing was
+      // recording it. Reports surfaces these so a falling workspace is visible
+      // before the renewal conversation, not during it.
+      store.recordMute({ org: user.org, scope: "repo", target: fullName, restored: false });
       return void sendJson(res, 200, { enabled: false });
     }
 
@@ -449,7 +454,65 @@ async function apiRoute(
     // `org` is the WORKSPACE that enabled the repo. The orchestrator needs it to
     // load that workspace's BYOK key — the GitHub owner login is a different name.
     const found = store.lookupRepo(fullName);
-    return void sendJson(res, 200, { enabled: found !== null, org: found?.org });
+    if (!found) return void sendJson(res, 200, { enabled: false });
+
+    // The daily limit and the suspension flag are decided HERE, before the
+    // orchestrator fetches a diff or calls a model.
+    //
+    // They used to be checked only when the finished review was recorded, which
+    // is after the tokens are spent and the comment is already on the pull
+    // request. A suspended workspace kept getting full reviews and simply stopped
+    // appearing on its own dashboard, which is the worst of the three possible
+    // behaviours: the customer sees Cavix working and sees nothing to show for it,
+    // and we pay for the privilege.
+    const limit = store.effectiveReviewsPerDay(found.org);
+    if (store.reviewCountSince(found.org, 24 * 3600_000) >= limit) {
+      const tier = store.getOrg(found.org)?.tier ?? "paid";
+      return void sendJson(res, 200, {
+        enabled: false,
+        org: found.org,
+        reason:
+          limit === 0
+            ? "This workspace is suspended. Contact support to re-enable reviews."
+            : `This workspace has used its ${limit} reviews for today (${tier} tier). Reviews resume tomorrow, or upgrade for a higher limit.`,
+      });
+    }
+    return void sendJson(res, 200, { enabled: true, org: found.org });
+  }
+
+  // ----- Stage 5: the cross-repo contract graph -----
+  //
+  // The control-plane stores it; the ORCHESTRATOR builds it. That split is not
+  // arbitrary: only the orchestrator holds GitHub App installation tokens, which
+  // are the one credential that can read a private repository without borrowing
+  // a human's OAuth token, and only the control-plane has Postgres and knows
+  // which repositories a workspace has connected.
+  const graphRoute = /^\/api\/internal\/orgs\/([^/]+)\/graph$/.exec(p);
+  if (graphRoute) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(graphRoute[1]);
+
+    if (m === "GET") {
+      const stored = store.orgGraph(org);
+      // A workspace nobody has indexed yet is an ordinary state, not an error:
+      // the first review on a repository is what populates it.
+      return void sendJson(res, 200, stored ?? { graph: null, indexedAt: {} });
+    }
+    if (m === "PUT") {
+      const body = await readJson(req);
+      const repo = String(body.repo ?? "");
+      if (!repo) return void sendJson(res, 400, { error: "repo required" });
+      // Only for repositories this workspace actually connected. Without the
+      // check, anything holding the internal token could write a graph naming
+      // repositories the workspace has no relationship with, and those names
+      // would then be quoted back on its pull requests.
+      if (!store.lookupRepo(repo)) return void sendJson(res, 403, { error: `${repo} is not connected to a workspace` });
+      return void sendJson(res, 200, store.saveOrgGraph(org, repo, body.graph ?? null));
+    }
+    return void sendJson(res, 405, { error: `no graph route for ${m}` });
   }
 
   // ----- orgs / onboarding (unauthenticated create kept for API/tests & GitHub App onboarding) -----
@@ -621,6 +684,21 @@ async function apiRoute(
     return void sendJson(res, 200, store.stats(org));
   }
 
+  // Trends, ROI and the per-repo rollup. Separate from /stats because it walks
+  // the whole window rather than returning counters, and the Overview page does
+  // not need it.
+  mm = /^\/api\/orgs\/([^/]+)\/analytics$/.exec(p);
+  if (m === "GET" && mm) {
+    const org = decodeURIComponent(mm[1]);
+    const auth = requireOrgMember(req, res, org);
+    if (!auth) return;
+    const raw = Number(url.searchParams.get("days") ?? "30");
+    // Clamp: an unbounded `days` lets any member walk the store for as long as
+    // the process has been up, one request at a time.
+    const days = Number.isFinite(raw) ? Math.min(90, Math.max(7, Math.round(raw))) : 30;
+    return void sendJson(res, 200, store.analytics(org, days));
+  }
+
   // ----- reviews -----
   //
   // This is the endpoint the orchestrator calls after it posts a review, and it
@@ -650,6 +728,14 @@ async function apiRoute(
       title: String(body.title ?? ""),
       ...(link ? { url: link } : {}),
       findings: Array.isArray(body.findings) ? body.findings : [],
+      // What the review cost and how it ran. The orchestrator has always known
+      // these; until now it never sent them, so the dashboard could say what
+      // Cavix found and never what finding it cost.
+      ...(typeof body.costUsd === "number" ? { costUsd: body.costUsd } : {}),
+      ...(body.model ? { model: String(body.model) } : {}),
+      ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
+      ...(typeof body.verifiedCount === "number" ? { verifiedCount: body.verifiedCount } : {}),
+      ...(typeof body.suppressedCount === "number" ? { suppressedCount: body.suppressedCount } : {}),
     });
     return void sendJson(res, 201, record);
   }

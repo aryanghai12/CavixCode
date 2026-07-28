@@ -31,6 +31,8 @@ import {
 } from "./commands.ts";
 import { filterDiff } from "./pathFilter.ts";
 import type { DeepReviewResult, DeepReviewStep } from "../pipeline/deepReview.ts";
+import type { BlastRadiusStep } from "../orggraph/blastRadius.ts";
+import type { GraphIndexer } from "../orggraph/indexer.ts";
 
 /** How many alternative models to try before giving up. Each try is a real call. */
 const MAX_HEAL_ATTEMPTS = 5;
@@ -57,6 +59,12 @@ export interface GateDecision {
   enabled: boolean;
   /** Dashboard org that enabled the repo — the BYOK key lives under this id. */
   org?: string;
+  /**
+   * Why not, when the repo IS connected but this review may not run: the
+   * workspace is suspended, or it has spent its daily allowance. Absent means
+   * the repo was simply never turned on, which is a different message.
+   */
+  reason?: string;
 }
 
 export interface ReviewWorkflowDeps {
@@ -87,6 +95,18 @@ export interface ReviewWorkflowDeps {
    * models, and neither of those is allowed to cost somebody their review.
    */
   deepReview?: DeepReviewStep;
+  /**
+   * Stage 5. Traces a changed public interface to its consumers in OTHER
+   * repositories. Absent, or failing, means the review simply has no cross-repo
+   * section, which is also what happens before anything has been indexed.
+   */
+  blastRadius?: BlastRadiusStep;
+  /**
+   * Stage 5's indexer. Runs AFTER the review is posted and only when this
+   * repository's slice of the graph has gone stale, so a tree listing and a
+   * dozen file reads never sit in front of somebody waiting for a review.
+   */
+  indexGraph?: GraphIndexer;
   /**
    * Write the summary + walkthrough into the PR description. On by default: the
    * description is where a reviewer looks first, and it does not scroll away
@@ -325,6 +345,9 @@ export async function runReview(
 ): Promise<ReviewOutcome> {
   const log = deps.logger ?? noopLogger;
   const ref = refFromJob(job);
+  // Wall-clock for the whole review, reported to the dashboard. Latency per PR is
+  // one of the roadmap's product metrics and nothing was measuring it.
+  const startedAt = Date.now();
 
   // Step 0 — command jobs carry no commit (issue_comment has none), so resolve
   // the PR's current head before anything that needs it. Posting a review with an
@@ -453,6 +476,35 @@ export async function runReview(
     model: result.model,
   });
 
+  // Step 3b — Stage 5: what does this change break in OTHER repositories?
+  //
+  // The finding no single-repo reviewer can produce. A change to a public
+  // endpoint reads as a clean, well-tested diff inside its own service, and the
+  // only thing wrong with it lives in a repository nobody in the pull request
+  // has open. Runs before verification so a cross-repo finding is a first-class
+  // candidate for proof rather than an appendix.
+  let crossRepoConsumers = 0;
+  if (deps.blastRadius) {
+    try {
+      const impact = await deps.blastRadius({ org, ref, diff });
+      if (impact.findings.length > 0) {
+        result.findings = [...impact.findings, ...result.findings];
+        crossRepoConsumers = impact.consumers;
+        log.info("cross-repo impact found", {
+          ...base,
+          findings: impact.findings.length,
+          call_sites: impact.consumers,
+          repos_in_graph: impact.indexedRepos,
+        });
+      }
+    } catch (err) {
+      log.error("cross-repo impact could not be traced; reviewing this repo alone", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
   // Step 2c — the org's pre-merge gate. Deterministic checks over the files this
   // PR changes, compiled from the owner's own plain-English rules. These run
   // before verification because policy findings are facts, not claims: they skip
@@ -564,19 +616,24 @@ export async function runReview(
     requestChanges,
     sections: config.sections,
     badges: deps.badges !== false,
-    // The Scope module's AST, Deterministic Pass and Ensemble rows exist for
-    // exactly this: real counts from stages that actually ran. When the deep path
-    // did not run there are no counts, so those rows do not render, which is the
-    // behaviour the module was built around.
-    ...(signals
-      ? {
-          signals: {
+    // The Scope module's AST, Deterministic Pass, Ensemble and Blast Radius rows
+    // exist for exactly this: real counts from stages that actually ran. Each is
+    // assembled independently, because the stages are independent: a deployment
+    // with the cross-repo graph and no deep path should still get its Blast
+    // Radius row, and a row with no measurement behind it never renders.
+    signals: {
+      ...(crossRepoConsumers > 0 ? { consumers: crossRepoConsumers } : {}),
+      ...(signals
+        ? {
             astSymbols: signals.astSymbols,
-            tools: signals.toolsRun,
+            // Only claim a deterministic pass when every changed file was
+            // scanned. On a wide PR the scanners saw part of it, and "24 tools
+            // run over the change" would be a statement we cannot stand behind.
+            ...(signals.fullyScanned ? { tools: signals.toolsRun } : {}),
             agents: signals.ensembleAgents,
-          },
-        }
-      : {}),
+          }
+        : {}),
+    },
   };
   const built = buildReviewSubmission(result, diff, posterOpts);
 
@@ -611,6 +668,24 @@ export async function runReview(
     posted.htmlUrl,
   );
 
+  // Step 5c — refresh this repository's slice of the org contract graph.
+  //
+  // Deliberately AFTER the review is on the pull request. It is a tree listing
+  // and a few dozen file reads, which is nothing next to a model call but is
+  // still latency, and none of it changes the review that was just posted. It
+  // only runs when this repo's slice has gone stale, so the usual case is one
+  // cheap read of a timestamp.
+  if (deps.indexGraph) {
+    try {
+      await deps.indexGraph(ref, org);
+    } catch (err) {
+      log.info("could not refresh the org contract graph (continuing)", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
   // Step 6 — record it on the dashboard. This is what the org actually looks at
   // between pull requests, and it is where accept/reject decisions (the learning
   // signal) are made. It runs last and swallows its own failures: the review is
@@ -626,6 +701,11 @@ export async function runReview(
         title: job.title ?? "",
         url: posted.htmlUrl,
         findings: result.findings,
+        costUsd: result.costUsd + verifyCost,
+        model: result.model,
+        durationMs: Date.now() - startedAt,
+        verifiedCount: built.verifiedCount,
+        suppressedCount,
       });
     } catch (err) {
       log.error("could not record the review on the dashboard", {
@@ -883,16 +963,25 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       const decision = await deps.gate(job.repo);
       org = decision.org;
       if (!decision.enabled) {
-        log.info("skipped: repository not enabled in the dashboard", { repo: job.repo, pr: job.pr_number });
+        log.info("skipped by the gate", {
+          repo: job.repo,
+          pr: job.pr_number,
+          reason: decision.reason ?? "repository not enabled in the dashboard",
+        });
         await react(deps, job, ref, "+1");
         if (isCommandJob(job)) {
+          // Two different situations, two different messages. Telling someone
+          // whose workspace is over quota to "turn the repo on" sends them to a
+          // settings page where the toggle is already green.
           await say(
             deps,
             job,
             ref,
-            `**Cavix is not enabled for \`${job.repo}\`.**\n\n` +
-              "Turn it on in the Cavix dashboard under **Repositories**, then comment " +
-              "`@cavixcode review` again.",
+            decision.reason
+              ? `**Cavix did not review this pull request.**\n\n${decision.reason}`
+              : `**Cavix is not enabled for \`${job.repo}\`.**\n\n` +
+                  "Turn it on in the Cavix dashboard under **Repositories**, then comment " +
+                  "`@cavixcode review` again.",
           );
         }
         return;

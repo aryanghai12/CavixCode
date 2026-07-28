@@ -137,6 +137,16 @@ export interface GitHubClient {
   findComment(ref: PullRef, marker: string): Promise<{ id: number } | null>;
   /** Edit a comment we posted earlier. */
   updateComment(ref: PullRef, commentId: number, body: string): Promise<void>;
+  /**
+   * Every file path in the repository at a commit, in one call.
+   *
+   * Stage 5 needs to FIND the contract files (openapi.json, *.proto, *.graphql)
+   * before it can read them, and there is no other way to do that without
+   * cloning. Returns an empty list rather than throwing when the tree cannot be
+   * read or GitHub truncated it: a partial map is worth having and a missing one
+   * must never fail a review.
+   */
+  listTree(ref: PullRef, sha?: string): Promise<string[]>;
   /** Cavix's own past reviews on this PR, newest last, found by REVIEW_MARKER. */
   listOwnReviews(ref: PullRef): Promise<OwnReview[]>;
   /**

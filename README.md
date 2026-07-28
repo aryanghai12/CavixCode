@@ -259,7 +259,7 @@ dishonest claim in a product whose whole pitch is that it does not make those.
 | 3 | Deterministic pre-analysis: linters, SAST, secret scan | yes | **yes** |
 | 3c | Optional org policy gate | yes | yes |
 | 4 | AST plus intra-repo semantic graph | yes (heuristic parsers) | **yes**, over the changed files |
-| 5 | Cross-repo and microservice impact graph | yes | not yet |
+| 5 | Cross-repo and microservice impact graph | yes | **yes** |
 | 6 | CI/CD telemetry and regression prediction | yes | not yet |
 | 7 | Context retrieval and compression | yes | **yes** |
 | 8 | Multi-agent ensemble with model routing | yes (7 agents) | **yes** |
@@ -463,6 +463,7 @@ likely to touch:
 | `CAVIX_SUMMARY_IN_DESCRIPTION` | on | Set to `off` to keep the summary in the review comment |
 | `CAVIX_REVIEW_BADGES` | on | Set to `off` for air-gapped GitHub Enterprise, where the image proxy cannot reach shields.io |
 | `CAVIX_DEEP_REVIEW` | on | Set to `off` to review with a single model pass instead of stages 3 to 9. Halves the model spend per review, at 81.8% F1 instead of 95.7% |
+| `CAVIX_CROSS_REPO` | on | Set to `off` to stop tracing a changed interface to its consumers in other repositories |
 | `CAVIX_VERIFY` | on | Set to `off` to post findings without reproducing them in a sandbox first |
 | `CAVIX_BOT_HANDLE` | `cavixcode` | The handle people type to trigger a command |
 

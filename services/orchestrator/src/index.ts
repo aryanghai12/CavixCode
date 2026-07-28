@@ -46,6 +46,17 @@ export {
 } from "./pipeline/deepReview.ts";
 
 export {
+  makeGraphIndexer,
+  selectFiles,
+  DEFAULT_STALE_MS,
+  type GraphIndexer,
+  type GraphStore,
+  type IndexResult,
+} from "./orggraph/indexer.ts";
+export { makeBlastRadiusStep, type BlastRadiusStep, type BlastRadiusResult } from "./orggraph/blastRadius.ts";
+export { makeGraphStore, type GraphStoreOptions } from "./orggraph/store.ts";
+
+export {
   runPreMergeChecks,
   type CheckStatus,
   type PreMergeCheck,
