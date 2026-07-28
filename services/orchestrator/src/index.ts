@@ -57,6 +57,16 @@ export { makeBlastRadiusStep, type BlastRadiusStep, type BlastRadiusResult } fro
 export { makeGraphStore, type GraphStoreOptions } from "./orggraph/store.ts";
 
 export {
+  makeCiIngestStep,
+  DEFAULT_CI_STALE_MS,
+  type CiIngestStep,
+  type CiIngestResult,
+  type CiStore,
+} from "./telemetry/ingest.ts";
+export { makeRegressionStep, type RegressionStep, type RegressionResult } from "./telemetry/regression.ts";
+export { makeCiStore, type CiStoreOptions } from "./telemetry/store.ts";
+
+export {
   runPreMergeChecks,
   type CheckStatus,
   type PreMergeCheck,

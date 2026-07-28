@@ -350,6 +350,10 @@ export interface Store {
   orgGraph(org: string): StoredOrgGraph | null;
   /** Replace the graph and mark `repo` as indexed now. */
   saveOrgGraph(org: string, repo: string, graph: unknown): StoredOrgGraph;
+  /** Stage 6's CI run history for a workspace. Empty before anything ingested it. */
+  ciHistory(org: string): StoredCiHistory;
+  /** Replace one repository's runs and mark it fetched now. */
+  saveCiHistory(org: string, repo: string, runs: unknown[]): StoredCiHistory;
   /** Trends, ROI and the per-repo rollup for the Reports page. */
   analytics(org: string, days?: number): OrgAnalytics;
   getFinding(id: string): StoredFinding | undefined;
@@ -429,6 +433,8 @@ export interface StoreSnapshot {
   mutes?: MuteEvent[];
   /** Stage 5's cross-repo contract graph, per workspace. See `orgGraph`. */
   orgGraphs?: Array<[org: string, graph: StoredOrgGraph]>;
+  /** Stage 6’s CI run history, per workspace. */
+  ciRuns?: Array<[org: string, history: StoredCiHistory]>;
 }
 
 /**
@@ -445,6 +451,21 @@ export interface StoredOrgGraph {
   indexedAt: Record<string, string>;
 }
 
+/**
+ * A workspace's CI run history, and when each repository was last refreshed.
+ *
+ * Capped per repository, oldest out first. A build time from four months ago is
+ * not evidence about a pipeline that has been rewritten twice since, and an
+ * append-only list on a busy repository grows until the process dies.
+ */
+export interface StoredCiHistory {
+  runs: unknown[];
+  fetchedAt: Record<string, string>;
+}
+
+/** CI runs kept per repository. Roughly a month on a busy pipeline. */
+const MAX_CI_RUNS_PER_REPO = 400;
+
 export class InMemoryStore implements Store {
   private orgs = new Map<string, Org>();
   private repos = new Map<string, Repo>();
@@ -458,6 +479,7 @@ export class InMemoryStore implements Store {
   private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
   private mutes: MuteEvent[] = [];
   private orgGraphs = new Map<string, StoredOrgGraph>();
+  private ciRuns = new Map<string, StoredCiHistory>();
 
   createOrg(name: string, opts: { tier?: OrgTier; provenFeedOptIn?: boolean } = {}): Org {
     const org: Org = { id: id8("org"), name, tier: opts.tier ?? "paid", provenFeedOptIn: opts.provenFeedOptIn ?? false, createdAt: new Date().toISOString() };
@@ -846,6 +868,25 @@ export class InMemoryStore implements Store {
     return next;
   }
 
+  ciHistory(org: string): StoredCiHistory {
+    return this.ciRuns.get(org) ?? { runs: [], fetchedAt: {} };
+  }
+
+  saveCiHistory(org: string, repo: string, runs: unknown[]): StoredCiHistory {
+    const prev = this.ciHistory(org);
+    // Replace this repository's runs wholesale and leave every other
+    // repository's alone. The orchestrator sends the merged list it built, so
+    // appending here would double every run on the second refresh.
+    const others = prev.runs.filter((r) => (r as { repo?: string }).repo !== repo);
+    const mine = runs.slice(-MAX_CI_RUNS_PER_REPO);
+    const next: StoredCiHistory = {
+      runs: [...others, ...mine],
+      fetchedAt: { ...prev.fetchedAt, [repo]: new Date().toISOString() },
+    };
+    this.ciRuns.set(org, next);
+    return next;
+  }
+
   analytics(org: string, days = 30): OrgAnalytics {
     const windowMs = days * 86_400_000;
     const cutoff = Date.now() - windowMs;
@@ -1107,6 +1148,7 @@ export class InMemoryStore implements Store {
       oauthTokens: [...this.oauthTokens.entries()],
       mutes: this.mutes,
       orgGraphs: [...this.orgGraphs.entries()],
+      ciRuns: [...this.ciRuns.entries()],
     };
   }
 
@@ -1130,6 +1172,7 @@ export class InMemoryStore implements Store {
     // sitting in memory beside freshly loaded orgs they no longer belonged to.
     this.mutes = s.mutes ?? [];
     this.orgGraphs = new Map(s.orgGraphs ?? []);
+    this.ciRuns = new Map(s.ciRuns ?? []);
   }
 
   /** True when the store has no data yet (used to decide whether to seed). */

@@ -8,7 +8,7 @@ Everything above it is the context that prompt assumes.
 ## Where the product stands
 
 The live review path (`services/orchestrator/src/main.ts` → `runReview`) now runs
-stages 0, 1, 2, 3, 3c, 4, 7, 8, 9, 10, 11 and part of 13 on a real pull request.
+stages 0 through 11 and part of 13 on a real pull request.
 
 | Stage | Status |
 |---|---|
@@ -19,7 +19,7 @@ stages 0, 1, 2, 3, 3c, 4, 7, 8, 9, 10, 11 and part of 13 on a real pull request.
 | 3c Org policy gate | live |
 | 4 AST + call graph | live, over the changed files only |
 | 5 Cross-repo impact graph | live |
-| 6 CI/CD telemetry | **built, not wired** |
+| 6 CI/CD telemetry | live |
 | 7 Context + compression | live |
 | 8 Seven-agent ensemble | live |
 | 9 Adjudication | live |
@@ -28,13 +28,12 @@ stages 0, 1, 2, 3, 3c, 4, 7, 8, 9, 10, 11 and part of 13 on a real pull request.
 | 12 Learning loop | decisions recorded and surfaced; nothing feeds them back |
 | 13 Teardown, cost accounting | sandbox teardown and cost live; zero-retention package unwired |
 
-Run `npm test` (515 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
+Run `npm test` (540 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
 and `cd services/edge && go test ./...`. All green as of this handoff.
 
-## How Stage 5 was wired, since the next stages should copy it
+## How stages 5 and 6 were wired, since the next ones should copy it
 
-The pattern is worth knowing before you add Stage 6, because it is the same
-shape:
+Both followed the same shape, and it is worth knowing before you add another:
 
 - **An injected step that fails soft.** `blastRadius` and `indexGraph` are
   optional dependencies of the workflow, like `verify` and `deepReview` before
@@ -46,25 +45,18 @@ shape:
 - **The orchestrator computes, the control-plane stores.** Only the orchestrator
   holds GitHub App installation tokens (the one credential that reads a private
   repo without borrowing a human's OAuth token). Only the control-plane has
-  Postgres and knows which repositories a workspace connected. Stage 6 will have
-  exactly the same split.
-- **Bounded reads.** Twelve contract files and forty source files per repository,
-  shallowest first. This runs on somebody else's rate limit.
+  Postgres and knows which repositories a workspace connected.
+- **Bounded reads and bounded storage.** Twelve contract files and forty source
+  files per repository, shallowest first; four hundred CI runs per repository,
+  oldest out first. This runs on somebody else's rate limit and in our memory.
+- **Say only what was measured.** Both stages refuse to claim causation they
+  cannot demonstrate. The CI warning states in the finding body that it is not
+  blaming the pull request, because the trend is measured on a branch that
+  predates it.
 
 ## What is left, in the order I would do it
 
-### 1. Stage 6 live: CI/CD telemetry and regression prediction
-
-`packages/telemetry/` has the store, a `RegressionPredictor` and a sandbox
-benchmark runner. Nothing imports it. The roadmap calls this the one genuinely
-empty lane in the whole competitive set.
-
-Needs: ingestion from GitHub Actions (start there), somewhere to keep the time
-series, and a review-time prediction that becomes a finding or a Scope row. The
-warning is the product: "this change touches a hot path whose p95 has been
-climbing for two weeks".
-
-### 2. Stage 12 closed: make the learning loop actually learn
+### 1. Stage 12 closed: make the learning loop actually learn
 
 Decisions are captured, stored, and now shown on the Learnings page with the
 categories a team keeps rejecting. Nothing reads them back. `packages/learning/`
@@ -75,19 +67,19 @@ is passed into `adjudicate()` at review time.
 `DeepReviewOptions.confidenceThreshold` is already plumbed for exactly this and
 is currently never set.
 
-### 3. Mermaid sequence diagrams in the review
+### 2. Mermaid sequence diagrams in the review
 
 The dashboard has had a "Sequence diagram" toggle marked "soon" since the
 settings page was written, and `reviewSections.sequenceDiagram` is stored and
 served. Nothing generates one. GitHub renders Mermaid natively in comments.
 
-### 4. The other four platforms
+### 3. The other four platforms
 
 `packages/platforms/` has GitLab, Bitbucket and Azure DevOps adapters, written
 and tested. The orchestrator has its own GitHub client and imports none of them,
 so the live product is GitHub only. This is an adapter seam, not new logic.
 
-### 5. Zero-retention, live
+### 4. Zero-retention, live
 
 `packages/zero-retention/` proves no customer code persists after teardown, and
 runs only in `scripts/airgap-demo.ts`. It should run in the real teardown path
@@ -116,32 +108,36 @@ sells to regulated buyers.
 > I am continuing work on Cavix, an AI code reviewer. Read `HANDOFF.md`,
 > `README.md` and `CHANGELOG.md` first, then `ARCHITECTURE.md` for the seams.
 >
-> Stages 0 through 5 and 7 through 11 already run on real pull requests. What is
-> left is listed in HANDOFF.md. Build **item 1: Stage 6, CI/CD telemetry and
-> regression prediction, live.** The roadmap calls it the one genuinely empty
-> lane in the whole competitive set: nobody else warns that a change will slow a
-> build or degrade a hot path before it merges.
+> Stages 0 through 11 already run on real pull requests. What is left is listed
+> in HANDOFF.md. Build **item 1: close the learning loop (Stage 12).**
 >
-> `packages/telemetry/` has the store, a `RegressionPredictor` and a sandbox
-> benchmark runner, and nothing imports it. Wire it the way Stage 5 was wired
-> (`services/orchestrator/src/orggraph/`): an injected step that fails soft, work
-> that is not on the critical path running after the review is posted, the
-> orchestrator computing and the control-plane storing.
+> Right now every accept and reject a team makes is stored, and shown back to
+> them on the Learnings page, and changes nothing about the next review. That is
+> the difference between a feature and a moat: the roadmap's whole retention
+> argument is that a competitor starts cold while Cavix starts tuned, and today
+> Cavix starts cold too.
+>
+> `packages/learning/` has the calibration code and nothing imports it.
+> `DeepReviewOptions.confidenceThreshold` is already plumbed into Stage 9's
+> `adjudicate()` and is never set. The gap between those two facts is the work.
 >
 > Specifically:
-> 1. Ingestion. Start with GitHub Actions: workflow-run durations, job durations,
->    test counts, failures. Decide whether it is pulled after a review or pushed
->    by a webhook, and say why.
-> 2. Storage with a retention window. Postgres is already a control-plane
->    dependency; ClickHouse is the eventual answer and is not needed yet.
-> 3. A review-time prediction that becomes a finding when it is worth one. The
->    product is the sentence "this touches a path whose p95 has been climbing for
->    two weeks", not a dashboard nobody opens.
+> 1. Derive a per-org confidence threshold, and ideally per-category, from that
+>    workspace's accept and reject history. A team that rejects every
+>    maintainability nit should stop being shown them; a team that accepts every
+>    security finding should see them at a lower bar.
+> 2. Feed it into the review path. Decide where it is computed and cached, and
+>    say why. It must not add a round trip to every review.
+> 3. Make it visible. The Learnings page should say what changed as a result, in
+>    the team's own numbers, because an invisible moat does not retain anyone.
+> 4. Guard against the obvious failure: a workspace with three decisions must not
+>    get a threshold derived from three decisions, and one bad week must not
+>    silence a category permanently.
 >
-> Before writing anything, audit what is actually in `packages/telemetry` and
-> tell me the plan, including anything that will not survive contact with real CI
-> data. Do not start building until I have seen it. While you are in there, sweep
-> the repo for bugs and tell me what you find.
+> Before writing anything, audit `packages/learning` and tell me the plan,
+> including anything that will not survive contact with real decision data. Do
+> not start building until I have seen it. While you are in there, sweep the repo
+> for bugs and tell me what you find.
 >
 > House rules, all enforced by tests: no emoji anywhere Cavix posts, no em or en
 > dashes, the Scope module never states a number that was not measured, and every
@@ -149,7 +145,9 @@ sells to regulated buyers.
 > that need no infrastructure, and keep `npm test`, `npx tsc --noEmit` and
 > `cd services/edge && go test ./...` green.
 >
-> A warning from the last two sessions: the packages in this repo are written and
-> tested but were never run against real input, and every one I have wired so far
-> had bugs that only appeared on realistic data. Probe it with a realistic
-> fixture before you trust it.
+> A warning worth taking seriously: every package in this repo was written and
+> tested and then never run against real input, and every single one I have wired
+> so far had bugs that only appeared on realistic data. The last two sessions
+> found eight between them, including matching logic that reported nothing at all
+> and a metric that told reviewers to ignore real failures. Probe it with a
+> realistic fixture before you trust a line of it.

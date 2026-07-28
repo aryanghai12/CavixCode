@@ -20,6 +20,7 @@
     "@cavix/policy": "*",
     "@cavix/repoconfig": "*",
     "@cavix/sandbox": "*",
+    "@cavix/telemetry": "*",
     "@cavix/verifier": "*"
   },
   "optionalDependencies": {

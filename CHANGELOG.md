@@ -5,6 +5,63 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Stage 6 live: CI telemetry and regression warnings
+
+`packages/telemetry` was written, tested and imported by nothing. The roadmap
+calls this the one genuinely empty lane in the competitive set, because static
+analysis sees the code and not its consequences: a change can be correct,
+well-tested and well-reviewed and still be the one that takes the build from four
+minutes to nine, which nobody notices for a month and nobody can then attribute
+to anything.
+
+#### Added
+- **Ingestion from GitHub Actions**, pulled rather than pushed. A webhook is the
+  obvious design and the wrong one to start with: it needs the Go edge to learn a
+  second event type and a second job shape, and it only ever sees runs from after
+  the App was installed, so a new customer's first weeks of reviews have no
+  history to compare against. One pull returns the last sixty completed runs, so
+  the very first review already has a baseline. Runs after the review is posted,
+  on a six-hour staleness gate.
+- **The warning.** A pipeline that has slowed by 20% AND by at least 30 seconds
+  becomes a finding with the numbers ("the last 10 runs averaged 7m 1s, against
+  3m 52s across the 14 before them"). A pipeline failing 30% of recent runs gets
+  its own. Both anchor to the workflow file.
+- **It states plainly that it is not blaming the pull request**, because it
+  cannot: the trend is measured on the default branch, over runs that finished
+  before the branch existed. Claiming causation from that data would be exactly
+  the confident wrongness this product exists to avoid.
+- `listWorkflowRuns` on the GitHub client, and `baseRef` on `PullMeta` so the
+  trend is measured on the branch the pull request targets.
+- CI history storage in the control-plane (`/api/internal/orgs/:org/telemetry`),
+  capped at 400 runs per repository, with per-repository fetch timestamps.
+- The Scope module's `CI Telemetry` row, from the real run count.
+- `CAVIX_CI_TELEMETRY=off` turns the stage off. It fails soft either way.
+
+#### Fixed
+Four bugs in `packages/telemetry`, all of which would have shipped:
+
+- **A test that broke and was fixed was marked flaky forever.** Outcomes were
+  grouped by test name across all of history and the commit was ignored, despite
+  the code comment saying otherwise. Cavix tells a reviewer to treat a flaky
+  test's failures with caution, so saying that about a test which had just caught
+  a real regression is how a real failure gets waved through. Flaky now means
+  both outcomes at the same commit.
+- **`p95` returned the maximum.** Indexing at `floor(p * n)` lands one past the
+  mark and gave the largest sample for any count up to twenty. p95 exists
+  precisely so one unlucky run does not set the number.
+- **`recordBuild` was write-only.** Runs went in and nothing could read them, so
+  the roadmap's headline example had no implementation at all. Added
+  `workflows()` and `buildTrend()`, which compare a recent window against the
+  runs before it, per workflow, excluding cancelled and timed-out runs (both are
+  fast or slow for reasons that have nothing to do with the code).
+- **The store was unbounded.** Append-only with no cap, so a busy repository grew
+  it until the process died. Capped per repository, oldest out first.
+
+And one found while wiring: a pipeline whose recent runs ALL failed produced no
+trend at all, because there was no successful duration to average, which silenced
+the failure warning in exactly the case it was written for. Durations are now
+nullable and the failure rate is always reported.
+
 ### Stage 5 live: cross-repo impact on a real pull request
 
 `packages/orggraph` was written, tested and imported by nothing. It now runs, in

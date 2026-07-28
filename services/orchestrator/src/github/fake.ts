@@ -9,6 +9,7 @@ import {
   type PullMeta,
   type ReactionContent,
   type ReviewSubmission,
+  type WorkflowRun,
 } from "./client.ts";
 
 // FakeGitHubClient serves a canned diff and captures every review submitted to
@@ -29,6 +30,8 @@ export interface FakeGitHubOptions {
   files?: Record<string, string>;
   /** Report the PR as a draft, so the draft setting can be exercised. */
   draft?: boolean;
+  /** Completed CI runs this repo reports, newest first. Stage 6 fixture data. */
+  workflowRuns?: WorkflowRun[];
   /**
    * Refuse to create a check run, the way a PAT-backed deployment or an
    * installation without `checks: write` does. Lets a test prove the review
@@ -65,6 +68,7 @@ export class FakeGitHubClient implements GitHubClient {
   readonly deletedComments: number[] = [];
   private readonly noChecks: boolean;
   private readonly draft: boolean;
+  private readonly workflowRuns: WorkflowRun[];
   private readonly commentIds = new Map<number, number>();
   /** Review state per posted review id, so dismissal can behave like GitHub's. */
   private readonly reviewState = new Map<number, string>();
@@ -78,6 +82,7 @@ export class FakeGitHubClient implements GitHubClient {
     this.files = { ...(opts.files ?? {}) };
     this.noChecks = opts.noChecks === true;
     this.draft = opts.draft === true;
+    this.workflowRuns = opts.workflowRuns ?? [];
   }
 
   async fetchPullDiff(_ref: PullRef): Promise<string> {
@@ -88,6 +93,7 @@ export class FakeGitHubClient implements GitHubClient {
     return {
       headSha: this.headSha,
       baseSha: "basesha",
+      baseRef: "main",
       title: this.title,
       draft: this.draft,
       state: "open",
@@ -163,6 +169,10 @@ export class FakeGitHubClient implements GitHubClient {
 
   async listTree(_ref: PullRef): Promise<string[]> {
     return Object.keys(this.files);
+  }
+
+  async listWorkflowRuns(_ref: PullRef, _branch: string, limit = 60): Promise<WorkflowRun[]> {
+    return this.workflowRuns.slice(0, limit);
   }
 
   async listOwnReviews(_ref: PullRef): Promise<OwnReview[]> {

@@ -33,6 +33,8 @@ import { filterDiff } from "./pathFilter.ts";
 import type { DeepReviewResult, DeepReviewStep } from "../pipeline/deepReview.ts";
 import type { BlastRadiusStep } from "../orggraph/blastRadius.ts";
 import type { GraphIndexer } from "../orggraph/indexer.ts";
+import type { RegressionStep } from "../telemetry/regression.ts";
+import type { CiIngestStep } from "../telemetry/ingest.ts";
 
 /** How many alternative models to try before giving up. Each try is a real call. */
 const MAX_HEAL_ATTEMPTS = 5;
@@ -107,6 +109,17 @@ export interface ReviewWorkflowDeps {
    * dozen file reads never sit in front of somebody waiting for a review.
    */
   indexGraph?: GraphIndexer;
+  /**
+   * Stage 6. Warns before merge that the pipeline this change is joining has
+   * been getting slower, or failing too often to be a signal. Absent, or
+   * failing, means the review has no telemetry section.
+   */
+  regression?: RegressionStep;
+  /**
+   * Stage 6's ingestion. Pulls completed GitHub Actions runs AFTER the review is
+   * posted, on the same staleness gate as the contract indexer.
+   */
+  ingestCi?: CiIngestStep;
   /**
    * Write the summary + walkthrough into the PR description. On by default: the
    * description is where a reviewer looks first, and it does not scroll away
@@ -505,6 +518,28 @@ export async function runReview(
     }
   }
 
+  // Step 3c — Stage 6: is the pipeline this change joins already degrading?
+  //
+  // Static analysis sees the code and not its consequences. A change can be
+  // correct, well-tested and well-reviewed and still be the one that takes the
+  // build from four minutes to nine, which nobody notices for a month and
+  // nobody can then attribute to anything.
+  let ciRunsAnalysed = 0;
+  if (deps.regression) {
+    try {
+      const ci = await deps.regression({ org, ref });
+      ciRunsAnalysed = ci.runsAnalysed;
+      // Appended, not prepended: a pipeline trend is context for the reviewer,
+      // never more urgent than a defect in the code they are reading.
+      if (ci.findings.length > 0) result.findings = [...result.findings, ...ci.findings];
+    } catch (err) {
+      log.error("CI telemetry could not be read; reviewing without it", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
   // Step 2c — the org's pre-merge gate. Deterministic checks over the files this
   // PR changes, compiled from the owner's own plain-English rules. These run
   // before verification because policy findings are facts, not claims: they skip
@@ -623,6 +658,7 @@ export async function runReview(
     // Radius row, and a row with no measurement behind it never renders.
     signals: {
       ...(crossRepoConsumers > 0 ? { consumers: crossRepoConsumers } : {}),
+      ...(ciRunsAnalysed > 0 ? { ciRuns: ciRunsAnalysed } : {}),
       ...(signals
         ? {
             astSymbols: signals.astSymbols,
@@ -683,6 +719,22 @@ export async function runReview(
         ...base,
         err: (err as Error).message,
       });
+    }
+  }
+
+  // Step 5d — refresh CI history, on the same terms: after the review, gated on
+  // staleness, and never allowed to matter. The base ref is where the trend is
+  // measured, because a pipeline's history belongs to the branch it runs on and
+  // this pull request's own runs are a handful of points on a branch that will
+  // not exist next week.
+  if (deps.ingestCi) {
+    try {
+      // One extra call only when there is ingestion to do, and only after the
+      // review is already posted.
+      const meta = await deps.github.getPull(ref);
+      await deps.ingestCi(ref, org, meta.baseRef || "main");
+    } catch (err) {
+      log.info("could not refresh CI history (continuing)", { ...base, err: (err as Error).message });
     }
   }
 

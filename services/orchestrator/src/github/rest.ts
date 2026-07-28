@@ -10,6 +10,7 @@ import {
   type PullMeta,
   type ReactionContent,
   type ReviewSubmission,
+  type WorkflowRun,
 } from "./client.ts";
 
 // RestGitHubClient is the production GitHub transport. It uses fetch (no SDK) and
@@ -88,11 +89,12 @@ export class RestGitHubClient implements GitHubClient {
       draft?: boolean;
       state?: string;
       head?: { sha?: string };
-      base?: { sha?: string };
+      base?: { sha?: string; ref?: string };
     };
     return {
       headSha: data.head?.sha ?? "",
       baseSha: data.base?.sha ?? "",
+      baseRef: data.base?.ref ?? "main",
       title: data.title ?? "",
       draft: data.draft === true,
       state: data.state ?? "open",
@@ -237,6 +239,50 @@ export class RestGitHubClient implements GitHubClient {
     if (!res.ok) return [];
     const data = (await res.json()) as { tree?: Array<{ path?: string; type?: string }> };
     return (data.tree ?? []).filter((t) => t.type === "blob" && t.path).map((t) => t.path!);
+  }
+
+  /**
+   * Completed CI runs on a branch.
+   *
+   * `run_started_at` minus `updated_at` is the run's wall clock. GitHub does not
+   * report a duration directly, and `created_at` is when the run was QUEUED, so
+   * using it would fold however long the job waited for a runner into the build
+   * time and report a regression every time the queue was busy.
+   */
+  async listWorkflowRuns(ref: PullRef, branch: string, limit = 60): Promise<WorkflowRun[]> {
+    const url =
+      `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/actions/runs` +
+      `?status=completed&per_page=${Math.min(100, limit)}&branch=${encodeURIComponent(branch)}`;
+    const res = await this.fetchImpl(url, {
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    // Actions disabled, no permission, no CI: all ordinary, none worth an error.
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      workflow_runs?: Array<{
+        name?: string;
+        head_sha?: string;
+        head_branch?: string;
+        conclusion?: string | null;
+        run_started_at?: string;
+        updated_at?: string;
+      }>;
+    };
+    const out: WorkflowRun[] = [];
+    for (const r of data.workflow_runs ?? []) {
+      const start = Date.parse(r.run_started_at ?? "");
+      const end = Date.parse(r.updated_at ?? "");
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+      out.push({
+        workflow: r.name ?? "workflow",
+        commit: r.head_sha ?? "",
+        branch: r.head_branch ?? branch,
+        durationMs: end - start,
+        conclusion: r.conclusion ?? "unknown",
+        at: r.updated_at ?? new Date(end).toISOString(),
+      });
+    }
+    return out;
   }
 
   async listOwnReviews(ref: PullRef): Promise<OwnReview[]> {

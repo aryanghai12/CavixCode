@@ -68,6 +68,24 @@ export interface OwnReview {
 }
 
 /**
+ * One completed CI run, as GitHub Actions reports it. Stage 6's raw material.
+ *
+ * `durationMs` is computed here rather than stored by GitHub: the API gives a
+ * start and an end, and every consumer wants the difference.
+ */
+export interface WorkflowRun {
+  /** The workflow's name, so two pipelines are never averaged together. */
+  workflow: string;
+  commit: string;
+  branch: string;
+  durationMs: number;
+  /** "success" | "failure" | "cancelled" | "timed_out" | "skipped". */
+  conclusion: string;
+  /** When the run finished, ISO 8601. */
+  at: string;
+}
+
+/**
  * The reaction emojis GitHub accepts. Cavix uses them as the fast, unmistakable
  * "I heard you" signal on the comment that triggered a review:
  *   eyes     👀 — picked up, working on it
@@ -80,6 +98,13 @@ export type ReactionContent = "+1" | "-1" | "laugh" | "confused" | "heart" | "ho
 export interface PullMeta {
   headSha: string;
   baseSha: string;
+  /**
+   * The branch this pull request targets ("main", "develop"). Stage 6 measures
+   * CI history on it, because a pipeline's trend belongs to the branch it runs
+   * on and this PR's own runs are a handful of points on a branch that will not
+   * exist next week.
+   */
+  baseRef: string;
   title: string;
   draft: boolean;
   state: string;
@@ -147,6 +172,14 @@ export interface GitHubClient {
    * must never fail a review.
    */
   listTree(ref: PullRef, sha?: string): Promise<string[]>;
+  /**
+   * Completed CI runs on a branch, newest first. Stage 6's only data source.
+   *
+   * Returns an empty list rather than throwing when Actions is disabled, the App
+   * lacks the permission, or the repository simply has no CI. All three are
+   * ordinary and none of them is worth failing a review over.
+   */
+  listWorkflowRuns(ref: PullRef, branch: string, limit?: number): Promise<WorkflowRun[]>;
   /** Cavix's own past reviews on this PR, newest last, found by REVIEW_MARKER. */
   listOwnReviews(ref: PullRef): Promise<OwnReview[]>;
   /**

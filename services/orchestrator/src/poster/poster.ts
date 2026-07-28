@@ -192,6 +192,8 @@ export interface ScopeSignals {
   agents?: number;
   /** Stage 5: downstream call sites checked in other repositories. */
   consumers?: number;
+  /** Stage 6: completed CI runs the regression check was computed over. */
+  ciRuns?: number;
 }
 
 export interface PosterOptions {
@@ -641,6 +643,13 @@ function scopeRows(
       mark: MARK_NEUTRAL,
       signal: "Blast Radius",
       reading: `${plural(signals.consumers, "downstream call site")} checked in other repositories`,
+    });
+  }
+  if (signals.ciRuns !== undefined && signals.ciRuns > 0) {
+    rows.push({
+      mark: MARK_NEUTRAL,
+      signal: "CI Telemetry",
+      reading: `${plural(signals.ciRuns, "completed pipeline run")} analysed for regression`,
     });
   }
 

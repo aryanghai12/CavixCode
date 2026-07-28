@@ -32,6 +32,9 @@ import { makeDeepReviewStep } from "./pipeline/deepReview.ts";
 import { makeGraphStore } from "./orggraph/store.ts";
 import { makeGraphIndexer } from "./orggraph/indexer.ts";
 import { makeBlastRadiusStep } from "./orggraph/blastRadius.ts";
+import { makeCiStore } from "./telemetry/store.ts";
+import { makeCiIngestStep } from "./telemetry/ingest.ts";
+import { makeRegressionStep } from "./telemetry/regression.ts";
 import { makeControlPlaneResolver } from "./byok/resolver.ts";
 import { makeRepoGate } from "./byok/gate.ts";
 import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
@@ -256,6 +259,22 @@ async function main() {
     log("info", "cross-repo impact on: a changed interface is traced to its consumers in other repos");
   }
 
+  // Stage 6 — CI telemetry. Same two-half shape and the same storage split: pull
+  // completed Actions runs after a review, warn during the next one when the
+  // pipeline this change joins has been getting slower.
+  let regression;
+  let ingestCi;
+  if (cpUrl && internalToken && process.env.CAVIX_CI_TELEMETRY !== "off") {
+    const ciStore = makeCiStore({
+      url: cpUrl,
+      token: internalToken,
+      logger: { warn: (m, meta) => log("warn", m, meta) },
+    });
+    regression = makeRegressionStep({ store: ciStore, logger: { info: (m, meta) => log("info", m, meta) } });
+    ingestCi = makeCiIngestStep({ github, store: ciStore, logger: { info: (m, meta) => log("info", m, meta) } });
+    log("info", "CI telemetry on: build-time regressions are warned about before merge");
+  }
+
   // The other half of that conversation: every finished review is written back
   // so the dashboard, the accept/reject learning signal and the proven-catches
   // feed have something to show. Without a control-plane there is nowhere to
@@ -281,6 +300,8 @@ async function main() {
     deepReview,
     blastRadius,
     indexGraph,
+    regression,
+    ingestCi,
     verify,
     reviewConfig,
     recordReview,

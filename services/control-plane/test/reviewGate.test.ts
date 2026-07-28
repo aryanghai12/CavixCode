@@ -209,3 +209,80 @@ test("the graph and the mute log survive a snapshot restore", async () => {
   assert.ok(restored.orgGraph("acme"));
   assert.ok(Object.keys(restored.orgGraph("acme")!.indexedAt).includes("acme/api"));
 });
+
+// ── Stage 6's CI history storage ─────────────────────────────────────────────
+
+async function telemetry(base: string, org: string, init: RequestInit = {}) {
+  const res = await fetch(`${base}/api/internal/orgs/${encodeURIComponent(org)}/telemetry`, {
+    ...init,
+    headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...(init.headers ?? {}) },
+  });
+  return { status: res.status, body: (await res.json()) as { runs?: unknown[]; fetchedAt?: Record<string, string> } };
+}
+
+test("CI history round-trips and records when each repo was fetched", async () => {
+  const { base, close } = await serve(seeded());
+  try {
+    const put = await telemetry(base, "acme", {
+      method: "PUT",
+      body: JSON.stringify({ repo: "acme/api", runs: [{ repo: "acme/api", workflow: "ci", durationMs: 1000, commit: "a", at: "2026-07-01T00:00:00Z" }] }),
+    });
+    assert.equal(put.status, 200);
+
+    const { body } = await telemetry(base, "acme");
+    assert.equal(body.runs!.length, 1);
+    assert.ok(Object.keys(body.fetchedAt!).includes("acme/api"));
+  } finally {
+    await close();
+  }
+});
+
+test("one repository's runs replace only its own", async () => {
+  // The orchestrator sends the merged list it built, so appending here would
+  // double every run on the second refresh.
+  const store = seeded();
+  store.createRepo("acme", "acme/web", { visibility: "private" });
+  const { base, close } = await serve(store);
+  try {
+    const run = (repo: string, commit: string) => ({ repo, workflow: "ci", durationMs: 1000, commit, at: "2026-07-01T00:00:00Z" });
+    await telemetry(base, "acme", { method: "PUT", body: JSON.stringify({ repo: "acme/api", runs: [run("acme/api", "a")] }) });
+    await telemetry(base, "acme", { method: "PUT", body: JSON.stringify({ repo: "acme/web", runs: [run("acme/web", "b")] }) });
+    await telemetry(base, "acme", { method: "PUT", body: JSON.stringify({ repo: "acme/api", runs: [run("acme/api", "a"), run("acme/api", "c")] }) });
+
+    const { body } = await telemetry(base, "acme");
+    assert.equal(body.runs!.filter((r) => (r as { repo: string }).repo === "acme/api").length, 2);
+    assert.equal(body.runs!.filter((r) => (r as { repo: string }).repo === "acme/web").length, 1);
+  } finally {
+    await close();
+  }
+});
+
+test("CI history is capped per repository", async () => {
+  const { base, close } = await serve(seeded());
+  try {
+    const many = Array.from({ length: 600 }, (_, i) => ({ repo: "acme/api", workflow: "ci", durationMs: 1, commit: `c${i}`, at: "2026-07-01T00:00:00Z" }));
+    await telemetry(base, "acme", { method: "PUT", body: JSON.stringify({ repo: "acme/api", runs: many }) });
+    const { body } = await telemetry(base, "acme");
+    assert.ok(body.runs!.length <= 400, `capped, got ${body.runs!.length}`);
+  } finally {
+    await close();
+  }
+});
+
+test("CI history cannot name a repository the workspace never connected", async () => {
+  const { base, close } = await serve(seeded());
+  try {
+    const res = await telemetry(base, "acme", { method: "PUT", body: JSON.stringify({ repo: "someone-else/private", runs: [] }) });
+    assert.equal(res.status, 403);
+  } finally {
+    await close();
+  }
+});
+
+test("CI history survives a snapshot restore", async () => {
+  const store = seeded();
+  store.saveCiHistory("acme", "acme/api", [{ repo: "acme/api", durationMs: 1, commit: "a", at: "2026-07-01T00:00:00Z" }]);
+  const restored = new InMemoryStore();
+  restored.restore(JSON.parse(JSON.stringify(store.snapshot())));
+  assert.equal(restored.ciHistory("acme").runs.length, 1);
+});

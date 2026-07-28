@@ -515,6 +515,31 @@ async function apiRoute(
     return void sendJson(res, 405, { error: `no graph route for ${m}` });
   }
 
+  // ----- Stage 6: CI telemetry -----
+  //
+  // Same split and the same reasoning as the contract graph above: the
+  // orchestrator holds the credential that can read a private repository's
+  // Actions history, the control-plane holds the storage.
+  const telemetryRoute = /^\/api\/internal\/orgs\/([^/]+)\/telemetry$/.exec(p);
+  if (telemetryRoute) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(telemetryRoute[1]);
+
+    if (m === "GET") return void sendJson(res, 200, store.ciHistory(org));
+    if (m === "PUT") {
+      const body = await readJson(req);
+      const repo = String(body.repo ?? "");
+      if (!repo) return void sendJson(res, 400, { error: "repo required" });
+      if (!store.lookupRepo(repo)) return void sendJson(res, 403, { error: `${repo} is not connected to a workspace` });
+      const runs = Array.isArray(body.runs) ? body.runs : [];
+      return void sendJson(res, 200, store.saveCiHistory(org, repo, runs));
+    }
+    return void sendJson(res, 405, { error: `no telemetry route for ${m}` });
+  }
+
   // ----- orgs / onboarding (unauthenticated create kept for API/tests & GitHub App onboarding) -----
   if (m === "POST" && p === "/api/orgs") {
     const body = await readJson(req);
