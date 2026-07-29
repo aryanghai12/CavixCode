@@ -1,5 +1,5 @@
 import { OrgGraph, type RepoFile } from "@cavix/orggraph";
-import type { GitHubClient, PullRef } from "../github/client.ts";
+import type { ReviewPlatform, PullRef } from "../github/client.ts";
 
 // Stage 5, half one: building the org's contract graph.
 //
@@ -57,7 +57,7 @@ export interface GraphStore {
 }
 
 export interface IndexerOptions {
-  github: GitHubClient;
+  github: ReviewPlatform;
   store: GraphStore;
   staleMs?: number;
   logger?: { info(msg: string, meta?: Record<string, unknown>): void };

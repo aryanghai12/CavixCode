@@ -5,7 +5,7 @@
 import { createAirgappedGateway, EgressBlockedError } from "@cavix/gateway";
 import { generateLicenseKeypair, issueLicense, verifyLicense, hasFeature, type LicensePayload } from "@cavix/license";
 import { AuditLog } from "@cavix/governance";
-import { ZeroRetention } from "@cavix/zero-retention";
+import { ZeroRetention, explainAttestation } from "@cavix/zero-retention";
 import { LocalSandboxBackend } from "@cavix/sandbox";
 
 const MODEL = "http://cavix-model.cavix.svc.cluster.local:8000";
@@ -54,11 +54,12 @@ async function main() {
   const audit = new AuditLog();
   audit.append("alice@acme", "review.start", "acme/core#42");
   const zr = new ZeroRetention({ backend: new LocalSandboxBackend(), audit });
-  const { attestation } = await zr.runReview({ reviewId: "rev_42", repo: "acme/core" }, async (sbx) => {
+  const { attestation } = await zr.runReview({ reviewId: "rev_42", org: "acme" }, async (sbx) => {
     await sbx.writeFile("src/secret.cob", "       MOVE WS-PIN TO ACCOUNT.");
     return "ok";
   });
-  console.log(`zero-retention: clean=${attestation.clean}  residual=${JSON.stringify(attestation.residualPaths)}`);
+  console.log(`zero-retention: ${explainAttestation(attestation)}`);
+  for (const c of attestation.checks) console.log(`  ${c.status} · ${c.backend} · ${c.check}`);
   console.log(`audit chain intact: ${audit.verify().ok}  (${audit.list().length} entries)`);
 }
 

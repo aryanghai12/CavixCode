@@ -5,7 +5,7 @@ import { Gateway, FakeProvider, type GatewayConfigData } from "@cavix/gateway";
 import {
   Reviewer,
   FakeGitHubClient,
-  type GitHubClient,
+  type ReviewPlatform,
   InlineEngine,
   FakeStreamSource,
   makeReviewHandler,
@@ -256,8 +256,10 @@ test("command job: a disabled repo gets 👍 and a comment telling you how to en
 });
 
 /** The fake, with one call swapped out for a failing one. */
-function withFailure(github: FakeGitHubClient, fail: () => never): GitHubClient {
+function withFailure(github: FakeGitHubClient, fail: () => never): ReviewPlatform {
   return {
+    platform: github.platform,
+    capabilities: github.capabilities,
     fetchPullDiff: async () => fail(),
     getPull: (ref) => github.getPull(ref),
     fetchFile: (ref, path) => github.fetchFile(ref, path),
@@ -275,6 +277,7 @@ function withFailure(github: FakeGitHubClient, fail: () => never): GitHubClient 
     deleteReviewComment: (r, id) => github.deleteReviewComment(r, id),
     createCheckRun: (r, i) => github.createCheckRun(r, i),
     updateCheckRun: (r, id, i) => github.updateCheckRun(r, id, i),
+    commandsAllowed: (r, u) => github.commandsAllowed(r, u),
     whoAmI: () => github.whoAmI(),
   };
 }
@@ -283,7 +286,9 @@ test("command job: a failure reacts 😕 and explains the cause in a comment", a
   const { github, reviewer } = wire();
   // Delegate everything to the fake except the diff fetch, which fails the way a
   // missing App installation does.
-  const broken: GitHubClient = {
+  const broken: ReviewPlatform = {
+    platform: github.platform,
+    capabilities: github.capabilities,
     fetchPullDiff: async () => { throw new Error("github: fetch diff HTTP 404 Not Found"); },
     getPull: (ref) => github.getPull(ref),
     fetchFile: (ref, path) => github.fetchFile(ref, path),
@@ -301,6 +306,7 @@ test("command job: a failure reacts 😕 and explains the cause in a comment", a
     deleteReviewComment: (r, id) => github.deleteReviewComment(r, id),
     createCheckRun: (r, i) => github.createCheckRun(r, i),
     updateCheckRun: (r, id, i) => github.updateCheckRun(r, id, i),
+    commandsAllowed: (r, u) => github.commandsAllowed(r, u),
     whoAmI: () => github.whoAmI(),
   };
   const handler = makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) });

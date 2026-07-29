@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Gateway, type GatewayConfigData, type LLMProvider } from "@cavix/gateway";
 import { Reviewer, FakeGitHubClient, makeReviewHandler, pickBestModel, rankModels } from "@cavix/orchestrator";
-import type { GitHubClient } from "@cavix/orchestrator";
+import type { ReviewPlatform } from "@cavix/orchestrator";
 import type { ReviewJob } from "@cavix/core";
 import { preflight, formatPreflight } from "../src/preflight.ts";
 import { isZeroQuota } from "../src/workflow/reviewWorkflow.ts";
@@ -113,7 +113,9 @@ test("with no usable alternative it reports the original failure, not a silent s
 test("healing does not fire for failures that are not about the model", async () => {
   const { github, reviewer } = wire("gemini-2.5-flash");
   let asked = false;
-  const broken: GitHubClient = {
+  const broken: ReviewPlatform = {
+    platform: github.platform,
+    capabilities: github.capabilities,
     fetchPullDiff: async () => { throw new Error("github: fetch diff HTTP 404 Not Found"); },
     getPull: (r) => github.getPull(r),
     fetchFile: (r, p) => github.fetchFile(r, p),
@@ -131,6 +133,7 @@ test("healing does not fire for failures that are not about the model", async ()
     deleteReviewComment: (r, id) => github.deleteReviewComment(r, id),
     createCheckRun: (r, i) => github.createCheckRun(r, i),
     updateCheckRun: (r, id, i) => github.updateCheckRun(r, id, i),
+    commandsAllowed: (r, u) => github.commandsAllowed(r, u),
     whoAmI: () => github.whoAmI(),
   };
   await makeReviewHandler({

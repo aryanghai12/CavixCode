@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Finding, Severity } from "@cavix/core";
 import { computeOrgRollup, InMemoryAnalyticsStore, type ReviewEvent } from "@cavix/analytics";
 import { calibrate, type DecisionRecord, type OrgCalibration } from "@cavix/learning";
+import type { RetentionAttestation } from "@cavix/zero-retention";
 import { hashPassword, verifyPassword, encryptSecret, decryptSecret, fingerprint } from "./auth.ts";
 
 // The control-plane store. In-memory for Phase 1; the same port backs Postgres in
@@ -235,6 +236,15 @@ export interface ReviewRecord {
   verifiedCount?: number;
   /** Findings the sandbox DISPROVED, which were never posted. */
   suppressedCount?: number;
+  /**
+   * Stage 13. Proof that every sandbox this review provisioned was destroyed.
+   *
+   * Retained deliberately and for a long time: a regulated buyer's auditor asks
+   * about a review from four months ago, and a proof that expires with the
+   * dashboard's default retention is a proof they cannot use. It is safe to keep
+   * because it names no code, no path and no commit.
+   */
+  retention?: RetentionAttestation;
 }
 
 export interface SaveReviewInput {
@@ -249,6 +259,7 @@ export interface SaveReviewInput {
   durationMs?: number;
   verifiedCount?: number;
   suppressedCount?: number;
+  retention?: RetentionAttestation;
 }
 
 /**
@@ -395,6 +406,18 @@ export interface Store {
   setApiKey(org: string, rawKey: string): OrgSettings;
   /** Decrypts and returns the stored BYOK key for the orchestrator to use. */
   getApiKey(org: string): string | null;
+  /**
+   * Store this workspace's GitLab access token, encrypted.
+   *
+   * GitHub needs nothing here: an App mints its own short-lived token per
+   * install. GitLab has no equivalent, so a bot authenticates with a token
+   * somebody pasted, and it is held per workspace rather than per deployment
+   * because one shared token would read every customer's repositories.
+   */
+  setGitLabToken(org: string, rawToken: string): void;
+  getGitLabToken(org: string): string | null;
+  /** Forget it, so the dashboard offers "Connect" again. */
+  clearGitLabToken(org: string): void;
 
   // --- dashboard ---
   stats(org: string): OrgStats;
@@ -443,6 +466,8 @@ export interface StoreSnapshot {
   settings: Array<[string, OrgSettings]>;
   apiKeys: Array<[string, string]>;
   oauthTokens: Array<[string, string]>;
+  /** Optional so a snapshot written before GitLab support still restores. */
+  gitlabTokens?: Array<[string, string]>;
   /** Optional so a snapshot written before these existed still restores. */
   mutes?: MuteEvent[];
   /** Stage 5's cross-repo contract graph, per workspace. See `orgGraph`. */
@@ -490,6 +515,8 @@ export class InMemoryStore implements Store {
   private usersByEmail = new Map<string, User>();
   private settings = new Map<string, OrgSettings>();
   private apiKeys = new Map<string, string>();  // org → encrypted key blob
+  /** org → encrypted GitLab access token. See setGitLabToken. */
+  private gitlabTokens = new Map<string, string>();
   private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
   private mutes: MuteEvent[] = [];
   private orgGraphs = new Map<string, StoredOrgGraph>();
@@ -601,6 +628,11 @@ export class InMemoryStore implements Store {
       ...(typeof input.durationMs === "number" ? { durationMs: input.durationMs } : {}),
       ...(typeof input.verifiedCount === "number" ? { verifiedCount: input.verifiedCount } : {}),
       ...(typeof input.suppressedCount === "number" ? { suppressedCount: input.suppressedCount } : {}),
+      // Stamped with the review id we just minted. The orchestrator cannot send
+      // one: its only candidate would be "owner/repo#12@sha", which puts a
+      // repository name inside the artefact built to carry nothing about the
+      // customer's code.
+      ...(input.retention ? { retention: { ...input.retention, reviewId } } : {}),
     };
     this.reviews.unshift(record); // newest first
 
@@ -885,6 +917,22 @@ export class InMemoryStore implements Store {
   getApiKey(org: string): string | null {
     const blob = this.apiKeys.get(org);
     return blob ? decryptSecret(blob) : null;
+  }
+
+  setGitLabToken(org: string, rawToken: string): void {
+    const t = rawToken.trim();
+    if (!t) throw new Error("gitlab token is empty");
+    this.gitlabTokens.set(org, encryptSecret(t));
+  }
+  getGitLabToken(org: string): string | null {
+    const blob = this.gitlabTokens.get(org);
+    // Null when the blob will not decrypt, which in practice means
+    // CAVIX_SECRET_KEY changed between deploys. Treated as "no credential" so
+    // the owner is asked to re-paste it, exactly as for an OAuth token.
+    return blob ? decryptSecret(blob) : null;
+  }
+  clearGitLabToken(org: string): void {
+    this.gitlabTokens.delete(org);
   }
 
   // ---------- dashboard stats ----------
@@ -1241,6 +1289,7 @@ export class InMemoryStore implements Store {
       settings: [...this.settings.entries()],
       apiKeys: [...this.apiKeys.entries()],
       oauthTokens: [...this.oauthTokens.entries()],
+      gitlabTokens: [...this.gitlabTokens.entries()],
       mutes: this.mutes,
       orgGraphs: [...this.orgGraphs.entries()],
       ciRuns: [...this.ciRuns.entries()],
@@ -1262,6 +1311,7 @@ export class InMemoryStore implements Store {
     this.settings = new Map(s.settings ?? []);
     this.apiKeys = new Map(s.apiKeys ?? []);
     this.oauthTokens = new Map(s.oauthTokens ?? []);
+    this.gitlabTokens = new Map(s.gitlabTokens ?? []);
     // Both default to empty rather than being left alone, so a restore replaces
     // every field. Skipping them left the previous process's mutes and graph
     // sitting in memory beside freshly loaded orgs they no longer belonged to.

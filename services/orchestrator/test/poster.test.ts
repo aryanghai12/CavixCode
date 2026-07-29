@@ -89,7 +89,10 @@ test("buildReviewSubmission: anchors a finding on an added line as an inline com
   assert.match(c.body, /SQL injection/);
   assert.match(c.body, /```suggestion/); // one-click fix block present
   // The severity is the colour of the callout the headline arrives in.
-  assert.match(c.body, /^> \[!WARNING\]\n> \*\*◈ SQL injection via string concatenation\*\*/);
+  // A hidden marker leads the body, so a later run can recognise its own inline
+  // comments on a platform that has no review object to ask. It renders as
+  // nothing, which is why the alert callout is still the first thing seen.
+  assert.match(c.body, /^<!-- cavix:inline -->\n> \[!WARNING\]\n> \*\*◈ SQL injection via string concatenation\*\*/);
   assert.match(c.body, /<kbd>high<\/kbd> <kbd>security<\/kbd> <kbd>confidence 92%<\/kbd>/);
   assert.match(c.body, /<sub>`src\/auth\.js` line 12<\/sub>/); // location travels with the body
 });

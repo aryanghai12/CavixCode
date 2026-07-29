@@ -1,6 +1,7 @@
-import fs from "node:fs";
 import type { Finding } from "@cavix/core";
 import type { Sandbox, SandboxBackend, SandboxSpec } from "@cavix/sandbox";
+import { checkPurged, type PurgeCheck } from "./purge.ts";
+import { buildAttestation, type RetentionAttestation } from "./attestation.ts";
 
 // Stage 13 — zero-retention. In this mode no customer code persists after a
 // review: the work happens in an ephemeral sandbox that is destroyed, and we
@@ -11,21 +12,16 @@ export interface AuditSink {
   append(actor: string, action: string, target: string, meta?: Record<string, unknown>): unknown;
 }
 
-export interface RetentionAttestation {
-  reviewId: string;
-  repo: string;
-  startedAt: string;
-  purgedAt: string;
-  residualPaths: string[];
-  clean: boolean;
-}
-
 export interface ZeroRetentionOptions {
   backend: SandboxBackend;
   spec?: SandboxSpec;
   audit?: AuditSink;
-  /** Custom residual check (e.g. for managed backends). Default: host-fs check. */
-  residualCheck?: (sandbox: Sandbox, workdirExistedOnHost: boolean) => Promise<string[]>;
+  /**
+   * Override the per-backend purge check. Used by tests to simulate a backend
+   * that left something behind, which is otherwise very hard to arrange.
+   */
+  purgeCheck?: (sandbox: Sandbox) => Promise<PurgeCheck>;
+  logger?: { error(msg: string, meta?: Record<string, unknown>): void };
 }
 
 const EPHEMERAL: SandboxSpec = { network: "none", limits: { cpus: 1, memoryMb: 1024, timeoutMs: 60_000 }, label: "cavix-zero-retention" };
@@ -34,22 +30,30 @@ export class ZeroRetention {
   private readonly backend: SandboxBackend;
   private readonly spec: SandboxSpec;
   private readonly audit?: AuditSink;
-  private readonly residualCheck: NonNullable<ZeroRetentionOptions["residualCheck"]>;
+  private readonly purgeCheck: NonNullable<ZeroRetentionOptions["purgeCheck"]>;
 
   constructor(opts: ZeroRetentionOptions) {
     this.backend = opts.backend;
     this.spec = opts.spec ?? EPHEMERAL;
     this.audit = opts.audit;
-    this.residualCheck = opts.residualCheck ?? defaultResidualCheck;
+    this.purgeCheck = opts.purgeCheck ?? ((s) => checkPurged(s, opts.logger ? { logger: opts.logger } : {}));
   }
 
-  // Run `work` against a freshly-provisioned sandbox, then GUARANTEE teardown and
-  // verify no customer code remains. Throws if any residual is found.
-  async runReview<T>(meta: { reviewId: string; repo: string }, work: (sandbox: Sandbox) => Promise<T>): Promise<{ result: T; attestation: RetentionAttestation }> {
-    const startedAt = new Date().toISOString();
+  /**
+   * Run `work` in a fresh sandbox, guarantee teardown, and verify it is gone.
+   *
+   * Throws on a violation. That is right HERE and wrong in the live review path:
+   * this entry point is for a caller whose whole purpose is the retention
+   * guarantee (the air-gapped demo, a compliance harness), and such a caller
+   * wants to fail loudly. The orchestrator uses `checkPurged` directly and
+   * records the result instead, because losing a customer's review over a
+   * failed cleanup helps nobody.
+   */
+  async runReview<T>(
+    meta: { reviewId: string; org: string },
+    work: (sandbox: Sandbox) => Promise<T>,
+  ): Promise<{ result: T; attestation: RetentionAttestation }> {
     const sandbox = await this.backend.provision(this.spec);
-    const workdir = sandbox.workdir;
-    const existedOnHost = safeExists(workdir);
 
     let result: T;
     try {
@@ -58,37 +62,22 @@ export class ZeroRetention {
       await sandbox.destroy(); // ephemeral: always torn down, even on error
     }
 
-    const residualPaths = await this.residualCheck(sandbox, existedOnHost);
-    const attestation: RetentionAttestation = {
-      reviewId: meta.reviewId,
-      repo: meta.repo,
-      startedAt,
-      purgedAt: new Date().toISOString(),
-      residualPaths,
-      clean: residualPaths.length === 0,
-    };
-    this.audit?.append("system", "review.purged", meta.reviewId, { repo: meta.repo, clean: attestation.clean, residual: residualPaths.length });
+    const check = await this.purgeCheck(sandbox);
+    const attestation = buildAttestation({ reviewId: meta.reviewId, org: meta.org, checks: [check] });
+    this.audit?.append("system", "review.purged", meta.reviewId, {
+      org: meta.org,
+      verdict: attestation.verdict,
+      backend: check.backend,
+    });
 
-    if (!attestation.clean) {
-      throw new Error(`zero-retention violated: residual customer code at ${residualPaths.join(", ")}`);
+    if (attestation.verdict === "violated") {
+      // The message names no path, for the same reason the attestation carries
+      // none: this string ends up in logs and error trackers.
+      throw new Error(
+        `zero-retention violated: a ${check.backend} sandbox survived teardown for review ${meta.reviewId}`,
+      );
     }
     return { result, attestation };
-  }
-}
-
-async function defaultResidualCheck(sandbox: Sandbox, existedOnHost: boolean): Promise<string[]> {
-  // For host-backed sandboxes (local dev), the workdir must be gone after destroy.
-  // For container/managed backends the workdir isn't a host path; teardown is the
-  // backend's contract (container removed), so there's nothing to check on host.
-  if (existedOnHost && safeExists(sandbox.workdir)) return [sandbox.workdir];
-  return [];
-}
-
-function safeExists(p: string): boolean {
-  try {
-    return fs.existsSync(p);
-  } catch {
-    return false;
   }
 }
 

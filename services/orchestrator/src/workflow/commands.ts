@@ -1,5 +1,5 @@
 import { isCommandJob, type ReviewJob } from "@cavix/core";
-import type { GitHubClient, PullRef } from "../github/client.ts";
+import type { ReviewPlatform, PullRef } from "../github/client.ts";
 
 // What "@cavixcode <something>" actually does.
 //
@@ -70,7 +70,7 @@ export function commandOf(job: ReviewJob): CommandName | null {
 }
 
 export interface CommandDeps {
-  github: GitHubClient;
+  github: ReviewPlatform;
   /** Answer a free-text question about the PR. Absent = "ask" replies politely. */
   ask?: (question: string) => Promise<string>;
   /** Post or edit Cavix's single status comment on the PR. */
@@ -227,7 +227,7 @@ async function setPaused(deps: CommandDeps, ref: PullRef, paused: boolean): Prom
 }
 
 /** Has someone paused Cavix on this pull request? */
-export async function isPaused(github: GitHubClient, ref: PullRef): Promise<boolean> {
+export async function isPaused(github: ReviewPlatform, ref: PullRef): Promise<boolean> {
   try {
     return (await github.findComment(ref, PAUSED_MARKER)) !== null;
   } catch {

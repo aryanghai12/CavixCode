@@ -2,11 +2,12 @@ import {
   commentableLines,
   isCommandJob,
   parseUnifiedDiff,
+  platformOf,
   SEVERITY_RANK,
   type ReviewJob,
   type Severity,
 } from "@cavix/core";
-import type { GitHubClient, PostedReview, PullRef } from "../github/client.ts";
+import type { ReviewPlatform, PostedReview, PullRef } from "../github/client.ts";
 import { CHECK_NAME, refFromJob } from "../github/client.ts";
 import type { Reviewer } from "../reviewer/reviewer.ts";
 import { buildCheckOutput, buildPullDescription, buildReviewSubmission } from "../poster/poster.ts";
@@ -30,6 +31,7 @@ import {
   type ReviewMode,
 } from "./commands.ts";
 import { filterDiff } from "./pathFilter.ts";
+import { makeRetentionCollector } from "../verify/retention.ts";
 import type { DeepReviewResult, DeepReviewStep } from "../pipeline/deepReview.ts";
 import type { BlastRadiusStep } from "../orggraph/blastRadius.ts";
 import type { GraphIndexer } from "../orggraph/indexer.ts";
@@ -70,7 +72,24 @@ export interface GateDecision {
 }
 
 export interface ReviewWorkflowDeps {
-  github: GitHubClient;
+  /**
+   * The default platform client, and the one every job uses unless `platforms`
+   * names another for it.
+   *
+   * The property is still called `github` because that is what it is on every
+   * deployment that has not configured a second host, and renaming it would
+   * touch every construction site in the service for no behavioural gain. The
+   * TYPE is `ReviewPlatform`, which is the part that has to be right.
+   */
+  github: ReviewPlatform;
+  /**
+   * Additional clients by platform name, e.g. `{ gitlab: new RestGitLabClient(...) }`.
+   *
+   * A job whose platform has no client here is NOT reviewed with the default
+   * one. Posting a GitHub-shaped review at a GitLab merge request is worse than
+   * not reviewing it, and quietly reviewing the wrong repository is worse still.
+   */
+  platforms?: Record<string, ReviewPlatform>;
   reviewer: Reviewer;
   logger?: WorkflowLogger;
   /** Execution gatekeeper: return enabled=false to skip (repo not toggled on). */
@@ -205,12 +224,12 @@ const noopLogger: WorkflowLogger = { info() {}, error() {} };
  * would leave three rows on the PR, two of them spinning forever.
  */
 export class ReviewCheck {
-  private readonly github: GitHubClient;
+  private readonly github: ReviewPlatform;
   private readonly log: WorkflowLogger;
   private id = 0;
   private open = false;
 
-  constructor(github: GitHubClient, log: WorkflowLogger = noopLogger) {
+  constructor(github: ReviewPlatform, log: WorkflowLogger = noopLogger) {
     this.github = github;
     this.log = log;
   }
@@ -278,8 +297,12 @@ async function react(
   deps: ReviewWorkflowDeps,
   job: ReviewJob,
   ref: PullRef,
-  content: Parameters<GitHubClient["addReaction"]>[2],
+  content: Parameters<ReviewPlatform["addReaction"]>[2],
 ): Promise<void> {
+  // Not attempted where the host has no such concept. Calling and swallowing
+  // would work, but it spends a request per acknowledgment on every review to
+  // learn something the client already knows.
+  if (!deps.github.capabilities.reactions) return;
   if (!isCommandJob(job) || !job.comment_id) return;
   try {
     await deps.github.addReaction(ref, job.comment_id, content);
@@ -594,11 +617,17 @@ export async function runReview(
   // attached; ones it DISPROVES are dropped here and never reach the pull
   // request. This is the difference between a reviewer that gets trusted and one
   // that gets muted, so it runs before anything is posted.
+  //
+  // Stage 13 rides along. One collector per review, created here and thrown
+  // away with the review: a collector shared across the orchestrator's
+  // concurrent jobs would file one customer's sandboxes under another
+  // customer's retention proof.
   let suppressedCount = 0;
   let verifyCost = 0;
+  const retention = makeRetentionCollector({ logger: log });
   if (deps.verify && config.verifyFindings && result.findings.length > 0) {
     try {
-      const outcome = await deps.verify(result.findings, ref, org);
+      const outcome = await deps.verify(result.findings, ref, org, retention.onTeardown);
       result.findings = outcome.surfaced;
       suppressedCount = outcome.suppressed.length;
       verifyCost = outcome.costUsd;
@@ -647,13 +676,30 @@ export async function runReview(
   }
 
   // Step 5 — post the review itself: findings, anchored to their lines.
-  const requestChanges = shouldRequestChanges(config, preMerge, result.findings.map((f) => f.severity));
+  //
+  // Blocking is the owner's setting AND the platform's ability. Where the host
+  // has no bot-blocking review (GitLab has approvals and pipeline status, and
+  // nothing a bot can hold the merge button with), the review must not be
+  // dressed up as one. `unavailable` carries that to the poster so the comment
+  // says it out loud instead of the owner believing a gate is in place.
+  const wantsBlock = shouldRequestChanges(config, preMerge, result.findings.map((f) => f.severity));
+  const requestChanges = wantsBlock && deps.github.capabilities.blockingReview;
+  const blockUnavailable = wantsBlock && !deps.github.capabilities.blockingReview;
+  if (blockUnavailable) {
+    log.info("this platform has no blocking review; posting as a comment and saying so", {
+      ...base,
+      platform: deps.github.platform,
+    });
+  }
   const posterOpts = {
     ref: linkRef,
     includeSummary: !descriptionUpdated && summaryHasContent,
     suppressedCount,
     preMerge,
     requestChanges,
+    platform: deps.github.platform,
+    capabilities: deps.github.capabilities,
+    blockUnavailable,
     sections: config.sections,
     // Only used when the description could not be written (a fork PR, a revoked
     // permission), in which case the whole narrative folds into the comment and
@@ -747,6 +793,28 @@ export async function runReview(
     }
   }
 
+  // Step 5e — Stage 13: close out the retention proof.
+  //
+  // A violation is logged at error level and does NOT fail the review. The
+  // review is already on the pull request and the customer got what they paid
+  // for; what has gone wrong is our cleanup, which is our problem to fix and
+  // theirs to be told about. It is recorded on the review either way, so the
+  // dashboard shows it and an auditor can find it months later.
+  const attestation = retention.finish({ org });
+  if (retention.violated()) {
+    log.error("zero-retention violated: a sandbox survived teardown on this review", {
+      ...base,
+      sandboxes: attestation.sandboxes,
+      backends: [...new Set(attestation.checks.map((c) => c.backend))].join(","),
+    });
+  } else {
+    log.info("retention verified", {
+      ...base,
+      verdict: attestation.verdict,
+      sandboxes: attestation.sandboxes,
+    });
+  }
+
   // Step 6 — record it on the dashboard. This is what the org actually looks at
   // between pull requests, and it is where accept/reject decisions (the learning
   // signal) are made. It runs last and swallows its own failures: the review is
@@ -767,6 +835,11 @@ export async function runReview(
         durationMs: Date.now() - startedAt,
         verifiedCount: built.verifiedCount,
         suppressedCount,
+        // Stage 13. Every sandbox this review provisioned has been destroyed by
+        // now (the verifier tears each one down before it returns), so this is
+        // the first moment the proof is complete and the last moment before the
+        // review leaves this process.
+        retention: attestation,
       });
     } catch (err) {
       log.error("could not record the review on the dashboard", {
@@ -1014,11 +1087,42 @@ async function healCandidates(deps: ReviewWorkflowDeps, org: string, failure: st
   }
 }
 
+/**
+ * The client for the host this job came from.
+ *
+ * Returns null when the job names a platform this deployment has no client for,
+ * which is a refusal and not a fallback: reviewing a GitLab merge request
+ * through a GitHub client would call the wrong API against the wrong repository.
+ */
+export function clientFor(deps: ReviewWorkflowDeps, job: ReviewJob): ReviewPlatform | null {
+  const want = platformOf(job);
+  if (want === deps.github.platform) return deps.github;
+  return deps.platforms?.[want] ?? null;
+}
+
 /** Wrap runReview as a WorkflowEngine handler (fire-and-forget per job). */
 export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
   const log = deps.logger ?? noopLogger;
-  return async (job: ReviewJob) => {
+  return async (rawJob: ReviewJob) => {
+    const job = rawJob;
     const ref = refFromJob(job);
+
+    // Which host is this? Resolved before anything is fetched or posted, so a
+    // job for a platform this deployment cannot talk to never reaches an API.
+    const client = clientFor(deps, job);
+    if (!client) {
+      // Nothing to say it on: without a client there is no way to comment on the
+      // merge request either. The log is the only honest channel left.
+      log.error("no client for this platform; the job was dropped", {
+        repo: job.repo,
+        pr: job.pr_number,
+        platform: platformOf(job),
+        fix: "configure a client for this platform on the orchestrator, or stop sending its webhooks",
+      });
+      return;
+    }
+    // Every step below, and runReview itself, works through this one client.
+    deps = client === deps.github ? deps : { ...deps, github: client };
 
     // Acknowledge FIRST, before the gate or any model call, so the person who
     // typed the command sees 👀 within seconds.
@@ -1050,6 +1154,38 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
                   "`@cavixcode review` again.",
           );
         }
+        return;
+      }
+    }
+
+    // May this person tell Cavix what to do?
+    //
+    // On GitHub the edge already decided, from the association GitHub sends, and
+    // this answers true without a request. No other platform sends that: a
+    // GitLab note webhook says who commented and nothing about what they may do,
+    // so without this any account that can see a merge request could spend a
+    // customer's model budget by typing "@cavixcode review" in a loop.
+    //
+    // Checked BEFORE dispatch, so even the commands that cost nothing (help,
+    // pause) cannot be driven by a passer-by.
+    if (isCommandJob(job)) {
+      const allowed = await client.commandsAllowed(ref, job.author ?? "");
+      if (!allowed) {
+        log.info("command refused: the author cannot push to this repository", {
+          repo: job.repo,
+          pr: job.pr_number,
+          platform: client.platform,
+          author: job.author,
+          command: job.command,
+        });
+        await react(deps, job, ref, "+1");
+        await say(
+          deps,
+          job,
+          ref,
+          "**Cavix only takes commands from people who can push to this repository.**\n\n" +
+            "Ask someone with Developer access or above to run it, or ask them to grant you access.",
+        );
         return;
       }
     }

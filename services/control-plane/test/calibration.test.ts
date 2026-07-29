@@ -257,3 +257,67 @@ test("air-gapped mode reports the deployment, and cannot be set from the dashboa
     else process.env.CAVIX_AIRGAPPED = previous;
   }
 });
+
+// ── the GitLab credential ───────────────────────────────────────────────────
+
+test("a workspace's GitLab token is stored encrypted and never echoed back", async () => {
+  // GitHub needs no equivalent: an App mints its own short-lived token. GitLab
+  // has nothing like that, so this is a real long-lived secret sitting in the
+  // control-plane and it is the one credential a customer pastes by hand.
+  await withServer(async (base, store) => {
+    const cookie = await signIn(base, "acme");
+
+    const saved = await post(base, "/api/orgs/acme/gitlab-token", { token: "glpat-secret-value" }, cookie);
+    assert.equal(saved.status, 200);
+    const savedBody = (await saved.json()) as { connected: boolean; fingerprint?: string };
+    assert.equal(savedBody.connected, true);
+    assert.ok(savedBody.fingerprint && !savedBody.fingerprint.includes("glpat"), "a fingerprint, not the token");
+
+    const status = (await (
+      await fetch(base + "/api/orgs/acme/gitlab-token", { headers: { cookie } })
+    ).json()) as { connected: boolean };
+    assert.equal(status.connected, true);
+    assert.ok(!JSON.stringify(status).includes("glpat-secret-value"), "the dashboard never sees it again");
+
+    // It is stored encrypted, not in the clear.
+    assert.ok(!JSON.stringify(store.snapshot()).includes("glpat-secret-value"));
+    // ...and the orchestrator, holding the internal token, can read it back.
+    assert.equal(store.getGitLabToken("acme"), "glpat-secret-value");
+  });
+});
+
+test("the internal endpoint 404s a workspace with no GitLab token", async () => {
+  // Not 200-with-null. The orchestrator has to fail loudly on a missing
+  // credential rather than carry on and make an unauthenticated request that
+  // surfaces later as a confusing 401 on somebody's merge request.
+  await withServer(async (base) => {
+    await signIn(base, "acme");
+    const res = await fetch(base + "/api/internal/orgs/acme/gitlab-token", {
+      headers: { authorization: `Bearer ${INTERNAL}` },
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("only an owner or admin may set the GitLab token", async () => {
+  await withServer(async (base, store) => {
+    await signIn(base, "acme");
+    store.createUser({ email: "dev@acme.test", name: "Dev", password: "password123", org: "acme", role: "member" });
+    const member = (await post(base, "/api/auth/login", { email: "dev@acme.test", password: "password123" })).headers
+      .get("set-cookie")
+      ?.split(";")[0] ?? "";
+    const res = await post(base, "/api/orgs/acme/gitlab-token", { token: "glpat-x" }, member);
+    assert.equal(res.status, 403, "it reads every repository the token's account can");
+  });
+});
+
+test("a GitLab token survives a snapshot and restore", async () => {
+  await withServer(async (base, store) => {
+    const cookie = await signIn(base, "acme");
+    await post(base, "/api/orgs/acme/gitlab-token", { token: "glpat-restore" }, cookie);
+    const snap = JSON.parse(JSON.stringify(store.snapshot()));
+    const fresh = new InMemoryStore();
+    fresh.restore(snap);
+    assert.equal(fresh.getGitLabToken("acme"), "glpat-restore");
+  });
+});

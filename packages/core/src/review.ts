@@ -6,6 +6,16 @@ export const SCHEMA_VERSION = "1";
 
 export interface ReviewJob {
   schema_version: string;
+  /**
+   * Which code host this job came from: "github" or "gitlab".
+   *
+   * Optional, and absent means GitHub. That is deliberate rather than lazy: jobs
+   * already sitting on the Redis Stream when a new orchestrator starts predate
+   * the field, and requiring it would have turned every one of them into a
+   * poison message on the deploy that introduced a second platform. It is also
+   * why the schema version did not move.
+   */
+  platform?: string;
   idempotency_key: string;
   delivery_id: string;
   org: string;
@@ -45,6 +55,22 @@ export const TRIGGER_COMMAND = "command";
 /** True when the job came from a human typing "@cavixcode <command>" on a PR. */
 export function isCommandJob(job: ReviewJob): boolean {
   return job.trigger === TRIGGER_COMMAND;
+}
+
+/** Code hosts the edge can produce jobs for. */
+export const PLATFORM_GITHUB = "github";
+export const PLATFORM_GITLAB = "gitlab";
+
+/**
+ * Which platform a job belongs to, defaulting to GitHub.
+ *
+ * One function rather than `job.platform ?? "github"` scattered around, because
+ * the default is a compatibility decision (see `ReviewJob.platform`) and the
+ * next person to add a platform needs to find every place that assumed one.
+ */
+export function platformOf(job: ReviewJob): string {
+  const p = (job.platform ?? "").trim().toLowerCase();
+  return p === "" ? PLATFORM_GITHUB : p;
 }
 
 /**

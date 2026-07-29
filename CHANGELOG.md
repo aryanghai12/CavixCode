@@ -5,6 +5,142 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Zero-retention, live
+
+`packages/zero-retention/` proved no customer code persists after a review, and
+ran in exactly one place: `scripts/airgap-demo.ts`. The real teardown path
+destroyed the sandbox and never verified anything was gone. So the claim that
+sells Cavix to a bank was demonstrated by a demo script and asserted everywhere
+else, and a security review asking for evidence would have ended the conversation.
+
+#### The audit finding that changed the design
+The original residual check asked whether `sandbox.workdir` still existed on the
+host. That is a real question on the LOCAL backend, whose workdir is a host temp
+directory. It is meaningless on Docker, where the workdir is `/work` inside a
+container and no such host path was ever created: the check looked, found
+nothing, and reported clean. **On the only backend a customer actually runs, the
+zero-retention proof verified precisely nothing.** A proof that cannot fail is
+not a proof.
+
+#### Added
+- **A per-backend check that can come back false.** Local asks the filesystem;
+  Docker asks the daemon whether the container is still listed, and says so.
+- **`unverifiable` as a first-class outcome**, distinct from clean. A backend
+  that exposes nothing inspectable after teardown (Cloudflare, Firecracker), or
+  a Docker daemon that cannot be reached, reports that rather than a pass. "We
+  could not check" and "we checked and it was gone" are different claims and
+  collapsing them is how a proof becomes a slogan.
+- **A per-review attestation**, not a boolean: how many sandboxes the review
+  provisioned, which backend ran each, the check that ran in words a reader can
+  evaluate, and a verdict of proven / partial / unverified / violated. One
+  surviving sandbox outweighs every clean one; a mixed deployment is `partial`
+  rather than rounded to either end.
+- **It runs in the real path.** `VerifyContext.onTeardown` fires after each
+  sandbox is destroyed, the workflow collects them, and the attestation goes to
+  the control-plane with the review.
+- **`GET /api/reviews/:id/retention`**, and a row on the review card. An auditor
+  asking about a review from four months ago gets the artefact, and a review
+  from before this shipped gets an honest 404 rather than an invented pass.
+
+#### What it does not contain, by construction
+No path, file name, commit, repository or code: counts, backend names, a verdict
+and sentences Cavix wrote. A retention proof carrying a workspace path from the
+machine that read a customer's private repository is itself a retention problem,
+and the kind that sits in a database for years because nobody thought of it as
+data. A test asserts the wire payload contains none of it, and the control-plane
+narrows the record on arrival rather than storing whatever turns up. The verdict
+is recomputed server-side and never taken from the wire, because a caller that
+could assert "proven" over checks that do not support it could manufacture the
+one claim this artefact exists to make.
+
+#### Fail-soft, like every other stage
+A check that throws costs its entry in the attestation and nothing else. A
+violation is logged at error level and recorded, and does not fail the review:
+the review is already on the pull request and the customer got what they paid
+for. What has gone wrong is our cleanup, which is our problem to fix and theirs
+to be told about.
+
+#### Fixed
+- **The attestation's review id would have named the repository.** The
+  orchestrator's only candidate was `owner/repo#12@sha`. The control-plane stamps
+  its own id when it stores the record instead.
+- The air-gapped demo printed `clean=undefined` after the shape changed. It now
+  prints the same sentence a customer sees, plus the check behind it.
+
+### GitLab, live
+
+`packages/platforms/` has held GitLab, Bitbucket and Azure DevOps adapters since
+Phase 3, and the orchestrator imported none of them: it had its own
+`RestGitHubClient` and the whole workflow was typed against `GitHubClient`. The
+README's "5 platforms" was true of the packages directory and false of the
+product, and every non-GitHub prospect was a demo Cavix could not give.
+
+#### The seam, which was the actual work
+The port is now `ReviewPlatform` and it stayed WHOLE rather than being carved
+into a core plus optional methods. Carving it is the obvious design and the wrong
+one: it turns every call site into a `?.` with a fallback, and invites a quieter
+bug where the fallback is silently worse than the real thing. The risky methods
+already had a documented "I could not do this" return, because GitHub itself
+refuses them routinely (a PAT cannot write a check run; a COMMENTED review cannot
+be dismissed by anyone). What was missing was a way to SAY which are real, so
+every client now declares `platform` and `capabilities`.
+
+#### Added
+- **`RestGitLabClient`**: merge requests, discussions anchored by diff position,
+  commit statuses, award emoji, pipelines, and the repository tree. One API for
+  gitlab.com and every self-managed CE/EE instance, so `baseUrl` is the whole of
+  self-hosting.
+- **GitLab ingestion on the same edge endpoint**, told apart by `X-Gitlab-Event`,
+  authenticated with its own secret. One URL for operators to configure, and two
+  secrets, because a GitLab project hook must not be able to forge a GitHub
+  delivery.
+- **`platform` on the canonical `ReviewJob`**, in Go and TypeScript. Absent means
+  GitHub, which is why the schema version did not move: a bump would have turned
+  every job already queued into a poison message on the deploy that introduced
+  the second platform.
+- **Per-workspace GitLab tokens** in the control-plane, encrypted with the same
+  AES-GCM path as a BYOK key, owner/admin only, never echoed back. Not one token
+  per deployment: that would read every customer's repositories.
+- `CAVIX_GITLAB`, `CAVIX_GITLAB_URL`, and `CAVIX_GITLAB_WEBHOOK_SECRET`.
+
+#### What GitLab cannot do, and how the review says so
+There is no bot-blocking review: nothing a bot posts can hold GitLab's merge
+button. So a workspace with blocking switched on gets an ordinary comment AND a
+sentence in the verdict callout saying nothing was gated and naming the commit
+status that can be. An owner who turned blocking on and was never told it did not
+happen would believe there is a gate in front of their default branch that is not
+there, which is worse than the missing feature. Reactions and dismissal are
+skipped rather than attempted and swallowed.
+
+#### Fixed
+- **A GitLab command from any commenter would have run a review.** GitHub's
+  webhook carries the commenter's association with the repository, so the edge
+  refuses a passer-by before anything is queued. GitLab's note payload has no
+  such field, so the first version enqueued the job marked `GITLAB_UNVERIFIED`
+  and nothing downstream checked it: anyone who could see a merge request could
+  have spent a customer's model budget by typing "@cavixcode review" in a loop.
+  `ReviewPlatform.commandsAllowed` now asks the API (`members/all`, access level
+  30 = Developer), fails closed on a lookup error, and gates the free commands
+  too, because a passer-by who can `pause` Cavix has turned it off for the people
+  who do have access. GitHub answers true without a request: the edge already
+  decided.
+- **`refFromJob` split the repository full name at the FIRST slash**, so a nested
+  GitLab group ("acme/platform/billing") gave owner `acme` and repo `platform`,
+  silently dropping the project and pointing every API call at a repository that
+  is not the one under review. Harmless on GitHub, where a full name has exactly
+  one slash, and it would have broken every subgroup customer on day one.
+- **A shared client held per-review state.** The first version counted refused
+  inline anchors on the instance, and one client serves every review this
+  orchestrator runs concurrently, so the count named whichever merge request
+  finished last. It is logged now, not stored.
+- **The review re-read the merge request it had just fetched.** `/changes`
+  already returns the diff refs a discussion position needs, so they are kept
+  from there, keyed on the head SHA so a new push cannot reuse a stale position.
+  One fewer round trip per review.
+- An inline comment now carries a hidden `<!-- cavix:inline -->` marker. GitHub
+  finds its own inline comments through the review they belong to; no other
+  platform has a review to belong to.
+
 ### Call-flow diagrams in the review
 
 The dashboard has carried a "Sequence diagram" toggle marked "soon" since the

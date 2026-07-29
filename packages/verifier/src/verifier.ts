@@ -112,6 +112,20 @@ export class Verifier {
       return inconclusive(exploit, `sandbox error: ${(err as Error).message}`, logs, 0);
     } finally {
       await sbx.destroy(); // ephemeral, no residual code
+      // ...and then prove it. The hook comes from the per-review CONTEXT, never
+      // from this object: a Verifier is built once at boot and shared by every
+      // review running concurrently, so a hook held here would file one
+      // customer's sandboxes under another customer's retention proof.
+      //
+      // Swallowed: a cleanup check that throws must not turn a finding Cavix
+      // just proved into one it loses.
+      if (ctx.onTeardown) {
+        try {
+          await ctx.onTeardown(sbx);
+        } catch {
+          /* the attestation loses one entry; the review loses nothing */
+        }
+      }
     }
   }
 }

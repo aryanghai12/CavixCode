@@ -3,6 +3,14 @@
 export * from "./github/client.ts";
 export { RestGitHubClient, StaticTokenProvider, type TokenProvider } from "./github/rest.ts";
 export { FakeGitHubClient } from "./github/fake.ts";
+export {
+  RestGitLabClient,
+  StaticGitLabToken,
+  GITLAB_CAPABILITIES,
+  type GitLabTokenProvider,
+  type RestGitLabOptions,
+} from "./gitlab/rest.ts";
+export { makeControlPlaneGitLabTokens, type ControlPlaneGitLabTokenOptions } from "./gitlab/tokens.ts";
 
 export { Reviewer, type ReviewInput, type AskInput, type AskResult } from "./reviewer/reviewer.ts";
 export { parseModelReview, extractJsonObject } from "./reviewer/parse.ts";

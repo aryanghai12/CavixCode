@@ -2,7 +2,7 @@ import type { Finding } from "@cavix/core";
 import { CodeIndex, HeuristicParser, traceSequence, type CallTrace } from "@cavix/analyzer";
 import { runPhase1Review } from "@cavix/pipeline";
 import type { Gateway } from "@cavix/gateway";
-import type { GitHubClient, PullRef } from "../github/client.ts";
+import type { ReviewPlatform, PullRef } from "../github/client.ts";
 import { changedPaths, fetchSources } from "../sources.ts";
 
 // Stages 3, 4, 7, 8 and 9, on a real pull request.
@@ -89,7 +89,7 @@ export type DeepReviewStep = (input: DeepReviewInput) => Promise<DeepReviewResul
 
 export interface DeepReviewOptions {
   gateway: Gateway;
-  github: GitHubClient;
+  github: ReviewPlatform;
   /**
    * The deployment-wide floor below which Stage 9 drops a finding. The
    * pipeline's own default applies when unset. A workspace's learned

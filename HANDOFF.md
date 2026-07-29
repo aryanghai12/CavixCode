@@ -24,11 +24,11 @@ stages 0 through 12 and part of 13 on a real pull request.
 | 8 Seven-agent ensemble | live |
 | 9 Adjudication | live |
 | 10 Execution verification | live |
-| 11 Synthesis and posting | live, GitHub only |
+| 11 Synthesis and posting | live, **GitHub and GitLab** (incl. self-managed) |
 | 12 Learning loop | live, per-category confidence bars from the org's own decisions |
-| 13 Teardown, cost accounting | sandbox teardown and cost live; zero-retention package unwired |
+| 13 Teardown, retention, cost | live: teardown verified per review with a retrievable attestation, plus cost. Observability still absent |
 
-Run `npm test` (601 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
+Run `npm test` (655 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
 and `cd services/edge && go test ./...`. All green as of this handoff.
 
 ## How stages 5 and 6 were wired, since the next ones should copy it
@@ -108,18 +108,75 @@ Three things a future session should know:
   the previous diagram would show the code as it was before the push that
   prompted the refresh. Worth revisiting only if summary mode ever gets a graph.
 
-### 3. The other four platforms
+### ~~3. The other four platforms~~ GITLAB DONE
 
-`packages/platforms/` has GitLab, Bitbucket and Azure DevOps adapters, written
-and tested. The orchestrator has its own GitHub client and imports none of them,
-so the live product is GitHub only. This is an adapter seam, not new logic.
+Live. The port is `ReviewPlatform` with a `capabilities` declaration,
+`RestGitLabClient` implements it, the edge ingests GitLab webhooks on the same
+`/webhook` endpoint, and `platform` on the canonical `ReviewJob` routes each job
+to its client.
 
-### 4. Zero-retention, live
+Four things a future session should know:
 
-`packages/zero-retention/` proves no customer code persists after teardown, and
-runs only in `scripts/airgap-demo.ts`. It should run in the real teardown path
-and its result should be visible to the customer, because that claim is what
-sells to regulated buyers.
+- **Bitbucket and Azure DevOps are now mechanical, and that was the point.** The
+  seam is proven by a second platform. A third means writing a client against
+  `ReviewPlatform`, declaring its capabilities, adding a normalizer to the edge,
+  and adding it to `platforms` in `main.ts`. No workflow change.
+- **`packages/platforms/` is still unused and now actively misleading.** Its
+  `ReviewPlatform` is a different, two-method interface that no longer matches
+  the real port. Either port its Bitbucket and Azure adapters onto
+  `services/orchestrator/src/github/client.ts` and delete the package, or delete
+  the package. Leaving two types with the same name is how the next person wires
+  the wrong one.
+- **`ReviewWorkflowDeps.github` is the default client and is no longer only
+  GitHub.** The type is right (`ReviewPlatform`), the property name is
+  historical, and renaming it touches every construction site in the service. Do
+  it in a commit that does nothing else.
+- **GitLab commands are authorized in the ORCHESTRATOR, not the edge, and that
+  asymmetry is permanent.** GitHub sends the commenter's association, so the edge
+  refuses a passer-by before anything is queued. GitLab's note webhook says who
+  commented and nothing about what they may do, so `ReviewPlatform.commandsAllowed`
+  asks the API (`members/all`, access level >= 30 = Developer) and fails CLOSED.
+  GitHub's implementation returns true without a request, because the edge
+  already decided. Any third platform must implement this or it is an open door.
+
+### 4. Bitbucket and Azure DevOps
+
+Same seam, now proven by GitLab. A third platform is: a client against
+`ReviewPlatform`, its `capabilities`, a normalizer in the Go edge, and an entry
+in `platforms` in `main.ts`. No workflow change. Read the GitLab notes above
+first, particularly `commandsAllowed`.
+
+### ~~5. Zero-retention, live~~ DONE
+
+Live. `checkPurged` runs after every sandbox the verifier tears down, the
+workflow collects the checks into one attestation per review, and it is stored on
+the review and served at `GET /api/reviews/:id/retention`.
+
+Three things a future session should know:
+
+- **`unverifiable` is not a bug to fix.** Cloudflare and Firecracker expose
+  nothing this process can inspect after teardown, so their checks say so. The
+  temptation will be to report those as clean because the backend's contract says
+  they are; do not. The moment "we could not check" and "we checked" report the
+  same thing, the artefact is worth nothing to the auditor it exists for.
+- **Nothing about customer code may enter the attestation.** There is a test that
+  asserts the wire payload contains no path, file name, commit or repository, and
+  the control-plane narrows the record on arrival. A future field that seems
+  harmless (a workspace id, a sandbox label carrying a repo name) is how this
+  becomes the retention problem it exists to disprove.
+- **The Docker check proves the container is gone, not that nothing was ever
+  written to a disk.** The tmpfs argument is in the `check` string precisely so a
+  reader can evaluate it themselves. If someone adds a bind-mounted backend, that
+  sentence stops being true and the check has to change with it.
+
+### 6. Observability, the other half of Stage 13
+
+Stage 13 is "teardown, zero retention, observability, cost accounting". Teardown,
+retention and cost are live. There is no metrics surface at all: no request
+counts, no stage latencies, no queue depth, nothing an operator could put on a
+dashboard or alert from. Every number the product has is either on a pull request
+or on the customer's own dashboard, and none of it tells the person running
+Cavix whether it is healthy.
 
 ## Things to know before you start
 
@@ -135,6 +192,51 @@ sells to regulated buyers.
 - **The PR description carries no findings.** Only what the change does. Findings
   go on the review comment, which is dated and supersedable.
 - Tests run with zero infrastructure. Keep it that way.
+
+## Bugs found and fixed in the zero-retention session
+
+- **The retention proof verified nothing on the backend customers run.** The
+  residual check asked whether `sandbox.workdir` existed on the host. Real on
+  Local; on Docker the workdir is `/work` INSIDE the container and no host path
+  was ever created, so the check looked, found nothing, and reported clean. A
+  proof that cannot fail is not a proof, and this one could not fail anywhere it
+  mattered.
+- **The attestation's review id would have named the repository.** The
+  orchestrator's only candidate was `owner/repo#12@sha`, which puts a repository
+  name inside the artefact built to carry nothing about the customer's code. The
+  control-plane stamps its own id instead.
+- **The verdict was trusted from the wire.** A caller could have asserted
+  "proven" over a set of checks that did not support it, manufacturing the exact
+  claim the artefact exists to make. It is recomputed server-side now.
+- **The air-gapped demo printed `clean=undefined`** once the attestation shape
+  changed, which is the failure mode where a demo keeps running and stops
+  demonstrating anything.
+
+Plus one found while writing the tests: a fixture whose fake provider matched
+`system.includes("test")` also matched the single-model review prompt, so it
+returned a generated test instead of findings, nothing was ever verified, no
+sandbox was provisioned, and the test asserting the sandbox was destroyed passed
+against a review that never made one.
+
+## Bugs found and fixed in the GitLab session
+
+- **`refFromJob` split the repository full name at the FIRST slash.** Harmless on
+  GitHub, where a full name has exactly one; on a nested GitLab group
+  ("acme/platform/billing") it gave owner `acme` and repo `platform`, silently
+  dropping the project so every API call named a repository that is not the one
+  under review. It would have broken every subgroup customer on day one.
+- **A GitLab command from anyone would have run a review.** The edge cannot check
+  a GitLab commenter's permission (no association field in the payload), so the
+  first version enqueued the job marked `GITLAB_UNVERIFIED` and nothing checked
+  it downstream. Anyone who could see a merge request could have spent a
+  customer's model budget in a loop. Closed with `commandsAllowed`, which fails
+  closed and gates the free commands too: a passer-by who can `pause` Cavix has
+  turned it off for the people who do have access.
+- **A shared client held per-review state.** Refused inline anchors were counted
+  on the instance, and one client serves every review this orchestrator runs
+  concurrently, so the count named whichever merge request finished last.
+- **The review re-read the merge request it had just fetched**, once per review,
+  for three strings `/changes` already returns.
 
 ## Bugs found and fixed in the sequence-diagram session
 
@@ -200,38 +302,41 @@ value thing done this session:
 > I am continuing work on Cavix, an AI code reviewer. Read `HANDOFF.md`,
 > `README.md` and `CHANGELOG.md` first, then `ARCHITECTURE.md` for the seams.
 >
-> Stages 0 through 12 already run on real pull requests. What is left is listed
-> in HANDOFF.md. Build **item 3: the other four platforms.**
+> Stages 0 through 13 already run on real pull requests, on GitHub and GitLab.
+> What is left is listed in HANDOFF.md. Build **item 6: observability, the other
+> half of Stage 13.**
 >
-> `packages/platforms/` has GitLab, Bitbucket and Azure DevOps adapters, written
-> and tested, and the orchestrator imports none of them: it has its own
-> `RestGitHubClient` and the whole workflow is typed against `GitHubClient`. So
-> the README's "5 platforms" is true of the packages directory and false of the
-> product, and every non-GitHub prospect is a demo Cavix cannot give.
+> Stage 13 is "teardown, zero retention, observability, cost accounting". Three
+> of those four are live. There is no metrics surface at all: no stage latencies,
+> no queue depth, no error rates, no counter anywhere. Every number Cavix
+> produces is either on a customer's pull request or on their dashboard, and none
+> of it tells the person RUNNING Cavix whether it is healthy.
 >
-> This is an adapter seam, not new logic, which makes it the highest ratio of
-> reach to risk left on the list. It is also the item most likely to turn into a
-> rewrite if the seam is drawn in the wrong place, so the seam is the work.
+> That gap is why every bug in the list above was found by reading code rather
+> than by an alert. A page returning 500 since it shipped, a command path open to
+> anyone, a retention proof that verified nothing: all of them were live, none of
+> them was visible.
 >
 > Specifically:
-> 1. Find the real interface. `GitHubClient` has grown check runs, reactions,
->    review dismissal, inline comment deletion and PR body edits, and not one of
->    those means the same thing on all four platforms. Decide what is core, what
->    is optional-with-a-capability-flag, and what is GitHub-only, and say which
->    features silently degrade on each platform rather than pretending parity.
-> 2. Wire ONE non-GitHub platform end to end, not all three. A second live
->    platform proves the seam; a third and fourth are then mechanical. Pick the
->    one whose API costs least to prove and say why you picked it.
-> 3. The edge service ingests GitHub webhooks in Go, with GitHub's HMAC scheme.
->    Decide whether a second platform's webhook enters through the same edge or
->    its own path, and what that means for the canonical `ReviewJob`.
-> 4. Nothing may regress for GitHub. It is the only platform with real users, and
->    a refactor that costs a GitHub review to gain a GitLab one is a bad trade.
+> 1. Decide what an operator actually needs to see, and defend the list. A
+>    metrics endpoint that exposes everything is a metrics endpoint nobody reads.
+>    Latency per stage, queue depth and per-org error rate are candidates; say
+>    which you chose and which you rejected.
+> 2. Pick the surface and say why. Prometheus text on a `/metrics` endpoint is
+>    the obvious answer; the orchestrator already has a health server. An
+>    air-gapped install cannot ship telemetry anywhere, so whatever you choose
+>    must work with nothing outbound.
+> 3. It must carry NO customer code, repository names, paths or finding text. A
+>    metrics endpoint is scraped, stored for a year and often less protected than
+>    the database. Cardinality is the trap: one label per repository is a
+>    time series per repository, which is both a leak and an outage.
+> 4. It must cost nothing when nobody is scraping, and it must never be able to
+>    fail a review. The same rule as every other stage.
 >
-> Before writing anything, tell me the plan, including which capabilities will be
-> missing on the platform you pick and how the review will say so rather than
-> quietly posting less. Do not start building until I have seen it. While you are
-> in there, sweep the repo for bugs and tell me what you find.
+> Before writing anything, tell me the plan, including the exact metric names and
+> labels and what each one would let an operator diagnose that they cannot
+> diagnose today. Do not start building until I have seen it. While you are in
+> there, sweep the repo for bugs and tell me what you find.
 >
 > House rules, all enforced by tests: no emoji anywhere Cavix posts, no em or en
 > dashes, the Scope module never states a number that was not measured, and every
@@ -241,9 +346,11 @@ value thing done this session:
 >
 > A warning worth taking seriously: every package in this repo was written and
 > tested and then never run against real input, and every single one I have wired
-> so far had bugs that only appeared on realistic data. The last four sessions
-> found twenty-one between them, including matching logic that reported nothing
-> at all, a metric that told reviewers to ignore real failures, a page that has
-> been returning 500 since it shipped, and three dashboard switches a customer
-> could flip that changed nothing. Probe it with a realistic fixture before you
-> trust a line of it, and write the fixture before you write the code.
+> so far had bugs that only appeared on realistic data. The last six sessions
+> found thirty between them, including matching logic that reported nothing at
+> all, a metric that told reviewers to ignore real failures, a page that has been
+> returning 500 since it shipped, three dashboard switches a customer could flip
+> that changed nothing, a command path anyone on the internet could have driven,
+> and a compliance proof that could not fail on the only backend customers run.
+> Probe it with a realistic fixture before you trust a line of it, and write the
+> fixture before you write the code.

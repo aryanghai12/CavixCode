@@ -86,6 +86,7 @@ func Normalize(body []byte, deliveryID string) (canonical.ReviewJob, error) {
 
 	job := canonical.ReviewJob{
 		SchemaVersion:  canonical.SchemaVersion,
+		Platform:       canonical.PlatformGitHub,
 		DeliveryID:     deliveryID,
 		Org:            org,
 		Repo:           ev.Repository.FullName,

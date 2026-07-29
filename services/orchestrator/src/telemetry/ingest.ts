@@ -1,5 +1,5 @@
 import type { BuildRun } from "@cavix/telemetry";
-import type { GitHubClient, PullRef } from "../github/client.ts";
+import type { ReviewPlatform, PullRef } from "../github/client.ts";
 
 // Stage 6, half one: getting CI history in.
 //
@@ -42,7 +42,7 @@ export interface CiStore {
 }
 
 export interface CiIngestOptions {
-  github: GitHubClient;
+  github: ReviewPlatform;
   store: CiStore;
   staleMs?: number;
   logger?: { info(msg: string, meta?: Record<string, unknown>): void };

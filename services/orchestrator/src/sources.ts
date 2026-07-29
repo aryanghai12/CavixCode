@@ -1,5 +1,5 @@
 import { parseUnifiedDiff } from "@cavix/core";
-import type { GitHubClient, PullRef } from "./github/client.ts";
+import type { ReviewPlatform, PullRef } from "./github/client.ts";
 
 // Reading real source out of GitHub.
 //
@@ -25,7 +25,7 @@ export const MAX_SOURCE_FILES = 12;
  * binary, too large) and must never fail a review, so this never throws.
  */
 export async function fetchSources(
-  github: GitHubClient,
+  github: ReviewPlatform,
   ref: PullRef,
   paths: string[],
   max = MAX_SOURCE_FILES,

@@ -18,7 +18,10 @@ import {
 } from "@cavix/gateway";
 import { loadConfig } from "./config.ts";
 import { RestGitHubClient, StaticTokenProvider } from "./github/rest.ts";
+import type { ReviewPlatform } from "./github/client.ts";
 import { GitHubAppTokenProvider } from "./github/appAuth.ts";
+import { RestGitLabClient } from "./gitlab/rest.ts";
+import { makeControlPlaneGitLabTokens } from "./gitlab/tokens.ts";
 import { Reviewer } from "./reviewer/reviewer.ts";
 import { makeReviewHandler } from "./workflow/reviewWorkflow.ts";
 import { InlineEngine } from "./workflow/inline.ts";
@@ -291,8 +294,33 @@ async function main() {
     fix: "set CAVIX_CONTROL_PLANE_URL and CAVIX_INTERNAL_TOKEN on the orchestrator",
   });
 
+  // Stage 11 — the second live platform.
+  //
+  // On unless it has nothing to authenticate with. GitLab holds no per-install
+  // credential the way a GitHub App does, so a workspace's token comes from the
+  // control-plane per review, and without a control-plane there is nowhere to
+  // read one from: the client would exist and fail on its first call. A
+  // deployment with no GitLab configured simply drops GitLab jobs, which it will
+  // never receive anyway because the edge rejects them without its own secret.
+  const platforms: Record<string, ReviewPlatform> = {};
+  if (cpUrl && internalToken && process.env.CAVIX_GITLAB !== "off") {
+    platforms.gitlab = new RestGitLabClient({
+      tokens: makeControlPlaneGitLabTokens({
+        url: cpUrl,
+        token: internalToken,
+        logger: { warn: (m, meta) => log("warn", m, meta) },
+      }),
+      baseUrl: process.env.CAVIX_GITLAB_URL,
+      logger: { info: (m, meta) => log("info", m, meta) },
+    });
+    log("info", "gitlab reviews on: merge requests are reviewed through the same workflow", {
+      instance: process.env.CAVIX_GITLAB_URL ?? "https://gitlab.com",
+    });
+  }
+
   const handler = makeReviewHandler({
     github,
+    platforms,
     reviewer,
     gate,
     suggestModels,

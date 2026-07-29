@@ -53,6 +53,10 @@ func main() {
 
 	dd := dedupe.NewMemoryStore(cfg.DedupeTTL)
 	handler := webhook.NewHandler(cfg.WebhookSecret, producer, dd, log, cfg.BotHandle)
+	if cfg.GitLabToken != "" {
+		handler = handler.WithGitLab(cfg.GitLabToken)
+		log.Info("gitlab ingestion enabled on /webhook")
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", handler)

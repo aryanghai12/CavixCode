@@ -1,9 +1,10 @@
 import {
   CHECK_NAME,
+  FULL_CAPABILITIES,
   REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
-  type GitHubClient,
+  type ReviewPlatform,
   type OwnReview,
   type PullRef,
   type PostedReview,
@@ -41,7 +42,11 @@ export interface RestGitHubOptions {
   userAgent?: string;
 }
 
-export class RestGitHubClient implements GitHubClient {
+export class RestGitHubClient implements ReviewPlatform {
+  readonly platform = "github" as const;
+  // GitHub is the platform the product was built against, so it is the one that
+  // has all of it. Every other adapter is measured against this line.
+  readonly capabilities = FULL_CAPABILITIES;
   private readonly tokens: TokenProvider;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -391,6 +396,18 @@ export class RestGitHubClient implements GitHubClient {
       const detail = await res.text().catch(() => "");
       throw new Error(`github: update check run HTTP ${res.status} ${res.statusText}: ${detail.slice(0, 200)}`);
     }
+  }
+
+  /**
+   * Always allowed, because the edge already decided.
+   *
+   * GitHub's issue_comment payload carries `author_association`, which the edge
+   * checks against OWNER/MEMBER/COLLABORATOR before enqueuing anything. Asking
+   * the API again here would be a second request per command to re-derive an
+   * answer we were handed for free, and it would still be the same answer.
+   */
+  async commandsAllowed(): Promise<boolean> {
+    return true;
   }
 
   /**

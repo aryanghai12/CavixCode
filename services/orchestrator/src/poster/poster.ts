@@ -10,7 +10,15 @@ import {
   type Verification,
 } from "@cavix/core";
 import type { CallTrace } from "@cavix/analyzer";
-import { REVIEW_MARKER, type InlineComment, type ReviewEvent, type ReviewSubmission } from "../github/client.ts";
+import {
+  CHECK_NAME,
+  INLINE_MARKER,
+  REVIEW_MARKER,
+  type InlineComment,
+  type PlatformName,
+  type ReviewEvent,
+  type ReviewSubmission,
+} from "../github/client.ts";
 import type { PreMergeResult } from "../policy/preMerge.ts";
 import { ALL_SECTIONS, type ReviewSections } from "../byok/reviewConfig.ts";
 import { renderSequenceDiagram } from "./mermaid.ts";
@@ -232,6 +240,17 @@ export interface PosterOptions {
    */
   trace?: CallTrace;
   /**
+   * The owner asked Cavix to block this merge and the platform cannot.
+   *
+   * Set only where `capabilities.blockingReview` is false. The review then posts
+   * as an ordinary comment, and says so: an owner who turned blocking on and is
+   * never told it did not happen believes there is a gate in front of their main
+   * branch that does not exist. That is a worse failure than the missing feature.
+   */
+  blockUnavailable?: boolean;
+  /** Which host this is going to, for the footer. */
+  platform?: PlatformName;
+  /**
    * Render the coloured badge strip at the top of the review (shields.io images).
    *
    * On by default, and deliberately small: at most five badges per review, only
@@ -437,6 +456,11 @@ function renderInlineBody(f: Finding, sections: ReviewSections = ALL_SECTIONS): 
     .join(" ");
 
   const parts = [
+    // How a later run recognises its own inline comments on a platform with no
+    // review object to ask. GitHub finds them through the review they belong to
+    // and does not need this; GitLab's anchored notes are just notes. Renders as
+    // nothing everywhere, so no reader ever sees it.
+    INLINE_MARKER,
     `> [!${SEVERITY_ALERT[f.severity]}]`,
     `> **${SEVERITY_MARK[f.severity]} ${plain(f.title)}**`,
     ">",
@@ -948,9 +972,26 @@ function verdict(all: Finding[], fileCount: number, opts: PosterOptions = {}): s
       ">",
       "> <sub>This workspace has pre-merge blocking switched on. An owner can change that under **Review settings**.</sub>",
     );
+  } else if (opts.blockUnavailable) {
+    // The owner turned blocking on and this host has no way to honour it. Say so
+    // where they will read it, and name the thing that CAN gate a merge here, so
+    // the sentence is useful rather than only apologetic.
+    out.push(">", `> **${blockingReason(opts)}, and this workspace asked Cavix to block on that.**`);
+    out.push(
+      ">",
+      `> <sub>${PLATFORM_LABEL[opts.platform ?? "github"]} has no review a bot can hold a merge with, so this is posted as an ordinary comment and nothing is gated. The \`${CHECK_NAME}\` status on the commit reports the same outcome and CAN be made required.</sub>`,
+    );
   }
   return out;
 }
+
+/** How each host is named in prose. */
+const PLATFORM_LABEL: Record<PlatformName, string> = {
+  github: "GitHub",
+  gitlab: "GitLab",
+  bitbucket: "Bitbucket",
+  "azure-devops": "Azure DevOps",
+};
 
 /**
  * The must-fix list, in a callout coloured by the worst thing in it.

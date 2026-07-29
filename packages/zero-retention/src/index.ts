@@ -1,7 +1,10 @@
+export { ZeroRetention, metadataOnly, type AuditSink, type ZeroRetentionOptions } from "./zeroRetention.ts";
+export { checkPurged, type PurgeCheck, type PurgeCheckOptions, type PurgeStatus } from "./purge.ts";
 export {
-  ZeroRetention,
-  metadataOnly,
+  buildAttestation,
+  explainAttestation,
+  verdictOf,
+  PURGE_STATUS_ORDER,
   type RetentionAttestation,
-  type ZeroRetentionOptions,
-  type AuditSink,
-} from "./zeroRetention.ts";
+  type RetentionVerdict,
+} from "./attestation.ts";

@@ -23,6 +23,10 @@ type Config struct {
 	DedupeTTL     time.Duration // idempotency window
 	EnqueueDialMs time.Duration // dial timeout for Redis
 	BotHandle     string        // mention handle(s), comma-separated: "@<handle> review"
+	// GitLabToken is the shared secret set on a GitLab project hook. Empty means
+	// GitLab ingestion is off, which is the default: a deployment that has not
+	// configured it rejects GitLab deliveries rather than trusting them.
+	GitLabToken string
 }
 
 // Load reads config from env with safe defaults.
@@ -40,6 +44,7 @@ func Load() (Config, error) {
 	c := Config{
 		Addr:          addr,
 		WebhookSecret: os.Getenv("CAVIX_WEBHOOK_SECRET"),
+		GitLabToken:   os.Getenv("CAVIX_GITLAB_WEBHOOK_SECRET"),
 		StreamKey:     getenv("CAVIX_STREAM_KEY", "cavix:reviewjobs"),
 		DedupeTTL:     24 * time.Hour,
 		EnqueueDialMs: 3 * time.Second,

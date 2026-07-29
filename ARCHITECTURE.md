@@ -295,6 +295,80 @@ Stage 6 correlates a PR's touched functions with historical CI/CD benchmarks
 (ClickHouse in prod) and warns on measured or predicted regressions, optionally
 running the affected benchmark in the sandbox.
 
+### Stage 13 — why the retention proof is shaped like this
+
+Three decisions, each made against a more obvious alternative:
+
+1. **A check that can come back false, per backend.** The first version asked
+   whether `sandbox.workdir` still existed on the host. Real on the Local
+   backend; meaningless on Docker, where the workdir is `/work` inside a
+   container and no host path was ever created, so the check looked, found
+   nothing, and reported clean. On the only backend a customer runs, the proof
+   verified nothing. Docker now asks the daemon whether the container is still
+   listed, and a backend with nothing inspectable reports `unverifiable` rather
+   than a pass. **"We could not check" and "we checked and it was gone" are
+   different claims**, and the artefact is worthless the moment they are merged.
+
+2. **The hook lives on the per-review `VerifyContext`, not on the `Verifier`.**
+   A `Verifier` is built once at boot and shared by every review this
+   orchestrator runs concurrently, so a hook held there would file one
+   customer's sandboxes under another customer's retention proof. It also has to
+   be a hook at all because the verifier provisions a sandbox PER FINDING:
+   wrapping the whole review in one sandbox (which is what `ZeroRetention`
+   does, for the air-gapped demo) would mean restructuring the verifier around
+   the shape the proof wants rather than the shape the work needs.
+
+3. **The artefact carries counts and sentences, never paths.** A retention proof
+   containing a workspace path from the machine that read a customer's private
+   repository is itself a retention problem, and the kind that survives in a
+   database for years because nobody classified it as data. A residual path goes
+   to the operator's log, where it is needed to fix the problem; the record gets
+   a count. The control-plane narrows the payload on arrival and RECOMPUTES the
+   verdict rather than trusting it, because a caller that could assert "proven"
+   over checks that do not support it could manufacture the one claim the
+   artefact exists to make.
+
+It fails soft, like every other stage: a check that throws costs its entry, and a
+violation is logged and recorded but does not fail the review. The review is
+already on the pull request; a broken cleanup is our problem to fix and the
+customer's to be told about, and failing their review helps neither.
+
+### Stage 11 — why the platform port is one whole interface
+
+`ReviewPlatform` (`services/orchestrator/src/github/client.ts`) has ~18 methods
+and every backend implements all of them. The tempting alternative is a small
+core plus optional methods for the things GitLab, Bitbucket and Azure DevOps do
+not have, and it is worse for two reasons:
+
+1. **It puts a `?.` and a fallback at every call site.** Eight of them, each with
+   its own quiet decision about what to do instead, which is eight places for the
+   degraded path to be wrong in a way nobody notices.
+2. **The interface already encoded absence.** `createCheckRun` returns 0,
+   `listTree` and `listWorkflowRuns` return `[]`, `dismissReview` swallows a
+   refusal. Those are not GitLab accommodations: GitHub refuses all of them
+   routinely, because a PAT cannot write a check run and nobody can dismiss a
+   COMMENTED review. Every caller has handled the absent case since Phase 0.
+
+So the only thing genuinely missing was a way to state which are real, and that
+is `capabilities`. It exists so the PRODUCT can say what it cannot do, not so the
+code can branch: the workflow branches on a capability in exactly two places
+(skip reactions, and do not claim a block that cannot happen), and both of those
+change what a human is told rather than what the pipeline computes.
+
+The rule this encodes: **a platform that cannot do something says so on the
+review.** A GitLab review that was quietly less than a GitHub one, with nobody
+told why, is the failure mode this codebase exists to avoid. The specific case
+that matters is blocking: GitLab has no bot review that can hold a merge, so a
+workspace with blocking switched on is told, in the verdict callout, that nothing
+was gated and which commit status can gate it instead.
+
+Credentials are the one place the platforms genuinely diverge. A GitHub App holds
+a private key and mints a short-lived installation token per repository, so the
+orchestrator stores no secret. GitLab has no equivalent, so a workspace's access
+token is held in the control-plane, encrypted, and fetched per review — per
+workspace and not per deployment, because one shared token would read every
+customer's repositories.
+
 ### Stage 12 — why the loop is closed where it is
 
 Stage 12 turns a workspace's accept/reject history into a per-category confidence
@@ -359,8 +433,8 @@ both layers: the in-cluster model is reached; anthropic/openai/github are blocke
 - **Identity**: SAML 2.0 SSO (signature/audience/validity/replay), SCIM 2.0
   provisioning → RBAC roles, and a hash-chained tamper-evident audit log.
 - **Zero-retention (Stage 13)**: the review runs in an ephemeral sandbox whose
-  destruction is *verified* (no residual on disk); only metadata persists. This
-  is the teardown/zero-retention half of Stage 13.
+  destruction is *verified* per review, and the verification is recorded as an
+  attestation the customer can retrieve. See below.
 - **Licensing**: offline Ed25519-signed licenses — entitlements (seats, features,
   air-gap) are signed and verified with no network, suitable for air-gapped sites.
 

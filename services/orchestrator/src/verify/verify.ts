@@ -1,6 +1,7 @@
 import type { Finding } from "@cavix/core";
+import type { Sandbox } from "@cavix/sandbox";
 import { verifyAndFilter, type Verifier } from "@cavix/verifier";
-import type { GitHubClient, PullRef } from "../github/client.ts";
+import type { ReviewPlatform, PullRef } from "../github/client.ts";
 import { fetchSources, MANIFESTS, MAX_SOURCE_FILES } from "../sources.ts";
 
 // Stage 10 wiring — the step that turns "the model says this is a bug" into
@@ -37,11 +38,17 @@ export type VerifyStep = (
   findings: Finding[],
   ref: PullRef,
   org: string,
+  /**
+   * Stage 13. Called after each sandbox this step tears down, so the workflow
+   * can assemble one retention attestation for the whole review. Optional: a
+   * caller that does not want the proof simply does not pass one.
+   */
+  onTeardown?: (sandbox: Sandbox) => Promise<void>,
 ) => Promise<VerifyStepResult>;
 
 export interface VerifyStepOptions {
   verifier: Verifier;
-  github: GitHubClient;
+  github: ReviewPlatform;
   /** Confidence at/above which an unproven finding still posts. */
   highConfidence?: number;
   maxFiles?: number;
@@ -51,7 +58,7 @@ export interface VerifyStepOptions {
 export function makeVerifyStep(opts: VerifyStepOptions): VerifyStep {
   const maxFiles = opts.maxFiles ?? MAX_SOURCE_FILES;
 
-  return async (findings, ref, org) => {
+  return async (findings, ref, org, onTeardown) => {
     const untouched: VerifyStepResult = {
       surfaced: findings,
       suppressed: [],
@@ -73,9 +80,12 @@ export function makeVerifyStep(opts: VerifyStepOptions): VerifyStep {
       return untouched;
     }
 
-    const out = await verifyAndFilter(findings, { org, files }, opts.verifier, {
-      highConfidence: opts.highConfidence,
-    });
+    const out = await verifyAndFilter(
+      findings,
+      { org, files, ...(onTeardown ? { onTeardown } : {}) },
+      opts.verifier,
+      { highConfidence: opts.highConfidence },
+    );
     opts.logger?.info("verification complete", {
       repo: `${ref.owner}/${ref.repo}`,
       pr: ref.number,
@@ -100,7 +110,7 @@ export function makeVerifyStep(opts: VerifyStepOptions): VerifyStep {
  * repro test that cannot import the code under test proves nothing.
  */
 async function collectSources(
-  github: GitHubClient,
+  github: ReviewPlatform,
   ref: PullRef,
   findings: Finding[],
   maxFiles: number,

@@ -21,6 +21,7 @@
     "@cavix/repoconfig": "*",
     "@cavix/sandbox": "*",
     "@cavix/telemetry": "*",
+    "@cavix/zero-retention": "*",
     "@cavix/verifier": "*"
   },
   "optionalDependencies": {

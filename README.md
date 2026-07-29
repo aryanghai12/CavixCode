@@ -10,9 +10,10 @@ never gets posted. What lands on your pull request is a review with receipts.
 
 It runs on your own servers if you want it to (including with no internet access
 at all), and uses your own AI provider key so your code never touches ours.
-GitLab, Bitbucket and Azure DevOps adapters are written and tested in
-[packages/platforms/](packages/platforms/) but are not yet reachable from the
-running service, so today the live product is GitHub only.
+It reviews **GitHub pull requests and GitLab merge requests**, including
+self-managed GitLab. Bitbucket and Azure DevOps adapters exist in
+[packages/platforms/](packages/platforms/) and are not yet reachable from the
+running service.
 
 ---
 
@@ -292,9 +293,9 @@ dishonest claim in a product whose whole pitch is that it does not make those.
 | 8 | Multi-agent ensemble with model routing | yes (7 agents) | **yes** |
 | 9 | Adjudication: dedupe, vote, calibrate, threshold | yes | **yes** |
 | 10 | Execution-grounded verification: reproduce, PoC, fix-and-run | yes | **yes** |
-| 11 | Synthesis and posting | yes (5 platforms) | yes, GitHub only |
+| 11 | Synthesis and posting | yes (5 platforms) | **yes**, GitHub and GitLab |
 | 12 | Feedback and learning loop | yes | **yes**, per-category confidence bars from your own decisions |
-| 13 | Teardown, zero retention, observability, cost accounting | yes | sandbox teardown and cost accounting |
+| 13 | Teardown, zero retention, observability, cost accounting | yes | **yes**, teardown verified per review, plus cost accounting |
 
 Stages 3 through 9 are composed by [packages/pipeline/](packages/pipeline/) and
 run on every pull request. If any of it fails, the review falls back to a single
@@ -342,6 +343,48 @@ off unless an owner turns it on, and even then it only escalates for a failing
 policy rule or a finding at or above the severity they picked.
 
 ---
+
+## GitLab
+
+Cavix reviews merge requests on gitlab.com and on any self-managed CE or EE
+instance. It is the same workflow, the same stages and the same output: the
+orchestrator does not branch on platform anywhere.
+
+Three things to set up:
+
+| Where | What |
+|---|---|
+| Orchestrator | `CAVIX_GITLAB_URL` for a self-managed instance (default `https://gitlab.com`). `CAVIX_GITLAB=off` disables it |
+| Edge | `CAVIX_GITLAB_WEBHOOK_SECRET`, and point a project (or group) webhook at the same `/webhook` URL with **Merge request events** and **Comments** ticked |
+| Dashboard | Paste a GitLab access token under **Integrations**. It needs `api` scope on the projects you want reviewed |
+
+The token is stored per workspace and encrypted, rather than one per deployment,
+because a shared token would read every customer's repositories. GitHub needs no
+equivalent: a GitHub App mints its own short-lived token per installation, which
+is why that path asks you for nothing.
+
+### What is different on GitLab, and how you are told
+
+Cavix says what it cannot do rather than quietly doing less.
+
+| | GitHub | GitLab |
+|---|---|---|
+| Status row | A check run, requirable under branch protection | A **commit status** named `Cavix Review`, requirable the same way |
+| Acknowledgment | A reaction on your comment | An award emoji on your note |
+| Blocking a merge | `Request changes`, which holds the merge button | **Not possible.** No bot review can hold GitLab's merge button |
+| Clearing a stale review | Dismiss the blocking review, delete inline comments | Delete inline comments. There is no review to dismiss |
+| CI history (Stage 6) | Actions runs, per workflow | Pipelines, which GitLab has one series of per project |
+
+That third row is the one that matters. If you turn blocking on and Cavix is
+reviewing a merge request, the review says so in the verdict callout and points
+at the commit status, which *can* gate a merge. An owner who switched blocking on
+and was never told it did not happen would believe there is a gate in front of
+their default branch that does not exist, and that is a worse failure than the
+missing feature.
+
+Inline comments are posted one discussion at a time, because GitLab has no
+atomic review object. If GitLab refuses an anchor (the line moved, the diff is
+stale), that finding stays in the summary and only its anchor is lost.
 
 ## Quick start
 
@@ -505,6 +548,9 @@ likely to touch:
 | `CAVIX_CI_TELEMETRY` | on | Set to `off` to stop reading CI history and warning about pipelines that are getting slower |
 | `CAVIX_VERIFY` | on | Set to `off` to post findings without reproducing them in a sandbox first |
 | `CAVIX_BOT_HANDLE` | `cavixcode` | The handle people type to trigger a command |
+| `CAVIX_GITLAB` | on | Set to `off` to stop reviewing GitLab merge requests |
+| `CAVIX_GITLAB_URL` | `https://gitlab.com` | Your self-managed GitLab instance |
+| `CAVIX_GITLAB_WEBHOOK_SECRET` | none | On the **edge**. The token you set on the GitLab project hook. Without it, GitLab deliveries are rejected |
 
 See [SETUP_KEYS.md](SETUP_KEYS.md) for how to get each credential, and
 [GUIDE.md](GUIDE.md) §8B for the full production install walkthrough.
@@ -526,6 +572,38 @@ Cavix is built to run on your infrastructure, including with no internet access.
 
 Run `npm run airgap-demo` to watch it prove no egress, validate an offline
 licence and verify that nothing was retained.
+
+### Zero retention, per review
+
+Every review that verifies a finding provisions a sandbox and destroys it. Cavix
+then checks that the destruction actually happened and records what it found, on
+the review, where you can retrieve it later:
+
+```
+Zero retention   proven · 3 sandboxes
+3 of 3 sandboxes verified destroyed after this review. No customer code remains.
+  purged · docker · the container is absent from the Docker daemon, and its
+                    workspace was a tmpfs that cannot outlive it
+```
+
+`GET /api/reviews/:id/retention` returns the same artefact months later, which is
+what a security review actually asks for.
+
+Read the verdict carefully, because it is deliberately not always "proven":
+
+| Verdict | Means |
+|---|---|
+| proven | Every sandbox was checked and every check passed |
+| partial | Some sandboxes were checked; the rest ran on a backend this deployment cannot inspect after teardown |
+| unverified | No sandbox was provisioned, or no check could run |
+| violated | A check found something still there. Recorded, logged, and not hidden |
+
+A backend Cavix cannot inspect after teardown reports `unverifiable` rather than
+clean. "We could not check" and "we checked and it was gone" are different
+claims, and a proof that merges them is a slogan. The record itself carries
+counts, backend names and a verdict, and no path, file name, commit or code: a
+retention proof that retained a workspace path would be the problem it claims to
+have solved.
 
 ---
 

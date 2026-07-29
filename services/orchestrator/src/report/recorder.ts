@@ -17,6 +17,7 @@
 //     the payload.
 
 import type { Finding } from "@cavix/core";
+import type { RetentionAttestation } from "@cavix/zero-retention";
 
 export interface RecordReviewInput {
   /** Dashboard workspace that owns the repo. */
@@ -41,6 +42,16 @@ export interface RecordReviewInput {
   durationMs?: number;
   verifiedCount?: number;
   suppressedCount?: number;
+  /**
+   * Stage 13. Proof that every sandbox this review provisioned is gone.
+   *
+   * Safe to send by construction: it carries counts, backend names, a verdict
+   * and sentences Cavix wrote, and no path, file name, commit or code. That is
+   * checked by a test rather than left to reviewer discipline, because an
+   * artefact that quietly starts carrying a workspace path is a retention
+   * problem that would sit in a database for years before anyone noticed.
+   */
+  retention?: RetentionAttestation;
 }
 
 export type ReviewRecorder = (input: RecordReviewInput) => Promise<boolean>;
@@ -116,6 +127,7 @@ export function makeReviewRecorder(opts: RecorderOptions): ReviewRecorder {
       ...(typeof input.durationMs === "number" ? { durationMs: input.durationMs } : {}),
       ...(typeof input.verifiedCount === "number" ? { verifiedCount: input.verifiedCount } : {}),
       ...(typeof input.suppressedCount === "number" ? { suppressedCount: input.suppressedCount } : {}),
+      ...(input.retention ? { retention: input.retention } : {}),
     });
 
     let lastProblem = "";

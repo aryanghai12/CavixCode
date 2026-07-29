@@ -10,9 +10,24 @@ package canonical
 // instead of silently mis-parsing.
 const SchemaVersion = "1"
 
+// Platform values. The orchestrator picks its client from this.
+const (
+	PlatformGitHub = "github"
+	PlatformGitLab = "gitlab"
+)
+
 // ReviewJob is the canonical unit of work that flows edge → queue → orchestrator.
 type ReviewJob struct {
 	SchemaVersion string `json:"schema_version"`
+
+	// Platform names the code host this job came from: "github" or "gitlab".
+	//
+	// Omitted on the wire when it is GitHub, and read as GitHub when absent, so
+	// jobs already sitting on the stream from a previous deploy still run. That
+	// back-compatibility is the whole reason this did not force a schema bump: a
+	// version change would have made every queued job a poison message the
+	// moment the new orchestrator started.
+	Platform string `json:"platform,omitempty"`
 
 	// IdempotencyKey deduplicates logically-identical work. Two deliveries that
 	// describe the same (repo, PR, action, head commit) collapse to one job.

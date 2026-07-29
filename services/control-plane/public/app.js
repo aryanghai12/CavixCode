@@ -169,6 +169,35 @@
     return new Date(iso).toLocaleDateString();
   };
 
+  /**
+   * Stage 13, on the review card.
+   *
+   * Says what was MEASURED, not that all is well. "Zero retention: yes" is a
+   * claim and a security review will ask what backs it, so the row names the
+   * sandboxes, the backend and the check that ran, and an auditor can expand it
+   * months later. A review with no attestation renders nothing rather than an
+   * implied pass.
+   */
+  function retentionRow(a) {
+    if (!a || typeof a !== "object") return "";
+    const marks = { proven: ["⬢", "var(--green)"], partial: ["▲", "var(--amber, #C99A2E)"], unverified: ["▫", "var(--text-dim)"], violated: ["◆", "var(--red)"] };
+    const [mark, colour] = marks[a.verdict] || marks.unverified;
+    const checks = (a.checks || [])
+      .map((c) => `<div class="t-faint" style="margin-top:4px">${esc(c.status)} · ${esc(c.backend)} · ${esc(c.check)}</div>`)
+      .join("");
+    return `<details class="finding" style="display:block">
+      <summary style="cursor:pointer;display:flex;align-items:center;gap:10px">
+        <b style="color:${colour}">${mark}</b>
+        <span><b>Zero retention</b> <span class="t-faint">${esc(a.verdict)} · ${Number(a.sandboxes) || 0} sandbox${Number(a.sandboxes) === 1 ? "" : "es"}</span></span>
+      </summary>
+      <div style="padding:10px 0 0 28px">
+        <div class="sr-desc">${esc(a.explain || "")}</div>
+        ${checks}
+        <div class="t-faint" style="margin-top:8px">Recorded ${esc(new Date(a.at).toLocaleString())}. This record names no file, path or code.</div>
+      </div>
+    </details>`;
+  }
+
   async function renderReviews() {
     const reviews = await api(`/api/reviews?org=${encodeURIComponent(org)}`);
     if (!reviews.length) {
@@ -225,7 +254,7 @@
             <div class="r-meta">${esc(meta)}</div>
           </div>
           ${r.url ? `<a class="btn btn-soft btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open PR</a>` : `<span class="badge">${esc(new Date(r.createdAt).toLocaleDateString())}</span>`}
-        </div>${bodyHtml}
+        </div>${bodyHtml}${retentionRow(r.retention)}
       </div>`;
     }).join("");
   }
@@ -983,6 +1012,9 @@
     // If status itself fails, say "not connected" rather than claiming a demo
     // connection that does not exist.
     const gh = await api(`/api/github/status`).catch(() => ({ connected: false, demo: false }));
+    // Same posture: if the status call fails, say "not connected" rather than
+    // implying a connection that may not exist.
+    const gl = await api(`/api/orgs/${encodeURIComponent(org)}/gitlab-token`).catch(() => ({ connected: false }));
     const row = (mono, name, desc, state, action) => `<div class="repo-row"><div class="mono-badge">${esc(mono)}</div><div class="r-main"><div class="r-name">${esc(name)}</div><div class="r-desc">${esc(desc)}</div></div>${state}${action || ""}</div>`;
     const connected = `<span class="badge badge-verified">connected</span>`;
     const soon = `<span class="badge">soon</span>`;
@@ -1001,7 +1033,15 @@
             gh.demo ? `<span class="badge">demo data</span>` : gh.connected ? connected : soon,
             gh.connected && !gh.demo ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`,
           )}
-          ${row("GL", "GitLab", "Merge-request reviews (adapter ready)", soon)}
+          ${row(
+            "GL",
+            "GitLab",
+            gl.connected
+              ? "Connected. Merge requests on gitlab.com and self-managed are reviewed."
+              : "Merge-request reviews, gitlab.com or self-managed. Needs an access token with api scope.",
+            gl.connected ? connected : `<span class="badge">not connected</span>`,
+            `<button class="btn btn-soft btn-sm" id="glConnect">${gl.connected ? "Replace" : "Connect"}</button>`,
+          )}
           ${row("BB", "Bitbucket", "PR reviews incl. Server (adapter ready)", soon)}
           ${row("AZ", "Azure DevOps", "PR reviews (adapter ready)", soon)}
         </div>
@@ -1014,6 +1054,28 @@
           ${row("LN", "Linear", "Link PRs to Linear tickets", soon)}
         </div>
       </div>`;
+
+    $("glConnect")?.addEventListener("click", async () => {
+      // A token, not an OAuth flow. GitLab's OAuth issues a USER token that
+      // expires and that reviews would then post under a human's name; a project
+      // or group access token belongs to the project and outlives whoever set it
+      // up, which is what a bot needs.
+      const token = prompt(
+        "Paste a GitLab access token with `api` scope.\n\nA project or group access token is best: it belongs to the project rather than to you, so reviews keep working after you leave.",
+      );
+      if (token === null) return;
+      if (!token.trim()) return toast("No token entered");
+      try {
+        await api(`/api/orgs/${encodeURIComponent(org)}/gitlab-token`, {
+          method: "POST",
+          body: JSON.stringify({ token: token.trim() }),
+        });
+        toast("GitLab connected");
+        renderIntegrations();
+      } catch (e) {
+        toast(e.message);
+      }
+    });
   }
 
   // ---------- ADMIN (founder / core team only) ----------

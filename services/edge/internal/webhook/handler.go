@@ -25,12 +25,13 @@ const enqueueTimeout = 80 * time.Millisecond
 // ACK fast. It depends only on ports (queue.Producer, dedupe.Store), so tests
 // run with in-memory fakes and no infrastructure.
 type Handler struct {
-	secret     string
-	queue      queue.Producer
-	dedupe     dedupe.Store
-	log        *slog.Logger
-	botHandle  string          // comma-separated mention handles, e.g. "cavixcode,cavix"
-	allowedCmd map[string]bool // author_associations allowed to run commands
+	secret      string
+	gitlabToken string
+	queue       queue.Producer
+	dedupe      dedupe.Store
+	log         *slog.Logger
+	botHandle   string          // comma-separated mention handles, e.g. "cavixcode,cavix"
+	allowedCmd  map[string]bool // author_associations allowed to run commands
 }
 
 // NewHandler wires the edge handler. botHandle is the GitHub App's mention handle,
@@ -41,6 +42,23 @@ func NewHandler(secret string, q queue.Producer, d dedupe.Store, log *slog.Logge
 		botHandle = "cavixcode,cavix"
 	}
 	return &Handler{secret: secret, queue: q, dedupe: d, log: log, botHandle: botHandle, allowedCmd: DefaultAllowedAssociations}
+}
+
+// WithGitLab enables GitLab ingestion on the SAME endpoint, authenticated by its
+// own shared secret.
+//
+// One endpoint rather than two, because the two hosts are already distinguished
+// unambiguously by their headers: GitHub sends X-GitHub-Event and GitLab sends
+// X-Gitlab-Event, and a request carrying neither is rejected as it always was. A
+// second listener would have meant a second URL for operators to configure, a
+// second health check, and two places for the dedupe window to disagree.
+//
+// The secrets stay separate on purpose. They are configured on different systems
+// by different people, and sharing one would mean a GitLab project hook could
+// forge a GitHub delivery.
+func (h *Handler) WithGitLab(token string) *Handler {
+	h.gitlabToken = token
+	return h
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +74,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.log.Warn("read body failed", "err", err.Error())
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	// 1b. GitLab arrives on the same endpoint and is told apart by its own
+	// header, before anything GitHub-shaped is looked at.
+	if gl := r.Header.Get(GitLabEventHeader); gl != "" {
+		h.serveGitLab(w, r, start, gl, body)
 		return
 	}
 
@@ -117,6 +142,55 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"unsupported_event"}`)
 	}
+}
+
+// serveGitLab handles a Merge Request or Note hook. Same shape as the GitHub
+// path: authenticate first, normalize into the canonical job, dedupe, enqueue.
+//
+// Note the ONE deliberate difference in authorization. GitHub tells us the
+// commenter's association with the repository, so the edge can refuse a command
+// from a passer-by before any work is queued. GitLab sends no such field, so
+// there is nothing here to check and the job is marked GITLAB_UNVERIFIED and
+// enqueued for the orchestrator to authorize against the API. Guessing here
+// would mean either turning away legitimate maintainers or letting anyone on the
+// internet spend a customer's model budget, and neither is a guess worth making.
+func (h *Handler) serveGitLab(w http.ResponseWriter, r *http.Request, start time.Time, event string, body []byte) {
+	if h.gitlabToken == "" {
+		h.log.Warn("gitlab webhook received but no gitlab secret is configured", "event", event)
+		http.Error(w, "gitlab ingestion is not enabled", http.StatusUnauthorized)
+		return
+	}
+	if !VerifyGitLabToken(h.gitlabToken, r.Header.Get(GitLabTokenHeader)) {
+		h.log.Warn("gitlab token verification failed", "event", event)
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	// GitLab has no delivery id header, so the event UUID is used when present
+	// and the idempotency key carries the weight either way.
+	delivery := r.Header.Get("X-Gitlab-Event-UUID")
+
+	var job canonical.ReviewJob
+	var err error
+	switch event {
+	case "Merge Request Hook":
+		job, err = NormalizeGitLabMergeRequest(body, delivery)
+	case "Note Hook":
+		job, err = NormalizeGitLabNote(body, delivery, h.botHandle)
+	default:
+		h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"unsupported_event"}`)
+		return
+	}
+	if err != nil {
+		if errors.Is(err, ErrNotTrigger) {
+			h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"non_trigger_action"}`)
+			return
+		}
+		h.log.Warn("gitlab normalize failed", "event", event, "err", err.Error())
+		http.Error(w, "unprocessable payload", http.StatusBadRequest)
+		return
+	}
+	h.enqueue(w, r, start, delivery, job)
 }
 
 // enqueue dedupes, persists, and acks a job (steps 6–7). Command jobs carry a

@@ -1,8 +1,11 @@
 import {
+  FULL_CAPABILITIES,
   REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
-  type GitHubClient,
+  type PlatformCapabilities,
+  type PlatformName,
+  type ReviewPlatform,
   type OwnReview,
   type PullRef,
   type PostedReview,
@@ -38,9 +41,20 @@ export interface FakeGitHubOptions {
    * still posts when the Checks box is unavailable.
    */
   noChecks?: boolean;
+  /**
+   * Pretend to be a platform other than GitHub, with its own capabilities.
+   *
+   * The workflow must behave the same everywhere except where a capability is
+   * genuinely missing, and the only way to prove that offline is to run the
+   * whole path against a client that says it cannot do something.
+   */
+  platform?: PlatformName;
+  capabilities?: PlatformCapabilities;
 }
 
-export class FakeGitHubClient implements GitHubClient {
+export class FakeGitHubClient implements ReviewPlatform {
+  readonly platform: PlatformName;
+  readonly capabilities: PlatformCapabilities;
   private readonly diff: string;
   private readonly headSha: string;
   private readonly title: string;
@@ -83,6 +97,17 @@ export class FakeGitHubClient implements GitHubClient {
     this.noChecks = opts.noChecks === true;
     this.draft = opts.draft === true;
     this.workflowRuns = opts.workflowRuns ?? [];
+    this.platform = opts.platform ?? "github";
+    this.capabilities = opts.capabilities ?? FULL_CAPABILITIES;
+  }
+
+  /**
+   * Who may run a command. Defaults to everyone, matching the GitHub client:
+   * its edge has already refused anyone who should not be here.
+   */
+  commandAuthors: ((username: string) => boolean) | null = null;
+  async commandsAllowed(_ref: PullRef, username: string): Promise<boolean> {
+    return this.commandAuthors ? this.commandAuthors(username) : true;
   }
 
   async fetchPullDiff(_ref: PullRef): Promise<string> {

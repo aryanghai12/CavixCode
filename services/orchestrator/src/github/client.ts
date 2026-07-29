@@ -1,14 +1,91 @@
 import type { ReviewJob } from "@cavix/core";
 
-// The GitHubClient port. The orchestrator talks to GitHub only through this, so
-// the review workflow is decoupled from the transport: the real REST client and
-// the in-process fake are interchangeable, and tests/eval need no network.
+// The ReviewPlatform port. The orchestrator talks to a code host only through
+// this, so the review workflow is decoupled from the transport: the real REST
+// clients, and the in-process fake, are interchangeable and tests need no
+// network.
+//
+// WHY THIS IS ONE INTERFACE AND NOT FIVE
+//
+// The port grew up as `GitHubClient` and picked up check runs, reactions, review
+// dismissal, inline-comment deletion and tree listing, none of which mean the
+// same thing on GitLab, Bitbucket or Azure DevOps. The obvious fix is to carve
+// it into a small core plus optional methods, and it is the wrong one: it makes
+// every call site a `?.` with a fallback, and it invites a second, quieter bug
+// where the fallback is silently worse than the real thing.
+//
+// Instead the shape stays whole and the RISKY methods already have a documented
+// "I could not do this" return: `createCheckRun` returns 0, `listTree` and
+// `listWorkflowRuns` return [], `dismissReview` swallows a refusal. Every caller
+// has handled those since long before a second platform existed, because GitHub
+// itself refuses them routinely (a PAT cannot write a check run; a COMMENTED
+// review cannot be dismissed by anyone).
+//
+// So the only thing that was actually missing is a way for the product to SAY
+// which of them are real on the platform it is talking to. That is
+// `capabilities`. Without it a GitLab review would simply be quieter than a
+// GitHub one and nobody would be told why, which is the failure this codebase
+// exists to avoid.
+
+/** Which code host a client speaks to. */
+export type PlatformName = "github" | "gitlab" | "bitbucket" | "azure-devops";
+
+/**
+ * What this platform can actually do, as opposed to what the interface permits.
+ *
+ * Each flag is false where the platform has no equivalent concept, not merely
+ * where this deployment lacks a permission: a GitHub App without `checks: write`
+ * still reports `checkRuns: true`, because the feature exists and the operator
+ * can grant it. The review says so on the pull request either way, so a reader
+ * never has to wonder whether a missing section is a bug.
+ */
+export interface PlatformCapabilities {
+  /**
+   * A status row in the merge request's own checks UI, which an org can make
+   * required. GitHub has check runs; GitLab has commit statuses, which appear in
+   * the pipeline widget and can gate a merge but are not the same object.
+   */
+  checkRuns: boolean;
+  /** An emoji acknowledgment on the comment that triggered the job. */
+  reactions: boolean;
+  /**
+   * A review that BLOCKS the merge and can later be dismissed. GitHub has
+   * CHANGES_REQUESTED. GitLab has approvals and pipeline status, and no concept
+   * of a bot review holding the merge button that a human can then dismiss, so
+   * blocking there has to be expressed some other way or not claimed at all.
+   */
+  blockingReview: boolean;
+  /** Deleting our own inline comments, so a re-review does not stack. */
+  deleteInlineComments: boolean;
+  /** Listing every path in the repository at a commit. Stage 5 needs it. */
+  treeListing: boolean;
+  /** Reading completed CI runs on a branch. Stage 6's only data source. */
+  ciHistory: boolean;
+}
+
+/** Everything present, which is GitHub. The baseline the product was built on. */
+export const FULL_CAPABILITIES: PlatformCapabilities = {
+  checkRuns: true,
+  reactions: true,
+  blockingReview: true,
+  deleteInlineComments: true,
+  treeListing: true,
+  ciHistory: true,
+};
 
 export interface PullRef {
+  /**
+   * The namespace that owns the repository: a GitHub owner, or a GitLab group
+   * path which may itself be nested ("group/subgroup").
+   */
   owner: string;
   repo: string;
   number: number;
   headSha: string;
+  /**
+   * GitHub App installation, used to mint a short-lived token. 0 on every other
+   * platform, which authenticate with a token held per workspace instead.
+   */
   installationId: number;
 }
 
@@ -59,6 +136,17 @@ export interface PostedReview {
  * comment as nothing, so no reader ever sees it.
  */
 export const REVIEW_MARKER = "<!-- cavix:review -->";
+
+/**
+ * The same idea on an INLINE comment body.
+ *
+ * GitHub does not need it: a review comment carries `pull_request_review_id`, so
+ * our own inline comments are found by asking which review they belong to. No
+ * other platform has a review to belong to. GitLab's anchored notes are just
+ * notes, so the only durable way to recognise our own is the one that already
+ * works for the summary. Renders as nothing, on every platform.
+ */
+export const INLINE_MARKER = "<!-- cavix:inline -->";
 
 /** One of Cavix's own past reviews on a pull request. */
 export interface OwnReview {
@@ -136,7 +224,12 @@ export interface CheckRunInput {
   detailsUrl?: string;
 }
 
-export interface GitHubClient {
+export interface ReviewPlatform {
+  /** Which code host this client speaks to. Named on the review's footer. */
+  readonly platform: PlatformName;
+  /** What this platform can do. See PlatformCapabilities: it is a promise about
+   * the HOST, not about this deployment's permissions. */
+  readonly capabilities: PlatformCapabilities;
   /** Fetch the PR's unified diff (the `application/vnd.github.diff` media type). */
   fetchPullDiff(ref: PullRef): Promise<string>;
   /** Submit a review with a summary and inline comments. */
@@ -206,6 +299,22 @@ export interface GitHubClient {
   createCheckRun(ref: PullRef, input: CheckRunInput): Promise<number>;
   /** Move that row on, most often from "in progress" to its final conclusion. */
   updateCheckRun(ref: PullRef, checkRunId: number, input: CheckRunInput): Promise<void>;
+  /**
+   * May this user run Cavix commands on this repository?
+   *
+   * GitHub answers true without a request, and that is correct rather than
+   * lazy: its webhook carries the commenter's association with the repository,
+   * so the EDGE already refused anything below OWNER/MEMBER/COLLABORATOR before
+   * the job was ever queued.
+   *
+   * No other platform sends that. GitLab's note payload has no association
+   * field at all, so without this check any account that can comment on a
+   * merge request could spend a customer's model budget by typing
+   * "@cavixcode review" in a loop. The check therefore lives here, where the
+   * API can actually answer it, and it runs for every command job on every
+   * platform so there is no association string to special-case.
+   */
+  commandsAllowed(ref: PullRef, username: string): Promise<boolean>;
   /** Who are we posting as? Used once at boot to prove the bot has its own identity. */
   whoAmI(): Promise<AuthIdentity>;
 }
@@ -226,10 +335,17 @@ export interface AuthIdentity {
  * it in from getPull() before anything is posted.
  */
 export function refFromJob(job: ReviewJob): PullRef {
-  const [owner, repo] = job.repo.split("/");
+  // Split at the LAST slash, not the first.
+  //
+  // On GitHub a full name has exactly one slash, so this is identical. On GitLab
+  // a project can live in a nested group, and "acme/platform/billing" split at
+  // the first slash gives owner "acme" and repo "platform", silently dropping
+  // the project and pointing every API call at a repository that is not the one
+  // under review. The namespace is everything before the final segment.
+  const cut = job.repo.lastIndexOf("/");
   return {
-    owner: owner ?? "",
-    repo: repo ?? "",
+    owner: cut === -1 ? "" : job.repo.slice(0, cut),
+    repo: cut === -1 ? job.repo : job.repo.slice(cut + 1),
     number: job.pr_number,
     headSha: job.head_sha ?? "",
     installationId: job.installation_id,

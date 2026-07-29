@@ -18,6 +18,7 @@ import {
 import type { OrgTier } from "./store.ts";
 import * as gh from "./github.ts";
 import { compileEnglishRule } from "@cavix/policy";
+import { explainAttestation, verdictOf, type PurgeCheck, type RetentionAttestation } from "@cavix/zero-retention";
 import {
   listAnthropicModels,
   listGoogleModels,
@@ -457,6 +458,28 @@ async function apiRoute(
     });
   }
 
+  // Internal: this workspace's GitLab access token.
+  //
+  // GitHub needs no equivalent, because a GitHub App mints its own short-lived
+  // installation token and the orchestrator holds the private key. GitLab has
+  // nothing like that, so a bot authenticates with a token an owner pasted, and
+  // it is stored per workspace (encrypted) rather than per deployment: one
+  // shared token would read every customer's repositories.
+  im = /^\/api\/internal\/orgs\/([^/]+)\/gitlab-token$/.exec(p);
+  if (m === "GET" && im) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(im[1]);
+    const saved = store.getGitLabToken(org);
+    // 404 rather than 200-with-null: the orchestrator must fail loudly on a
+    // missing credential, not carry on and make an unauthenticated request that
+    // surfaces later as a confusing 401 on somebody's merge request.
+    if (!saved) return void sendJson(res, 404, { error: `no GitLab token saved for "${org}"` });
+    return void sendJson(res, 200, { token: saved });
+  }
+
   // Execution gatekeeper: is this "owner/repo" enabled for review in the dashboard?
   if (m === "GET" && p === "/api/internal/repos/enabled") {
     const token = process.env.CAVIX_INTERNAL_TOKEN;
@@ -641,6 +664,39 @@ async function apiRoute(
     );
   }
 
+  // The workspace's GitLab access token. Owners and admins only: it is a
+  // credential that can read every repository the token's own account can.
+  mm = /^\/api\/orgs\/([^/]+)\/gitlab-token$/.exec(p);
+  if (mm) {
+    const org = decodeURIComponent(mm[1]);
+    const auth = requireOrg(req, res, org, ["owner", "admin"]);
+    if (!auth) return;
+    if (m === "POST") {
+      const body = await readJson(req);
+      const raw = String(body.token ?? "");
+      if (!raw.trim()) return void sendJson(res, 400, { error: "token required" });
+      try {
+        store.setGitLabToken(org, raw);
+        // Never echoed back, not even to the person who just set it. A
+        // fingerprint is enough to confirm which one is stored.
+        return void sendJson(res, 200, { connected: true, fingerprint: fingerprint(raw.trim()) });
+      } catch (err) {
+        return void sendJson(res, 400, { error: (err as Error).message });
+      }
+    }
+    if (m === "DELETE") {
+      store.clearGitLabToken(org);
+      return void sendJson(res, 200, { connected: false });
+    }
+    if (m === "GET") {
+      const saved = store.getGitLabToken(org);
+      return void sendJson(res, 200, {
+        connected: !!saved,
+        ...(saved ? { fingerprint: fingerprint(saved) } : {}),
+      });
+    }
+  }
+
   mm = /^\/api\/orgs\/([^/]+)\/apikey$/.exec(p);
   if (m === "POST" && mm) {
     const org = decodeURIComponent(mm[1]);
@@ -774,6 +830,10 @@ async function apiRoute(
       ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
       ...(typeof body.verifiedCount === "number" ? { verifiedCount: body.verifiedCount } : {}),
       ...(typeof body.suppressedCount === "number" ? { suppressedCount: body.suppressedCount } : {}),
+      // Stage 13. Narrowed rather than trusted: this is retained for years and
+      // shown to a customer's auditor, so anything the orchestrator did not
+      // promise to send is dropped here rather than stored forever.
+      ...(coerceRetention(body.retention) ? { retention: coerceRetention(body.retention)! } : {}),
     });
     return void sendJson(res, 201, record);
   }
@@ -783,7 +843,29 @@ async function apiRoute(
   if (m === "GET" && p === "/api/reviews") {
     const scope = reviewScope(req, url.searchParams.get("org"));
     if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
-    return void sendJson(res, 200, store.listReviews(scope.org));
+    return void sendJson(res, 200, store.listReviews(scope.org).map(withRetentionExplain));
+  }
+
+  // Stage 13 — one review's retention proof, on its own.
+  //
+  // A separate endpoint because a compliance request is not a dashboard visit:
+  // an auditor asks about one review from four months ago and wants the artefact
+  // rather than the findings. Same workspace scoping as the review itself.
+  mm = /^\/api\/reviews\/([^/]+)\/retention$/.exec(p);
+  if (m === "GET" && mm) {
+    const r = store.getReview(mm[1]);
+    if (!r) return void sendJson(res, 404, { error: "not found" });
+    const scope = reviewScope(req, r.org);
+    if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
+    if (!r.retention) {
+      // An honest 404. A review from before this shipped has no proof, and
+      // inventing a "clean" one for it would be the worst possible lie to tell
+      // in exactly the document a regulator reads.
+      return void sendJson(res, 404, {
+        error: "this review predates retention attestation, so none was recorded",
+      });
+    }
+    return void sendJson(res, 200, { ...r.retention, explain: explainAttestation(r.retention) });
   }
 
   mm = /^\/api\/reviews\/([^/]+)$/.exec(p);
@@ -792,7 +874,7 @@ async function apiRoute(
     if (!r) return void sendJson(res, 404, { error: "not found" });
     const scope = reviewScope(req, r.org);
     if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
-    return void sendJson(res, 200, r);
+    return void sendJson(res, 200, withRetentionExplain(r));
   }
 
   // ----- findings & decisions -----
@@ -1010,6 +1092,61 @@ function safeReviewUrl(value: unknown): string | null {
 }
 
 /** Require a valid session whose org matches `org` (and optionally a role). */
+/**
+ * Attach the human sentence to a review's attestation on the way out.
+ *
+ * Derived rather than stored: it is a pure function of the checks, and a stored
+ * copy is a second version of the same claim that can drift from the evidence
+ * underneath it. That drift is exactly what an auditor would catch.
+ */
+function withRetentionExplain<T extends { retention?: RetentionAttestation }>(review: T): T {
+  if (!review.retention) return review;
+  return { ...review, retention: { ...review.retention, explain: explainAttestation(review.retention) } };
+}
+
+/**
+ * Narrow a retention attestation off the wire.
+ *
+ * An allow-list, and deliberately strict, because this record is kept for years
+ * and handed to a customer's auditor. Anything the orchestrator did not promise
+ * to send is dropped rather than stored forever: an artefact whose whole claim
+ * is "we retained nothing" must not become the thing that retained a workspace
+ * path because a future field was passed through without anyone looking.
+ */
+function coerceRetention(value: unknown): RetentionAttestation | null {
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Record<string, unknown>;
+  const org = typeof v.org === "string" ? v.org : "";
+  if (!org) return null;
+
+  const checks: PurgeCheck[] = [];
+  for (const raw of Array.isArray(v.checks) ? v.checks : []) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const c = raw as Record<string, unknown>;
+    const status = c.status;
+    if (status !== "purged" && status !== "residual" && status !== "unverifiable") continue;
+    checks.push({
+      backend: String(c.backend ?? "unknown").slice(0, 40),
+      check: String(c.check ?? "").slice(0, 300),
+      status,
+      ...(typeof c.residualCount === "number" && Number.isFinite(c.residualCount)
+        ? { residualCount: Math.max(0, Math.round(c.residualCount)) }
+        : {}),
+    });
+  }
+
+  // The verdict is RECOMPUTED, never taken from the wire. A caller that could
+  // assert "proven" over a set of checks that do not support it would be able to
+  // manufacture the exact claim this artefact exists to make.
+  return {
+    org,
+    at: typeof v.at === "string" && !Number.isNaN(Date.parse(v.at)) ? v.at : new Date().toISOString(),
+    sandboxes: checks.length,
+    checks,
+    verdict: verdictOf(checks),
+  };
+}
+
 /**
  * A signed-in member of this workspace, or a platform admin, for READ-ONLY
  * workspace data. Any role will do: everyone on a team can look at the reports.
