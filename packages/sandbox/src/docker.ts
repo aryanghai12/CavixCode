@@ -78,16 +78,29 @@ class DockerSandboxInstance implements Sandbox {
   }
 
   async writeFile(relPath: string, content: string): Promise<void> {
-    const target = posixJoin(this.workdir, relPath);
+    const target = this.resolve(relPath);
+    // The path is passed as an ARGUMENT to sh, never spliced into the script.
+    //
+    // It used to be interpolated between single quotes, and the paths reaching
+    // here come from findings, which come from a model reading somebody else's
+    // diff. One apostrophe in a filename closed the quote and the rest of the
+    // path became shell. Inside a read-only, network-less container that is
+    // contained, but it is contained by the container's configuration rather
+    // than by this code, and what it could still corrupt is the verification
+    // itself: a proof that can be steered is not a proof.
     const r = await runDocker(
-      ["exec", "-i", this.id, "sh", "-c", `mkdir -p "$(dirname '${target}')" && cat > '${target}'`],
+      [
+        "exec", "-i", this.id,
+        "sh", "-c", 'mkdir -p "$(dirname "$1")" && cat > "$1"',
+        "sh", target,
+      ],
       { input: content },
     );
     if (r.code !== 0) throw new Error(`docker writeFile failed: ${r.stderr}`);
   }
 
   async readFile(relPath: string): Promise<string> {
-    const r = await runDocker(["exec", this.id, "cat", posixJoin(this.workdir, relPath)]);
+    const r = await runDocker(["exec", this.id, "cat", this.resolve(relPath)]);
     if (r.code !== 0) throw new Error(`docker readFile failed: ${r.stderr}`);
     return r.stdout;
   }
@@ -97,14 +110,31 @@ class DockerSandboxInstance implements Sandbox {
     // else that fails must be reported: verification removes the generated test
     // before running the repo's suite, and a silent failure there means the suite
     // gets judged on a test Cavix wrote.
-    const r = await runDocker(["exec", this.id, "rm", "-f", posixJoin(this.workdir, relPath)]);
+    const r = await runDocker(["exec", this.id, "rm", "-f", this.resolve(relPath)]);
     if (r.code !== 0) throw new Error(`docker removeFile failed: ${r.stderr}`);
+  }
+
+  /**
+   * A path inside the sandbox, refused if it points outside it.
+   *
+   * The same contract the Local backend has enforced since it was written, and
+   * it was missing here. `/work/../../etc/passwd` was handed to the container as
+   * written; the read-only rootfs happened to refuse the write, so the two
+   * backends disagreed about whether a traversal was an error or a silent
+   * no-op. A port whose implementations disagree about that is a port that
+   * cannot be swapped, which is the entire reason it exists.
+   */
+  private resolve(relPath: string): string {
+    return containerPath(this.workdir, relPath);
   }
 
   exec(cmd: string, args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     const envArgs: string[] = [];
     for (const [k, v] of Object.entries(opts.env ?? {})) envArgs.push("-e", `${k}=${v}`);
-    const wd = opts.cwd ? posixJoin(this.workdir, opts.cwd) : this.workdir;
+    // The working directory is confined too. A `cwd` that climbed out would run
+    // the repo's own test command somewhere else in the container, and its exit
+    // code is what the review reports as a proof.
+    const wd = opts.cwd ? containerPath(this.workdir, opts.cwd) : this.workdir;
     return runDocker(["exec", "-w", wd, ...envArgs, this.id, cmd, ...args], {
       timeoutMs: opts.timeoutMs ?? this.defaultTimeout,
     });
@@ -147,4 +177,31 @@ export class DockerSandboxBackend implements SandboxBackend {
 
 function posixJoin(a: string, b: string): string {
   return `${a.replace(/\/$/, "")}/${b.replace(/^\//, "")}`;
+}
+
+/**
+ * Resolve a path inside the container, refusing anything that leaves it.
+ *
+ * Exported so it can be tested without Docker, which is the point: a
+ * confinement check that only runs where a daemon is installed is one nobody
+ * ever watches fail. The Local backend has enforced the same contract since it
+ * was written; this one did not, so the two implementations of one port
+ * disagreed about whether a traversal was an error or a silent no-op.
+ *
+ * The arithmetic is textual on purpose. The target is a POSIX path inside a
+ * Linux container, and the host's `path` module is Windows-flavoured on half the
+ * machines this runs on: `path.resolve("/work", "a")` there is "C:\\work\\a".
+ */
+export function containerPath(workdir: string, relPath: string): string {
+  const parts: string[] = [];
+  for (const segment of posixJoin(workdir, relPath).split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  const abs = `/${parts.join("/")}`;
+  if (abs !== workdir && !abs.startsWith(`${workdir}/`)) {
+    throw new Error(`path escapes sandbox workdir: ${relPath}`);
+  }
+  return abs;
 }

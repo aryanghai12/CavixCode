@@ -18,17 +18,27 @@ import type { GitLabTokenProvider } from "./rest.ts";
 // Cached briefly for the same reason the review config is: a review makes
 // several calls and none of them should each cost a control-plane round trip.
 
-export interface ControlPlaneGitLabTokenOptions {
+/** Every host with no per-install credential, which is every host but GitHub. */
+export type TokenPlatform = "gitlab" | "bitbucket" | "bitbucket-server" | "azure";
+
+const PLATFORM_LABEL: Record<TokenPlatform, string> = {
+  gitlab: "GitLab",
+  bitbucket: "Bitbucket",
+  "bitbucket-server": "Bitbucket Data Center",
+  azure: "Azure DevOps",
+};
+
+export interface ControlPlaneTokenOptions {
   url: string;
   /**
-   * Which platform's token to fetch: "gitlab" or "bitbucket".
+   * Which platform's token to fetch.
    *
    * One fetcher rather than one per platform, because the reasoning is identical
-   * for both (no per-install credential exists, so a workspace's token lives in
-   * the control-plane) and a copy would be a second place for the timeout, the
-   * cache cap and the fail-loud behaviour to drift.
+   * for all of them (no per-install credential exists, so a workspace's token
+   * lives in the control-plane) and a copy would be a second place for the
+   * timeout, the cache cap and the fail-loud behaviour to drift.
    */
-  platform?: "gitlab" | "bitbucket";
+  platform?: TokenPlatform;
   /** Shared secret matching the control-plane's CAVIX_INTERNAL_TOKEN. */
   token: string;
   cacheMs?: number;
@@ -40,14 +50,14 @@ export interface ControlPlaneGitLabTokenOptions {
 /** Cap on cached workspaces, matching the review-config fetcher's. */
 const MAX_CACHED_ORGS = 500;
 
-export function makeControlPlaneGitLabTokens(opts: ControlPlaneGitLabTokenOptions): GitLabTokenProvider {
+export function makeControlPlaneTokens(opts: ControlPlaneTokenOptions): GitLabTokenProvider {
   const base = opts.url.replace(/\/$/, "");
   const doFetch = opts.fetchImpl ?? fetch;
   const cacheMs = opts.cacheMs ?? 60_000;
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const cache = new Map<string, { at: number; token: string }>();
   const platform = opts.platform ?? "gitlab";
-  const label = platform === "gitlab" ? "GitLab" : "Bitbucket";
+  const label = PLATFORM_LABEL[platform];
 
   return {
     async token(org: string): Promise<string> {

@@ -64,6 +64,17 @@ export interface VerifyContext {
    * the caller so it can never cost one.
    */
   onTeardown?: (sandbox: Sandbox) => Promise<void>;
+  /**
+   * Stage 12's other half: category -> where this workspace's own history says
+   * proof is worth spending. See `Verifier.shouldVerify`.
+   *
+   * On the per-review context and not on the Verifier, for exactly the reason
+   * `onTeardown` is: one object is shared by every concurrent review, and a
+   * policy held there would apply one customer's learned behaviour to another
+   * customer's pull request. Absent is the normal state and means the default
+   * gate, which is what every review did before this existed.
+   */
+  verifyByCategory?: Record<string, "always" | "never">;
 }
 
 export const semanticsFor = (finding: Finding): ReproSemantics =>

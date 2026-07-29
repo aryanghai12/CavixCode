@@ -28,7 +28,26 @@ import type { ReviewJob } from "@cavix/core";
 // exists to avoid.
 
 /** Which code host a client speaks to. */
-export type PlatformName = "github" | "gitlab" | "bitbucket" | "azure-devops";
+export type PlatformName = "github" | "gitlab" | "bitbucket" | "bitbucket-server" | "azure-devops";
+
+/**
+ * A file the client could not produce an exact diff for, and why.
+ *
+ * This exists for exactly one platform. Every other host hands over a unified
+ * diff it computed itself; Azure DevOps returns a list of CHANGED PATHS with no
+ * content, so Cavix diffs the two versions of each file locally and a file can
+ * be too large, too rewritten, or binary. The alternative to reporting those is
+ * producing an approximate diff, and an approximate diff does not fail loudly:
+ * it silently anchors findings to lines they do not belong to.
+ *
+ * So the file is left out of the review and NAMED on it. A review that quietly
+ * skipped two files is claiming coverage it does not have.
+ */
+export interface DiffLimitation {
+  path: string;
+  /** One sentence, printed verbatim on the pull request. */
+  reason: string;
+}
 
 /**
  * What this platform can actually do, as opposed to what the interface permits.
@@ -230,8 +249,38 @@ export interface ReviewPlatform {
   /** What this platform can do. See PlatformCapabilities: it is a promise about
    * the HOST, not about this deployment's permissions. */
   readonly capabilities: PlatformCapabilities;
+  /**
+   * The BROWSER root of the instance this client talks to, with no trailing
+   * slash: "https://github.com", "https://gitlab.example.com",
+   * "https://dev.azure.com/acme".
+   *
+   * It is not the API root and the two are routinely different: GitHub's API
+   * lives on api.github.com and its files on github.com, and a GitHub Enterprise
+   * install puts the API under /api/v3 of the same host. This is the one the
+   * poster needs, because every file and line in a review is a link a human
+   * clicks.
+   *
+   * It exists because the poster used to hardcode github.com. Every permalink in
+   * every GitLab and Bitbucket review pointed at a github.com repository that
+   * does not exist, which is worse than no link: a reader who follows it either
+   * gets a 404 or, on a name collision, somebody else's code.
+   */
+  readonly webUrl: string;
   /** Fetch the PR's unified diff (the `application/vnd.github.diff` media type). */
   fetchPullDiff(ref: PullRef): Promise<string>;
+  /**
+   * Files the LAST `fetchPullDiff` for this ref left out, and why.
+   *
+   * Returns [] on every platform that hands over a real diff, which is all of
+   * them but Azure DevOps, so callers need no branch: an empty list means "the
+   * diff is the whole change", which is the ordinary case.
+   *
+   * Synchronous and keyed by ref rather than held on the client, because ONE
+   * client instance serves every review this orchestrator runs concurrently. A
+   * plain field here would report whichever pull request happened to finish
+   * last, which is the shape of a bug this repo has already had once.
+   */
+  diffLimitations(ref: PullRef): DiffLimitation[];
   /** Submit a review with a summary and inline comments. */
   postReview(ref: PullRef, review: ReviewSubmission): Promise<PostedReview>;
   /** Read the PR's current head/base/title — used when a command job has no commit. */

@@ -201,6 +201,69 @@ test("an empty history is a valid answer, not a crash", () => {
   assert.equal(out.active, false);
   assert.equal(out.sampleCount, 0);
   assert.deepEqual(out.thresholdByCategory, {});
+  assert.deepEqual(out.verifyByCategory, {});
   assert.deepEqual(out.categories, []);
   assert.equal(out.decisionsUntilActive, 20);
+});
+
+// ---------------------------------------------------------------------------
+// The Stage 10 half: where the same history moves the SANDBOX
+// ---------------------------------------------------------------------------
+//
+// A threshold decides what a model is trusted to SAY. This decides where proof
+// is worth SPENDING, and the two answer different questions about the same
+// decisions. The interesting property is that the case where a threshold is
+// useless is exactly the case where execution is not.
+
+test("a category no bar can separate is proved by execution instead", () => {
+  // The same fixture as "left alone" above. Stage 9 correctly refuses to move
+  // the bar, which is precisely why Stage 10 has to step in: what tells a real
+  // finding from a plausible one here is whether it reproduces.
+  const decisions = [
+    ...ballast(),
+    ...rows(10, { category: "correctness", accepted: false, confidence: 0.7 }),
+    ...rows(10, { category: "correctness", accepted: true, confidence: 0.7 }),
+  ];
+  const out = cal(decisions);
+  assert.equal(out.thresholdByCategory.correctness, undefined, "no bar moved");
+  assert.equal(out.verifyByCategory.correctness, "always", "so the sandbox does");
+  assert.match(forCategory(decisions, "correctness")!.verifyReason!, /proves this category by execution/);
+});
+
+test("a category the team accepts outright stops paying for proof", () => {
+  const decisions = [...ballast(), ...rows(12, { category: "style", accepted: true, confidence: 0.8 })];
+  const out = cal(decisions);
+  assert.equal(out.verifyByCategory.style, "never");
+  assert.match(forCategory(decisions, "style")!.verifyReason!, /changes nothing you were going to do/);
+  // ...and the sentence has to name the exception, because the exception is what
+  // keeps the product's own claim intact.
+  assert.match(forCategory(decisions, "style")!.verifyReason!, /critical, high or security/);
+});
+
+test("a category with a measured bar has no opinion about proof", () => {
+  // Separation exists, so the threshold is the right instrument and there is
+  // nothing to say about the sandbox. An absent entry and an entry that happens
+  // to match the default mean different things to a reader.
+  const decisions = [
+    ...ballast(),
+    ...rows(12, { category: "maintainability", accepted: false, confidence: 0.62 }),
+    ...rows(10, { category: "maintainability", accepted: true, confidence: 0.88 }),
+  ];
+  const out = cal(decisions);
+  assert.ok(out.thresholdByCategory.maintainability !== undefined);
+  assert.equal(out.verifyByCategory.maintainability, undefined);
+});
+
+test("a workspace below the minimum spends no sandbox differently either", () => {
+  // Same guard as the threshold half. Ten decisions is not a mandate to change
+  // where a customer's money goes.
+  const decisions = rows(12, { category: "correctness", accepted: false, confidence: 0.7 }).concat(
+    rows(12, { category: "correctness", accepted: true, confidence: 0.7 }),
+  );
+  const out = calibrate(decisions, { now: NOW, minOrgDecisions: 100 });
+  assert.equal(out.active, false);
+  assert.deepEqual(out.verifyByCategory, {}, "nothing reaches Stage 10 yet");
+  // The per-category work still happened, so the Learnings page can show what
+  // WOULD apply, exactly as it does for a bar that has not gone live.
+  assert.equal(out.categories.find((c) => c.category === "correctness")!.verify, "always");
 });

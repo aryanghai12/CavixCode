@@ -130,6 +130,28 @@ export interface StoredFinding {
 
 export type OrgTier = "free" | "paid";
 
+/**
+ * Hosts a workspace connects with a token it pasted.
+ *
+ * GitHub is absent on purpose: a GitHub App mints its own short-lived
+ * installation token per repository, so there is no secret to hold. Every other
+ * host has no equivalent, and its token is held per WORKSPACE rather than per
+ * deployment, because one shared token would read every customer's repositories.
+ */
+export type TokenPlatform = "gitlab" | "bitbucket" | "bitbucket-server" | "azure";
+
+/** The set above, for narrowing an untrusted path segment. */
+export const TOKEN_PLATFORMS: readonly TokenPlatform[] = [
+  "gitlab",
+  "bitbucket",
+  "bitbucket-server",
+  "azure",
+];
+
+export function isTokenPlatform(v: string): v is TokenPlatform {
+  return (TOKEN_PLATFORMS as readonly string[]).includes(v);
+}
+
 export interface Org {
   id: string;
   name: string;
@@ -422,6 +444,17 @@ export interface Store {
   setBitbucketToken(org: string, rawToken: string): void;
   getBitbucketToken(org: string): string | null;
   clearBitbucketToken(org: string): void;
+  /**
+   * The same again, for any host with no per-install credential.
+   *
+   * GitLab and Bitbucket Cloud keep their own named methods because their
+   * storage predates this and is already in every persisted snapshot; this
+   * routes to them so there is ONE code path and one encryption call site, and
+   * a fifth platform costs a string rather than three more methods.
+   */
+  setPlatformToken(platform: TokenPlatform, org: string, rawToken: string): void;
+  getPlatformToken(platform: TokenPlatform, org: string): string | null;
+  clearPlatformToken(platform: TokenPlatform, org: string): void;
 
   // --- dashboard ---
   stats(org: string): OrgStats;
@@ -473,6 +506,8 @@ export interface StoreSnapshot {
   /** Optional so a snapshot written before GitLab support still restores. */
   gitlabTokens?: Array<[string, string]>;
   bitbucketTokens?: Array<[string, string]>;
+  /** "platform:org" -> blob, for hosts added after those two. See platformTokens. */
+  platformTokens?: Array<[string, string]>;
   /** Optional so a snapshot written before these existed still restores. */
   mutes?: MuteEvent[];
   /** Stage 5's cross-repo contract graph, per workspace. See `orgGraph`. */
@@ -524,6 +559,14 @@ export class InMemoryStore implements Store {
   private gitlabTokens = new Map<string, string>();
   /** org -> encrypted Bitbucket access token. See setBitbucketToken. */
   private bitbucketTokens = new Map<string, string>();
+  /**
+   * "platform:org" -> encrypted access token, for every host added after the two
+   * above. Keyed rather than one map per platform, so the next one costs a
+   * string. GitLab and Bitbucket Cloud keep their own maps because those are
+   * already in every persisted snapshot and a migration would silently
+   * disconnect every workspace that had connected one.
+   */
+  private platformTokens = new Map<string, string>();
   private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
   private mutes: MuteEvent[] = [];
   private orgGraphs = new Map<string, StoredOrgGraph>();
@@ -955,6 +998,30 @@ export class InMemoryStore implements Store {
     this.bitbucketTokens.delete(org);
   }
 
+  setPlatformToken(platform: TokenPlatform, org: string, rawToken: string): void {
+    const t = rawToken.trim();
+    if (!t) throw new Error(`${platform} token is empty`);
+    if (platform === "gitlab") return void this.gitlabTokens.set(org, encryptSecret(t));
+    if (platform === "bitbucket") return void this.bitbucketTokens.set(org, encryptSecret(t));
+    this.platformTokens.set(`${platform}:${org}`, encryptSecret(t));
+  }
+
+  getPlatformToken(platform: TokenPlatform, org: string): string | null {
+    if (platform === "gitlab") return this.getGitLabToken(org);
+    if (platform === "bitbucket") return this.getBitbucketToken(org);
+    const blob = this.platformTokens.get(`${platform}:${org}`);
+    // Null when the blob will not decrypt, which in practice means
+    // CAVIX_SECRET_KEY changed between deploys. Treated as "no credential" so
+    // the owner is asked to re-paste it.
+    return blob ? decryptSecret(blob) : null;
+  }
+
+  clearPlatformToken(platform: TokenPlatform, org: string): void {
+    if (platform === "gitlab") return this.clearGitLabToken(org);
+    if (platform === "bitbucket") return this.clearBitbucketToken(org);
+    this.platformTokens.delete(`${platform}:${org}`);
+  }
+
   // ---------- dashboard stats ----------
 
   stats(org: string): OrgStats {
@@ -1311,6 +1378,7 @@ export class InMemoryStore implements Store {
       oauthTokens: [...this.oauthTokens.entries()],
       gitlabTokens: [...this.gitlabTokens.entries()],
       bitbucketTokens: [...this.bitbucketTokens.entries()],
+      platformTokens: [...this.platformTokens.entries()],
       mutes: this.mutes,
       orgGraphs: [...this.orgGraphs.entries()],
       ciRuns: [...this.ciRuns.entries()],
@@ -1334,6 +1402,7 @@ export class InMemoryStore implements Store {
     this.oauthTokens = new Map(s.oauthTokens ?? []);
     this.gitlabTokens = new Map(s.gitlabTokens ?? []);
     this.bitbucketTokens = new Map(s.bitbucketTokens ?? []);
+    this.platformTokens = new Map(s.platformTokens ?? []);
     // Both default to empty rather than being left alone, so a restore replaces
     // every field. Skipping them left the previous process's mutes and graph
     // sitting in memory beside freshly loaded orgs they no longer belonged to.

@@ -39,6 +39,15 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
   let current: DiffFile | null = null;
   let hunk: DiffHunk | null = null;
   let newLineNo = 0;
+  /**
+   * The `--- a/...` side of the file currently being parsed.
+   *
+   * Kept because a DELETED file has no new side to take a path from: git writes
+   * `+++ /dev/null`, so reading only the `+++` line left `path` empty. Everything
+   * downstream that names a file then had nothing to print, and `subsystem("")`
+   * counted every deletion as a change at the repository root.
+   */
+  let oldPath = "";
 
   const flushFile = () => {
     if (current) files.push(current);
@@ -49,11 +58,13 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
       flushFile();
       current = { path: "", deleted: false, hunks: [] };
       hunk = null;
+      oldPath = "";
       continue;
     }
     if (raw.startsWith("--- ")) {
-      // old path line; ignored except to ensure we're inside a file block
       if (!current) current = { path: "", deleted: false, hunks: [] };
+      const p = raw.slice(4).trim().split("\t")[0];
+      oldPath = p === "/dev/null" ? "" : stripPrefix(p);
       continue;
     }
     if (raw.startsWith("+++ ")) {
@@ -61,6 +72,9 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
       const p = raw.slice(4).trim().split("\t")[0];
       if (p === "/dev/null") {
         current.deleted = true;
+        // A deletion is still a change to a named file, and the name is the only
+        // one it has left.
+        current.path = oldPath;
       } else {
         current.path = stripPrefix(p);
       }

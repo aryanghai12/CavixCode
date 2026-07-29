@@ -3,6 +3,7 @@ import {
   REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
+  type DiffLimitation,
   type OwnReview,
   type PlatformCapabilities,
   type PostedReview,
@@ -108,6 +109,8 @@ function toPullState(s: string | undefined): string {
 export class RestGitLabClient implements ReviewPlatform {
   readonly platform = "gitlab" as const;
   readonly capabilities = GITLAB_CAPABILITIES;
+  /** Same host as the API on GitLab: /api/v4 hangs off the instance root. */
+  readonly webUrl: string;
 
   private readonly tokens: GitLabTokenProvider;
   private readonly root: string;
@@ -128,6 +131,7 @@ export class RestGitLabClient implements ReviewPlatform {
     this.tokens = opts.tokens;
     this.root = (opts.baseUrl ?? "https://gitlab.com").replace(/\/$/, "");
     this.api = `${this.root}/api/v4`;
+    this.webUrl = this.root;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.logger = opts.logger;
   }
@@ -222,6 +226,17 @@ export class RestGitLabClient implements ReviewPlatform {
       out.push(c.diff.replace(/\n$/, ""));
     }
     return out.length > 0 ? `${out.join("\n")}\n` : "";
+  }
+
+  /**
+   * GitLab hands over every changed file's diff, so nothing is left out.
+   *
+   * The per-file `diff` strings are reassembled into a unified diff above, but
+   * they are GitLab's own hunks: nothing here is computed, so nothing here can
+   * be refused.
+   */
+  diffLimitations(): DiffLimitation[] {
+    return [];
   }
 
   async getPull(ref: PullRef): Promise<PullMeta> {

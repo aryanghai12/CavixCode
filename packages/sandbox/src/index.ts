@@ -1,7 +1,7 @@
 export * from "./sandbox.ts";
 export { LocalSandboxBackend } from "./local.ts";
 export { FakeSandboxBackend, type ExecResponder } from "./fake.ts";
-export { DockerSandboxBackend, dockerAvailable } from "./docker.ts";
+export { DockerSandboxBackend, dockerAvailable, containerPath } from "./docker.ts";
 export { CloudflareSandboxBackend, type CloudflareSandboxOptions } from "./cloudflare.ts";
 export { shallowClone, type ShallowCloneOptions } from "./clone.ts";
 

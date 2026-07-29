@@ -10,9 +10,9 @@ never gets posted. What lands on your pull request is a review with receipts.
 
 It runs on your own servers if you want it to (including with no internet access
 at all), and uses your own AI provider key so your code never touches ours.
-It reviews **GitHub pull requests, GitLab merge requests** (including
-self-managed) **and Bitbucket Cloud pull requests**. Azure DevOps is not
-supported yet.
+It reviews **GitHub pull requests, GitLab merge requests, Bitbucket pull
+requests** (Cloud and Data Center) **and Azure DevOps pull requests**. Every one
+of those includes the self-managed and on-premises editions.
 
 ---
 
@@ -292,8 +292,8 @@ dishonest claim in a product whose whole pitch is that it does not make those.
 | 8 | Multi-agent ensemble with model routing | yes (7 agents) | **yes** |
 | 9 | Adjudication: dedupe, vote, calibrate, threshold | yes | **yes** |
 | 10 | Execution-grounded verification: reproduce, PoC, fix-and-run | yes | **yes** |
-| 11 | Synthesis and posting | yes | **yes**, GitHub, GitLab and Bitbucket Cloud |
-| 12 | Feedback and learning loop | yes | **yes**, per-category confidence bars from your own decisions |
+| 11 | Synthesis and posting | yes | **yes**, GitHub, GitLab, Bitbucket (Cloud and Data Center) and Azure DevOps |
+| 12 | Feedback and learning loop | yes | **yes**, per-category confidence bars AND where proof is spent, both from your own decisions |
 | 13 | Teardown, zero retention, observability, cost accounting | yes | **yes**, teardown verified per review, plus cost accounting |
 
 Stages 3 through 9 are composed by [packages/pipeline/](packages/pipeline/) and
@@ -552,6 +552,10 @@ likely to touch:
 | `CAVIX_GITLAB_WEBHOOK_SECRET` | none | On the **edge**. The token you set on the GitLab project hook. Without it, GitLab deliveries are rejected |
 | `CAVIX_BITBUCKET` | on | Set to `off` to stop reviewing Bitbucket Cloud pull requests |
 | `CAVIX_BITBUCKET_WEBHOOK_SECRET` | none | On the **edge**. The secret on your Bitbucket webhook. Without it, Bitbucket deliveries are rejected |
+| `CAVIX_BITBUCKET_SERVER_URL` | none | Your self-hosted Bitbucket Data Center root. Setting it is what turns Data Center on: there is no default host |
+| `CAVIX_AZURE` | on | Set to `off` to stop reviewing Azure DevOps pull requests |
+| `CAVIX_AZURE_URL` | `https://dev.azure.com` | Your on-premises Azure DevOps Server collection |
+| `CAVIX_AZURE_WEBHOOK_SECRET` | none | On the **edge**. The **password** half of the Basic credential on your Azure service hook, because Azure web hooks sign nothing. Without it, Azure deliveries are rejected |
 | `CAVIX_METRICS` | on | Set to `off` to disable `/metrics` on both services |
 
 See [SETUP_KEYS.md](SETUP_KEYS.md) for how to get each credential, and
@@ -578,6 +582,82 @@ reactions (so no acknowledgment emoji), and no repository tree listing, because
 Bitbucket pages `/src` one directory at a time and mapping a repository would
 spend your rate limit before a review is posted. Changes-requested IS real here
 and reversible, so blocking works as it does on GitHub.
+
+---
+
+## Bitbucket Data Center (self-hosted Bitbucket Server)
+
+A **different product** from Bitbucket Cloud, sharing only the name: a different
+REST surface (`/rest/api/1.0/projects/KEY/repos/slug`), different payload shapes,
+different comment anchors, and optimistic locking on every write. So it is a
+separate client, not a base URL.
+
+| Where | What |
+|---|---|
+| Orchestrator | `CAVIX_BITBUCKET_SERVER_URL` = your instance root. There is no default: every install has its own |
+| Dashboard | Paste an HTTP access token with repository **write** under **Integrations** |
+
+It can do one thing Cloud cannot: list a repository tree cheaply, so Stage 5's
+cross-repo contract discovery works here. It cannot do one thing Cloud can:
+report CI history, because Data Center has no built-in pipeline product and the
+build-status API records a state and a URL with **no duration**. Stage 6 measures
+a duration trend, so `ciHistory` is false rather than reporting plausible zeros.
+Chat commands are refused for the same reason as on Cloud.
+
+---
+
+## Azure DevOps
+
+Same workflow, same output, and the one host where Cavix builds the diff itself.
+
+| Where | What |
+|---|---|
+| Edge | `CAVIX_AZURE_WEBHOOK_SECRET`, and a **Service Hook** → Web Hooks subscription on **Pull request created** and **Pull request updated**, pointed at the same `/webhook` URL |
+| | In that subscription, set **Basic authentication**: any username, and this secret as the password |
+| Orchestrator | `CAVIX_AZURE_URL` only for an on-premises server. `https://dev.azure.com` is the default |
+| Dashboard | Paste a PAT with **Code (read & write)**, **Pull Request Threads (read & write)** and **Build (read)** under **Integrations** |
+
+**Azure service hooks sign nothing.** HTTP Basic is the only credential they can
+carry, so that is what the edge verifies, in constant time, before it parses a
+byte of the body. It authenticates the SENDER but not the BODY, which is why it
+gets its own secret rather than sharing one with another host.
+
+### The diff, which is the whole difference
+
+Every other host hands over a unified diff. Azure's `diffs/commits` returns a
+list of changed **paths** and no content, so Cavix reads both versions of each
+changed file and diffs them locally with Myers' algorithm, checked line for line
+against `git diff -U3`.
+
+That matters because everything downstream treats the diff as exact: which lines
+a comment may anchor to, what line a finding points at, and where the sandbox
+reproduces a bug. So when a file **cannot** be diffed exactly, Cavix does not
+approximate it. It leaves the file out and says so on the review, under a
+**Not Reviewed** section naming the file and the reason:
+
+- over 20,000 lines in one file,
+- rewritten past the edit budget (a total rewrite is not a diff anyone reads),
+- binary content, detected by its bytes rather than its extension,
+- or beyond the 60 files Cavix diffs per pull request.
+
+A review that quietly skipped two files would be claiming coverage it does not
+have, which is the same failure as printing a number nothing measured.
+
+### What is different on Azure, and how you are told
+
+| | GitHub | Azure DevOps |
+|---|---|---|
+| Review object | One atomic review | **Threads.** A summary thread, then one anchored thread per finding |
+| Blocking a merge | `Request changes` | **Not possible.** A bot can only vote if it was added as a reviewer, so blocking is a PR **status** a branch policy can require, and the review says so |
+| Reactions | Emoji on the comment | None. Azure has a "like" and no vocabulary |
+| Chat commands | Yes, authorized at the edge | **Refused.** See below |
+| CI history (Stage 6) | Actions runs | Azure Pipelines builds, named, so two pipelines are never averaged together |
+
+**Cavix does not take chat commands on Azure DevOps, and will not.** Deciding
+whether some other user may contribute needs the Graph API or a Security-namespace
+ACL read, both organisation-level scopes a review bot should not hold. A command
+path that cannot check permission is an open door. Automatic reviews on pull
+request events work fully.
 
 ## Observability
 

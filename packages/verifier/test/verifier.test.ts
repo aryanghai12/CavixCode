@@ -93,6 +93,59 @@ test("gate: deterministic/policy facts and trivial nits are not verified", () =>
   assert.equal(v.shouldVerify(finding({ severity: "low", category: "security", confidence: 0.4 })), true);
 });
 
+// ── Stage 12's other half: where a workspace's history moves the sandbox ──────
+
+test("gate: a category the workspace's history says to prove is verified past the confidence bar", () => {
+  // The case that earns this: their accepts and rejects overlap at every
+  // confidence level, so no threshold separates them and execution is the only
+  // instrument left. A 0.3-confidence nit here is exactly what has to be run.
+  const v = new Verifier({
+    sandbox: new FakeSandboxBackend(),
+    testGen: new FakeTestGenerator(() => ({ testPath: "x", testCode: "x", semantics: "test-fails-on-bug" })),
+  });
+  const nit = finding({ severity: "low", category: "correctness", confidence: 0.3 });
+  assert.equal(v.shouldVerify(nit), false, "the default gate skips it");
+  assert.equal(v.shouldVerify(nit, { correctness: "always" }), true, "their history says prove it");
+});
+
+test("gate: a category they accept outright stops paying for proof", () => {
+  const v = new Verifier({
+    sandbox: new FakeSandboxBackend(),
+    testGen: new FakeTestGenerator(() => ({ testPath: "x", testCode: "x", semantics: "test-fails-on-bug" })),
+  });
+  const ordinary = finding({ severity: "medium", category: "style", confidence: 0.9 });
+  assert.equal(v.shouldVerify(ordinary), true, "the default gate would run it");
+  assert.equal(v.shouldVerify(ordinary, { style: "never" }), false);
+});
+
+test("gate: no learned policy can stop Cavix proving a critical, a high, or a security finding", () => {
+  // The line that keeps the product's own claim intact. Those three are checked
+  // BEFORE the policy is consulted, so no volume of accepts is a reason to stop
+  // proving the findings whose proof is the entire pitch.
+  const v = new Verifier({
+    sandbox: new FakeSandboxBackend(),
+    testGen: new FakeTestGenerator(() => ({ testPath: "x", testCode: "x", semantics: "test-fails-on-bug" })),
+  });
+  const never = { security: "never", correctness: "never" } as const;
+  assert.equal(v.shouldVerify(finding({ severity: "critical", category: "correctness" }), never), true);
+  assert.equal(v.shouldVerify(finding({ severity: "high", category: "correctness" }), never), true);
+  assert.equal(v.shouldVerify(finding({ severity: "low", category: "security", confidence: 0.1 }), never), true);
+});
+
+test("gate: a learned policy still cannot make Cavix verify a deterministic fact", () => {
+  // It decides where proof is SPENT, never what reaches the pull request. A
+  // secret scanner's finding is already proven and a sandbox adds nothing.
+  const v = new Verifier({
+    sandbox: new FakeSandboxBackend(),
+    testGen: new FakeTestGenerator(() => ({ testPath: "x", testCode: "x", semantics: "test-fails-on-bug" })),
+  });
+  assert.equal(v.shouldVerify(finding({ source: "sast", category: "correctness" }), { correctness: "always" }), false);
+  assert.equal(
+    v.shouldVerify(finding({ immutable: true, source: "policy", category: "correctness" }), { correctness: "always" }),
+    false,
+  );
+});
+
 test("secure spec: verification sandbox has no egress and hard caps", () => {
   assert.equal(SECURE_SPEC.network, "none");
   assert.ok((SECURE_SPEC.limits?.memoryMb ?? 0) > 0 && (SECURE_SPEC.limits?.timeoutMs ?? 0) > 0);

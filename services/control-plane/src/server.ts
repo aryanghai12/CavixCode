@@ -16,6 +16,7 @@ import {
   type SessionPayload,
 } from "./auth.ts";
 import type { OrgTier } from "./store.ts";
+import { isTokenPlatform } from "./store.ts";
 import * as gh from "./github.ts";
 import { compileEnglishRule } from "@cavix/policy";
 import { Registry } from "@cavix/metrics";
@@ -489,10 +490,16 @@ async function apiRoute(
     // Best-effort: a calibration that cannot be computed costs this review its
     // learned bars, never the review.
     let thresholdByCategory: Record<string, number> = {};
+    let verifyByCategory: Record<string, "always" | "never"> = {};
     try {
-      thresholdByCategory = store.calibration(org).thresholdByCategory;
+      const cal = store.calibration(org);
+      thresholdByCategory = cal.thresholdByCategory;
+      // The Stage 10 half of the same loop, on the same call. A second endpoint
+      // would have put another control-plane hop in front of every pull request
+      // in the deployment for a number that changes when a human clicks Accept.
+      verifyByCategory = cal.verifyByCategory;
     } catch {
-      /* the orchestrator falls back to Stage 9's own default */
+      /* the orchestrator falls back to Stage 9's and Stage 10's own defaults */
     }
     return void sendJson(res, 200, {
       verifyFindings: s.verifyFindings,
@@ -506,6 +513,7 @@ async function apiRoute(
       reviewSections: s.reviewSections,
       tone: s.tone,
       thresholdByCategory,
+      verifyByCategory,
     });
   }
 
@@ -516,7 +524,7 @@ async function apiRoute(
   // nothing like that, so a bot authenticates with a token an owner pasted, and
   // it is stored per workspace (encrypted) rather than per deployment: one
   // shared token would read every customer's repositories.
-  im = /^\/api\/internal\/orgs\/([^/]+)\/(gitlab|bitbucket)-token$/.exec(p);
+  im = /^\/api\/internal\/orgs\/([^/]+)\/(gitlab|bitbucket|bitbucket-server|azure)-token$/.exec(p);
   if (m === "GET" && im) {
     const token = process.env.CAVIX_INTERNAL_TOKEN;
     if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
@@ -524,7 +532,8 @@ async function apiRoute(
     if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
     const org = decodeURIComponent(im[1]);
     const platform = im[2];
-    const saved = platform === "gitlab" ? store.getGitLabToken(org) : store.getBitbucketToken(org);
+    if (!isTokenPlatform(platform)) return void sendJson(res, 404, { error: "unknown platform" });
+    const saved = store.getPlatformToken(platform, org);
     // 404 rather than 200-with-null: the orchestrator must fail loudly on a
     // missing credential, not carry on and make an unauthenticated request that
     // surfaces later as a confusing 401 on somebody's merge request.
@@ -716,17 +725,22 @@ async function apiRoute(
     );
   }
 
-  // The workspace's GitLab access token. Owners and admins only: it is a
-  // credential that can read every repository the token's own account can.
-  mm = /^\/api\/orgs\/([^/]+)\/(gitlab|bitbucket)-token$/.exec(p);
+  // The workspace's access token for a host that has no per-install credential.
+  // Owners and admins only: it can read every repository the token's own account
+  // can. GitHub is absent because a GitHub App mints its own.
+  mm = /^\/api\/orgs\/([^/]+)\/(gitlab|bitbucket|bitbucket-server|azure)-token$/.exec(p);
   if (mm) {
     const org = decodeURIComponent(mm[1]);
     const platform = mm[2];
+    // The route regex already constrains this, but narrowing off the URL rather
+    // than casting means adding a platform to one and not the other is a type
+    // error rather than a runtime surprise.
+    if (!isTokenPlatform(platform)) return void sendJson(res, 404, { error: "unknown platform" });
     const auth = requireOrg(req, res, org, ["owner", "admin"]);
     if (!auth) return;
-    const set = (t: string) => (platform === "gitlab" ? store.setGitLabToken(org, t) : store.setBitbucketToken(org, t));
-    const get = () => (platform === "gitlab" ? store.getGitLabToken(org) : store.getBitbucketToken(org));
-    const clear = () => (platform === "gitlab" ? store.clearGitLabToken(org) : store.clearBitbucketToken(org));
+    const set = (t: string) => store.setPlatformToken(platform, org, t);
+    const get = () => store.getPlatformToken(platform, org);
+    const clear = () => store.clearPlatformToken(platform, org);
     if (m === "POST") {
       const body = await readJson(req);
       const raw = String(body.token ?? "");

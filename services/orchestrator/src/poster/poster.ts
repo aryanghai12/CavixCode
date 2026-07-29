@@ -14,6 +14,7 @@ import {
   CHECK_NAME,
   INLINE_MARKER,
   REVIEW_MARKER,
+  type DiffLimitation,
   type InlineComment,
   type PlatformName,
   type ReviewEvent,
@@ -181,6 +182,24 @@ export interface ReviewLinkRef {
   repo: string;
   /** Head commit; blob permalinks are pinned to it so they never drift. */
   headSha: string;
+  /**
+   * The browser root of the host this review is going to, no trailing slash.
+   * Comes from `ReviewPlatform.webUrl`.
+   *
+   * Optional and defaulting to github.com only because that is where this
+   * started; the workflow always supplies it. Every permalink used to be built
+   * against a hardcoded github.com, so a GitLab or Bitbucket review linked every
+   * file and every line at a github.com repository that does not exist, and a
+   * GitHub Enterprise review linked out of the customer's network entirely.
+   */
+  host?: string;
+  /**
+   * Which host's permalink SHAPE to use. The three differ and none of them is
+   * derivable from the others: GitHub puts the commit under /blob/, GitLab under
+   * /-/blob/, Bitbucket under /src/, and Azure DevOps passes the path and the
+   * commit as query parameters. Defaults to GitHub.
+   */
+  platform?: PlatformName;
 }
 
 /**
@@ -260,6 +279,17 @@ export interface PosterOptions {
    * still in the Scope table underneath, so nothing is lost but the colour.
    */
   badges?: boolean;
+  /**
+   * Files the platform could not produce an exact diff for, from
+   * `ReviewPlatform.diffLimitations`.
+   *
+   * Empty on every host that hands over a real diff. On Azure DevOps, where the
+   * diff is computed from the two versions of each file, a file can be too
+   * large, too rewritten or binary. Those files are NOT reviewed, and a review
+   * that did not say so would be claiming coverage it does not have, which is
+   * the same failure as a Scope row with no measurement behind it.
+   */
+  diffLimitations?: DiffLimitation[];
 }
 
 export interface BuiltReview {
@@ -582,6 +612,8 @@ function renderReviewComment(
 
   // Each entry is one whole section, so truncation can drop them atomically.
   const findingSections: string[][] = [];
+  const notDiffed = renderDiffLimitations(opts.diffLimitations ?? []);
+  if (notDiffed.length > 0) findingSections.push(["", "---", "", ...notDiffed]);
   const gate = renderPreMerge(opts.preMerge, opts.requestChanges === true);
   if (gate.length > 0) findingSections.push(["", "---", "", ...gate]);
   if (groups.length > 0) {
@@ -684,6 +716,18 @@ function scopeRows(
       mark: MARK_NEUTRAL,
       signal: "CI Telemetry",
       reading: `${plural(signals.ciRuns, "completed pipeline run")} analysed for regression`,
+    });
+  }
+
+  // 3b. What Cavix could NOT read. Stated before the security row, because it
+  // qualifies everything under it: a clean security gate over a change Cavix
+  // only partly saw is a weaker claim than a clean one over all of it.
+  const skipped = opts.diffLimitations ?? [];
+  if (skipped.length > 0) {
+    rows.push({
+      mark: MARK_ATTENTION,
+      signal: "Diff Coverage",
+      reading: `${plural(skipped.length, "file")} could not be diffed exactly and ${skipped.length === 1 ? "was" : "were"} not reviewed`,
     });
   }
 
@@ -990,6 +1034,7 @@ const PLATFORM_LABEL: Record<PlatformName, string> = {
   github: "GitHub",
   gitlab: "GitLab",
   bitbucket: "Bitbucket",
+  "bitbucket-server": "Bitbucket Data Center",
   "azure-devops": "Azure DevOps",
 };
 
@@ -1024,6 +1069,38 @@ function blockingReason(opts: PosterOptions): string {
   return failed > 0
     ? `${plural(failed, "pre-merge check")} failed`
     : "a finding at or above your blocking severity was posted";
+}
+
+/** At most this many skipped files are named before the list is summarised. */
+const MAX_LIMITATION_ROWS = 12;
+
+/**
+ * The files Cavix did not review, and why, in a reader's words.
+ *
+ * This section exists because of Azure DevOps, which returns a list of changed
+ * PATHS and no content, so the diff is computed locally and a file can be too
+ * large, too rewritten, or binary. Those files are left out of the review, and
+ * the one thing that must not happen is leaving them out quietly: a reviewer who
+ * believes Cavix read the whole change has been told something untrue, and it is
+ * the same failure as printing a number nothing measured.
+ */
+function renderDiffLimitations(limits: DiffLimitation[]): string[] {
+  if (limits.length === 0) return [];
+  const out = [
+    "### Not Reviewed",
+    "",
+    `${plural(limits.length, "file")} in this pull request could not be diffed exactly, so ${limits.length === 1 ? "it was" : "they were"} left out of the review below. Nothing here is a finding; it is what Cavix did not look at.`,
+    "",
+    "| File | Why |",
+    "| :--- | :--- |",
+  ];
+  for (const l of limits.slice(0, MAX_LIMITATION_ROWS)) {
+    out.push(`| \`${cell(l.path)}\` | ${cell(l.reason)} |`);
+  }
+  if (limits.length > MAX_LIMITATION_ROWS) {
+    out.push(`| <sub>and ${limits.length - MAX_LIMITATION_ROWS} more</sub> | |`);
+  }
+  return out;
 }
 
 /**
@@ -1402,18 +1479,37 @@ function lineLink(f: Finding, ref?: ReviewLinkRef): string {
   const label = f.endLine !== undefined && f.endLine > f.line ? `${f.line}-${f.endLine}` : String(f.line);
   const url = blobUrl(f.path, ref);
   if (!url) return label;
-  return `[${label}](${url}${lineFragment(f)})`;
+  return `[${label}](${url}${lineFragment(f, ref?.platform)})`;
 }
 
 /** "`src/auth.js` line 12", linked when we know where the file lives. */
 function locationLink(f: Finding, ref?: ReviewLinkRef): string {
   const label = `\`${f.path}\` ${lineLabel(f)}`;
   const url = blobUrl(f.path, ref);
-  return url ? `[${label}](${url}${lineFragment(f)})` : label;
+  return url ? `[${label}](${url}${lineFragment(f, ref?.platform)})` : label;
 }
 
-function lineFragment(f: Finding): string {
-  return f.endLine !== undefined && f.endLine > f.line ? `#L${f.line}-L${f.endLine}` : `#L${f.line}`;
+/**
+ * The line anchor for a permalink, in the host's own syntax.
+ *
+ * Four hosts, four grammars, and a wrong one is silently harmless-looking: the
+ * page still loads, it just does not scroll to the line the reviewer was sent
+ * to, which is the entire reason the link exists.
+ */
+function lineFragment(f: Finding, platform: PlatformName = "github"): string {
+  const end = f.endLine !== undefined && f.endLine > f.line ? f.endLine : undefined;
+  switch (platform) {
+    case "gitlab":
+      return end ? `#L${f.line}-${end}` : `#L${f.line}`;
+    case "bitbucket":
+      return end ? `#lines-${f.line}:${end}` : `#lines-${f.line}`;
+    case "azure-devops":
+      // Azure carries the line in the query string, which `blobUrl` has already
+      // opened, so this is appended rather than being a fragment.
+      return end ? `&line=${f.line}&lineEnd=${end}&lineStartColumn=1&lineEndColumn=1` : `&line=${f.line}`;
+    default:
+      return end ? `#L${f.line}-L${end}` : `#L${f.line}`;
+  }
 }
 
 function fileLink(path: string, ref?: ReviewLinkRef): string {
@@ -1422,13 +1518,35 @@ function fileLink(path: string, ref?: ReviewLinkRef): string {
 }
 
 /**
- * A permalink to the file at the head commit. Pinned to the SHA rather than the
- * branch so the link keeps pointing at the code that was reviewed, even after
- * the PR moves on or merges.
+ * A permalink to the file at the head commit, on the host the review is going
+ * to. Pinned to the SHA rather than the branch so the link keeps pointing at the
+ * code that was reviewed, even after the PR moves on or merges.
+ *
+ * Returns "" when there is not enough to build one, and every caller renders the
+ * path as plain text in that case. That is deliberate: a review that names a
+ * file without linking it is complete, and a review that links it to the wrong
+ * repository is worse than one that does not link it at all.
  */
 function blobUrl(path: string, ref?: ReviewLinkRef): string {
   if (!ref || !ref.owner || !ref.repo || !ref.headSha) return "";
-  return `https://github.com/${ref.owner}/${ref.repo}/blob/${ref.headSha}/${encodeURI(path)}`;
+  const host = (ref.host ?? "https://github.com").replace(/\/+$/, "");
+  if (host === "") return "";
+  const repo = `${host}/${ref.owner}/${ref.repo}`;
+  const file = encodeURI(path);
+  switch (ref.platform ?? "github") {
+    case "gitlab":
+      return `${repo}/-/blob/${ref.headSha}/${file}`;
+    case "bitbucket":
+      return `${repo}/src/${ref.headSha}/${file}`;
+    case "azure-devops":
+      // `owner` is "organization/project" and the repository hangs off _git.
+      // GC is Azure's prefix for "this version string is a commit", as against
+      // GB for a branch: without it the link resolves against a branch name that
+      // does not exist and the page opens empty.
+      return `${host}/${ref.owner}/_git/${ref.repo}?path=/${file}&version=GC${ref.headSha}`;
+    default:
+      return `${repo}/blob/${ref.headSha}/${file}`;
+  }
 }
 
 /**

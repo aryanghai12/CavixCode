@@ -44,6 +44,12 @@ export type VerifyStep = (
    * caller that does not want the proof simply does not pass one.
    */
   onTeardown?: (sandbox: Sandbox) => Promise<void>,
+  /**
+   * Stage 12's other half: category -> where this workspace's own accept and
+   * reject history says proof is worth spending. Rides in per review, like the
+   * teardown hook and for the same reason, and absent means the default gate.
+   */
+  verifyByCategory?: Record<string, "always" | "never">,
 ) => Promise<VerifyStepResult>;
 
 export interface VerifyStepOptions {
@@ -58,7 +64,7 @@ export interface VerifyStepOptions {
 export function makeVerifyStep(opts: VerifyStepOptions): VerifyStep {
   const maxFiles = opts.maxFiles ?? MAX_SOURCE_FILES;
 
-  return async (findings, ref, org, onTeardown) => {
+  return async (findings, ref, org, onTeardown, verifyByCategory) => {
     const untouched: VerifyStepResult = {
       surfaced: findings,
       suppressed: [],
@@ -68,8 +74,10 @@ export function makeVerifyStep(opts: VerifyStepOptions): VerifyStep {
     if (findings.length === 0) return untouched;
 
     // Only fetch sources if something is actually going to be verified. A PR
-    // whose findings are all low-severity nits costs zero API calls here.
-    if (!findings.some((f) => opts.verifier.shouldVerify(f))) return untouched;
+    // whose findings are all low-severity nits costs zero API calls here. The
+    // learned policy is passed HERE too, or a workspace that taught Cavix to
+    // prove a whole category would have the sources skipped out from under it.
+    if (!findings.some((f) => opts.verifier.shouldVerify(f, verifyByCategory))) return untouched;
 
     const files = await collectSources(opts.github, ref, findings, maxFiles);
     if (files.length === 0) {
@@ -82,7 +90,12 @@ export function makeVerifyStep(opts: VerifyStepOptions): VerifyStep {
 
     const out = await verifyAndFilter(
       findings,
-      { org, files, ...(onTeardown ? { onTeardown } : {}) },
+      {
+        org,
+        files,
+        ...(onTeardown ? { onTeardown } : {}),
+        ...(verifyByCategory && Object.keys(verifyByCategory).length > 0 ? { verifyByCategory } : {}),
+      },
       opts.verifier,
       { highConfidence: opts.highConfidence },
     );
@@ -93,6 +106,9 @@ export function makeVerifyStep(opts: VerifyStepOptions): VerifyStep {
       verified: out.verifiedCount,
       suppressed: out.suppressed.length,
       files: files.length,
+      // Stage 12's other half, so an operator can see the loop is closed on
+      // both ends rather than only on the threshold.
+      calibrated_categories: Object.keys(verifyByCategory ?? {}).length,
       cost_usd: out.costUsd,
     });
     return {

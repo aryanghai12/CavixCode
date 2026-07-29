@@ -3,6 +3,7 @@ import {
   REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
+  type DiffLimitation,
   type OwnReview,
   type PlatformCapabilities,
   type PostedReview,
@@ -82,6 +83,9 @@ export interface RestBitbucketOptions {
   logger?: { info(msg: string, meta?: Record<string, unknown>): void };
 }
 
+/** Where a human reads a Bitbucket Cloud repository, as opposed to its API. */
+const BITBUCKET_WEB = "https://bitbucket.org";
+
 /** The build status key. Branch restrictions match on it, so it is a constant. */
 const STATUS_KEY = "CAVIX";
 
@@ -91,6 +95,12 @@ const MAX_PIPELINES = 20;
 export class RestBitbucketClient implements ReviewPlatform {
   readonly platform = "bitbucket" as const;
   readonly capabilities = BITBUCKET_CAPABILITIES;
+  /**
+   * Bitbucket Cloud serves its API from api.bitbucket.org and its pages from
+   * bitbucket.org, so this is a constant rather than derived from `baseUrl`
+   * (which tests override with a local address).
+   */
+  readonly webUrl = BITBUCKET_WEB;
 
   private readonly tokens: BitbucketTokenProvider;
   private readonly api: string;
@@ -144,7 +154,7 @@ export class RestBitbucketClient implements ReviewPlatform {
   }
 
   private prUrl(ref: PullRef): string {
-    return `https://bitbucket.org/${ref.owner}/${ref.repo}/pull-requests/${ref.number}`;
+    return `${BITBUCKET_WEB}/${ref.owner}/${ref.repo}/pull-requests/${ref.number}`;
   }
 
   // ── the diff ───────────────────────────────────────────────────────────────
@@ -163,6 +173,11 @@ export class RestBitbucketClient implements ReviewPlatform {
     });
     if (!res.ok) throw new Error(`bitbucket: fetch diff HTTP ${res.status} ${res.statusText}`);
     return res.text();
+  }
+
+  /** `/diff` returns the whole unified diff, so nothing is ever left out. */
+  diffLimitations(): DiffLimitation[] {
+    return [];
   }
 
   async getPull(ref: PullRef): Promise<PullMeta> {

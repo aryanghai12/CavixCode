@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createControlPlane, InMemoryStore } from "@cavix/control-plane";
+import { readJson } from "./http.ts";
 
 // The founder console's numbers. These drive real decisions (who to call before
 // their trial lapses, who signed up but never got a key in), so they have to be
@@ -114,7 +115,7 @@ test("the admin stats endpoint is platform-admin only", async () => {
     const founder = cookieOf(await signup("founder@cavix.dev", "ops"));
     const res = await fetch(base + "/api/admin/stats", { headers: { cookie: founder } });
     assert.equal(res.status, 200);
-    const stats = await res.json();
+    const stats = await readJson(res);
     assert.equal(typeof stats.users.total, "number");
     assert.equal(typeof stats.revenue.estimatedMrr, "number");
   } finally {

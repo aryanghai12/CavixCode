@@ -260,6 +260,8 @@ function withFailure(github: FakeGitHubClient, fail: () => never): ReviewPlatfor
   return {
     platform: github.platform,
     capabilities: github.capabilities,
+    webUrl: github.webUrl,
+    diffLimitations: () => [],
     fetchPullDiff: async () => fail(),
     getPull: (ref) => github.getPull(ref),
     fetchFile: (ref, path) => github.fetchFile(ref, path),
@@ -289,6 +291,8 @@ test("command job: a failure reacts 😕 and explains the cause in a comment", a
   const broken: ReviewPlatform = {
     platform: github.platform,
     capabilities: github.capabilities,
+    webUrl: github.webUrl,
+    diffLimitations: () => [],
     fetchPullDiff: async () => { throw new Error("github: fetch diff HTTP 404 Not Found"); },
     getPull: (ref) => github.getPull(ref),
     fetchFile: (ref, path) => github.fetchFile(ref, path),

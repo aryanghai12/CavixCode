@@ -5,6 +5,111 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Azure DevOps and Bitbucket Data Center: all five hosts, and a real differ
+
+The last two platforms, and the one that was never mechanical. Every other host
+hands Cavix a unified diff; Azure's `diffs/commits` API returns a list of CHANGED
+PATHS and no content, so the diff has to be produced locally, and everything
+downstream treats it as exact: which lines an inline comment may anchor to, what
+line number a finding carries, and where the sandbox reproduces a bug.
+
+#### Added
+- **`packages/differ`**, Myers' published O(ND) algorithm over lines, plus a
+  unified-diff writer. Verified line for line against `git diff --no-index -U3`
+  on ten cases before a line of the Azure client was written: insertions,
+  deletions, added and deleted files, distant and adjacent hunks, reindents, a
+  file with no trailing newline, and a repeated-line file (the case a greedy scan
+  gets wrong). It is exact and minimal, not "close enough": an approximate diff
+  does not fail, it silently anchors findings to the wrong lines.
+- **Bounded, and it REFUSES rather than approximating.** Past the edit budget,
+  the line budget, or on binary content, a file is left out of the review and
+  **named on it**, under a "Not Reviewed" section and a Scope row. A review that
+  quietly skipped two files is claiming coverage it does not have.
+- **`RestAzureClient`**, `AZURE_CAPABILITIES`, an edge normalizer, and one line
+  in `main.ts`. The seam held for a fourth and fifth platform with no workflow
+  change.
+- **`RestBitbucketServerClient`** for Bitbucket Server / Data Center, which
+  shares nothing with Cloud but the name: a different REST surface, different
+  payload shapes, different anchors, different state vocabulary, and optimistic
+  locking on every write.
+- **`ReviewPlatform.diffLimitations(ref)`**, returning `[]` on the four hosts
+  that hand over a real diff. Keyed by pull request rather than held on the
+  client, because one client serves every concurrent review.
+- Edge ingestion for Azure on the same `/webhook`. Azure service hooks SIGN
+  NOTHING, so the only credential they can carry is HTTP Basic; it is compared in
+  constant time, against its own secret, before the body is parsed.
+
+#### The refusals, which are the design
+- **Neither takes chat commands.** A command must be authorized before it spends
+  a customer's model budget, and neither host lets a review bot answer "may this
+  arbitrary user push here?" without organisation-level scopes it should not
+  hold. `commandsAllowed` returns false on both and the edge mints no command
+  job, exactly as for Bitbucket Cloud. Automatic reviews work fully.
+- **Azure declares `blockingReview: false`.** A bot can only vote on a pull
+  request it was added as a reviewer to. Blocking is a pull request status a
+  branch policy can require, and the review says so rather than letting an owner
+  believe there is a gate that is not there.
+
+### Stage 12 closed on both ends: the learning loop now moves the sandbox
+
+`ARCHITECTURE.md` described Stage 12 as feeding Stage 9's threshold **and**
+Stage 10's verify gate. Only Stage 9 was wired.
+
+#### Added
+- **`OrgCalibration.verifyByCategory`**, derived from the same decisions and
+  riding the same `review-config` call, so closing the second half costs zero
+  additional round trips per pull request.
+- **`"always"`**: where a workspace's accepts and rejects overlap at every
+  confidence level, no threshold separates them, Stage 9 correctly refuses to
+  move the bar, and execution is the only instrument left. The sandbox now runs
+  there, including on findings the default gate would skip as nits.
+- **`"never"`**: where they accept essentially everything, a proof changes no
+  decision they were going to make, and a sandbox run is the most expensive thing
+  in a review.
+- **Critical, high and security are proven regardless.** They are checked before
+  the learned policy is consulted, because their proof is the product's own
+  claim. A test asserts no volume of accepts can turn it off, and that no policy
+  can make Cavix "verify" a deterministic fact either.
+- A second Learnings panel showing where proof moved and why, in the team's own
+  numbers, next to the one showing where the bar moved.
+
+### Fixed
+- **Every file and line permalink in a review pointed at `github.com`.** The
+  poster hardcoded the host, so on GitLab and Bitbucket, which have had users
+  since they shipped, a reader who clicked a finding's line number left for a
+  github.com repository that does not exist, and a GitHub Enterprise reader left
+  their own network. `ReviewPlatform.webUrl` now carries the browser root and the
+  poster builds each host's own URL grammar; all four differ, and none is
+  derivable from another. A host it cannot name renders paths as plain text
+  rather than as a wrong link.
+- **A deleted file lost its name in `parseUnifiedDiff`.** git writes
+  `+++ /dev/null` for a deletion, so the only place the path survives is the
+  `---` line, which was ignored. The walkthrough rendered an empty code span for
+  every deleted file, and `subsystem("")` filed each one under the repository
+  root and inflated the traversed-subsystem count with it.
+- **The secret scanner reported only the FIRST match per pattern per file.** A
+  file committing one key on line 12 and another on line 400 reported the first
+  and said nothing about the second, and the one nobody is told about is the one
+  nobody rotates. Capped per file so a fixture cannot flood a review.
+- **The air-gap egress guard followed redirects without checking them.** An
+  allowed host answering `307 Location: https://evil.example` made the runtime
+  re-send the request, body and all, to a host the policy forbids: the guard's
+  one check passed and the prompt left the cluster. Redirects are now followed by
+  hand, one host check per hop, bounded at five.
+- **The Docker sandbox interpolated paths into a shell string and did not
+  confine them to the workspace.** The paths reaching it come from findings,
+  which come from a model reading somebody else's diff, and one apostrophe in a
+  filename closed the quote. It also let a traversal through, where the Local
+  backend has always refused one: two implementations of one port disagreeing
+  about that is a port that cannot be swapped.
+- **The dashboard's Integrations panel advertised Bitbucket and Azure DevOps as
+  "soon"** for months after Bitbucket Cloud went live. All four token-based hosts
+  now have a real Connect button driven by one generic endpoint.
+- **`services/control-plane/test` is now inside the tsconfig `include`.** That
+  directory sitting outside it is how `requireOrgMember` shipped: called twice,
+  defined nowhere, answering 500 from the day it landed. `scripts/` is in too;
+  `npx tsc --noEmit` now covers everything shippable.
+
 ### Observability: `/metrics` on both services
 
 Stage 13 is "teardown, zero retention, observability, cost accounting". Three of

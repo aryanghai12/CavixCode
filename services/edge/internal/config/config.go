@@ -30,6 +30,11 @@ type Config struct {
 	// BitbucketSecret is the HMAC secret set on a Bitbucket Cloud webhook. Empty
 	// means Bitbucket ingestion is off, which is the default.
 	BitbucketSecret string
+	// AzureSecret is the PASSWORD half of the Basic credential configured on an
+	// Azure DevOps service hook subscription. Azure web hooks sign nothing, so
+	// this is the only credential they can carry. Empty means Azure ingestion is
+	// off, which is the default.
+	AzureSecret string
 }
 
 // Load reads config from env with safe defaults.
@@ -49,6 +54,7 @@ func Load() (Config, error) {
 		WebhookSecret:   os.Getenv("CAVIX_WEBHOOK_SECRET"),
 		GitLabToken:     os.Getenv("CAVIX_GITLAB_WEBHOOK_SECRET"),
 		BitbucketSecret: os.Getenv("CAVIX_BITBUCKET_WEBHOOK_SECRET"),
+		AzureSecret:     os.Getenv("CAVIX_AZURE_WEBHOOK_SECRET"),
 		StreamKey:       getenv("CAVIX_STREAM_KEY", "cavix:reviewjobs"),
 		DedupeTTL:       24 * time.Hour,
 		EnqueueDialMs:   3 * time.Second,

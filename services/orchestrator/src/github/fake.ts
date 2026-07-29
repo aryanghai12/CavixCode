@@ -3,6 +3,7 @@ import {
   REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
+  type DiffLimitation,
   type PlatformCapabilities,
   type PlatformName,
   type ReviewPlatform,
@@ -50,11 +51,14 @@ export interface FakeGitHubOptions {
    */
   platform?: PlatformName;
   capabilities?: PlatformCapabilities;
+  /** The browser root this fake claims. Defaults to GitHub's. */
+  webUrl?: string;
 }
 
 export class FakeGitHubClient implements ReviewPlatform {
   readonly platform: PlatformName;
   readonly capabilities: PlatformCapabilities;
+  readonly webUrl: string;
   private readonly diff: string;
   private readonly headSha: string;
   private readonly title: string;
@@ -99,6 +103,7 @@ export class FakeGitHubClient implements ReviewPlatform {
     this.workflowRuns = opts.workflowRuns ?? [];
     this.platform = opts.platform ?? "github";
     this.capabilities = opts.capabilities ?? FULL_CAPABILITIES;
+    this.webUrl = opts.webUrl ?? "https://github.com";
   }
 
   /**
@@ -112,6 +117,15 @@ export class FakeGitHubClient implements ReviewPlatform {
 
   async fetchPullDiff(_ref: PullRef): Promise<string> {
     return this.diff;
+  }
+
+  /**
+   * Files the diff left out. Settable, so a test can drive the "Cavix could not
+   * read part of this change" path without needing an Azure client.
+   */
+  limitations: DiffLimitation[] = [];
+  diffLimitations(_ref: PullRef): DiffLimitation[] {
+    return this.limitations;
   }
 
   async getPull(_ref: PullRef): Promise<PullMeta> {

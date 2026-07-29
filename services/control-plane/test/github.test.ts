@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createControlPlane, InMemoryStore, githubConfigured, installUrl, demoOrgs, demoRepos, authorizeUrl, encryptSecret } from "@cavix/control-plane";
+import { readJson, type Body } from "./http.ts";
 
 async function withServer(fn: (base: string, store: InMemoryStore) => Promise<void>) {
   const store = new InMemoryStore();
@@ -61,7 +62,7 @@ test("github OAuth: callback with a mismatched state is rejected", async () => {
 });
 
 test("github OAuth: full demo start→callback logs the user in and starts a trial", async () => {
-  await withServer(async (base, store) => {
+  await withServer(async (base) => {
     const start = await fetch(base + "/api/auth/github/start", { redirect: "manual" });
     const stateCookie = cookieFrom(start);
     const state = stateCookie.split("=")[1];
@@ -72,7 +73,7 @@ test("github OAuth: full demo start→callback logs the user in and starts a tri
     assert.match(session, /cavix_session=/);
 
     // the user now exists, signed in via github, on a trial (can add private repos)
-    const me = await (await fetch(base + "/api/auth/me", { headers: { cookie: session } })).json();
+    const me = await readJson(await fetch(base + "/api/auth/me", { headers: { cookie: session } }));
     assert.equal(me.user.provider, "github");
     assert.ok(me.user.githubLogin);
   });
@@ -86,15 +87,15 @@ test("github connect: list orgs + repos and enable one from the site", async () 
     store.createUser({ email: "u@acme.co", password: "password123", org: "acme", name: "U", role: "owner" });
     const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "u@acme.co", password: "password123" }));
 
-    const status = await (await fetch(base + "/api/github/status", { headers: { cookie } })).json();
+    const status = await readJson(await fetch(base + "/api/github/status", { headers: { cookie } }));
     assert.equal(status.demo, true);
     assert.match(status.installUrl, /github\.com\/apps/);
 
-    const orgs = await (await fetch(base + "/api/github/orgs", { headers: { cookie } })).json();
+    const orgs = await readJson(await fetch(base + "/api/github/orgs", { headers: { cookie } }));
     assert.ok(orgs.length >= 2);
     assert.ok(orgs.some((o: { isUser: boolean }) => o.isUser));
 
-    const repos = await (await fetch(base + "/api/github/repos?org=cavix-labs", { headers: { cookie } })).json();
+    const repos = await readJson(await fetch(base + "/api/github/repos?org=cavix-labs", { headers: { cookie } }));
     assert.ok(repos.length >= 1);
     assert.equal(repos[0].enabled, false);
 
@@ -103,7 +104,7 @@ test("github connect: list orgs + repos and enable one from the site", async () 
     assert.equal(enable.status, 201);
 
     // now it shows as enabled + is in the org's connected repo list
-    const repos2 = await (await fetch(base + "/api/github/repos?org=cavix-labs", { headers: { cookie } })).json();
+    const repos2 = await readJson(await fetch(base + "/api/github/repos?org=cavix-labs", { headers: { cookie } }));
     assert.equal(repos2.find((r: { fullName: string }) => r.fullName === "cavix-labs/payments-api").enabled, true);
     assert.ok(store.listRepos("acme").some((r) => r.name === "cavix-labs/payments-api"));
 
@@ -130,7 +131,7 @@ test("login page exposes Sign in with GitHub", async () => {
 
 test("auth providers endpoint reports availability (github off, demo boolean)", async () => {
   await withServer(async (base) => {
-    const p = await (await fetch(base + "/api/auth/providers")).json();
+    const p = await readJson(await fetch(base + "/api/auth/providers"));
     assert.equal(p.github, false); // no OAuth env in tests
     assert.equal(typeof p.demo, "boolean");
   });
@@ -159,16 +160,16 @@ test("installations: lists orgs with install status + repos + enabled state (dem
     store.createUser({ email: "u@acme.co", password: "password123", org: "acme", name: "U", role: "owner" });
     const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "u@acme.co", password: "password123" }));
 
-    const data = await (await fetch(base + "/api/github/installations", { headers: { cookie } })).json();
+    const data = await readJson(await fetch(base + "/api/github/installations", { headers: { cookie } }));
     assert.match(data.installUrl, /github\.com\/apps\//);
-    const byLogin = Object.fromEntries(data.orgs.map((o) => [o.login, o]));
+    const byLogin = Object.fromEntries(data.orgs.map((o: Body) => [o.login, o]));
     // demo: cavix-labs installed, acme-inc NOT installed (Install button case)
     assert.equal(byLogin["cavix-labs"].installed, true);
     assert.ok(byLogin["cavix-labs"].repos.length >= 1);
     assert.equal(byLogin["acme-inc"].installed, false);
     assert.equal(byLogin["acme-inc"].repos.length, 0);
     // nothing enabled yet
-    assert.ok(byLogin["cavix-labs"].repos.every((r) => r.enabled === false));
+    assert.ok(byLogin["cavix-labs"].repos.every((r: Body) => r.enabled === false));
   });
 });
 
@@ -222,12 +223,12 @@ test("tokens: an expired credential with nothing to renew from asks for a reconn
     const cookie = await userWithToken(base, store, { accessToken: "gho_stale", expiresAt: Date.now() - 1000 });
 
     // Not "connected": the credential GitHub would be handed is already dead.
-    const status = await (await fetch(base + "/api/github/status", { headers: { cookie } })).json();
+    const status = await readJson(await fetch(base + "/api/github/status", { headers: { cookie } }));
     assert.equal(status.connected, false);
     assert.equal(status.demo, false, "a live site never invents repositories to fill the page");
 
     const res = await fetch(base + "/api/github/installations", { headers: { cookie } });
-    const body = await res.json();
+    const body = await readJson(res);
     assert.equal(res.status, 401);
     assert.equal(body.reconnect, true, "the dashboard needs to tell these apart from a dead session");
     assert.match(body.error, /expired|Connect/i);
@@ -249,7 +250,7 @@ test("tokens: an aged-out credential is renewed silently, and the rotation is ke
   const calls: string[] = [];
   // Stand in for GitHub: honour the refresh, then answer the API calls the
   // Repositories page makes with the NEW token only.
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
     if (url.includes("/login/oauth/access_token")) {
@@ -281,7 +282,7 @@ test("tokens: an aged-out credential is renewed silently, and the rotation is ke
 
       const res = await fetch(base + "/api/github/installations", { headers: { cookie } });
       assert.equal(res.status, 200, "the user never sees the expiry: it is renewed underneath them");
-      const data = await res.json();
+      const data = await readJson(res);
       assert.equal(data.demo, false, "this is real data, not fixtures");
       assert.ok(calls.some((u) => u.includes("/login/oauth/access_token")), "the refresh actually happened");
 
@@ -307,7 +308,7 @@ test("tokens: a credential GitHub rejects mid-call is dropped, not reported as a
   const realFetch = globalThis.fetch;
   // A token that has not expired by the clock but that GitHub refuses anyway:
   // the user revoked the app, or the install was removed.
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith("https://api.github.com/")) return new Response("bad credentials", { status: 401 });
     return realFetch(input, init);
@@ -318,7 +319,7 @@ test("tokens: a credential GitHub rejects mid-call is dropped, not reported as a
       const cookie = await userWithToken(base, store, { accessToken: "gho_revoked" });
       const res = await fetch(base + "/api/github/installations", { headers: { cookie } });
       assert.equal(res.status, 401);
-      assert.equal((await res.json()).reconnect, true, "not a 502: GitHub is fine, the credential is not");
+      assert.equal((await readJson(res)).reconnect, true, "not a 502: GitHub is fine, the credential is not");
       assert.equal(store.getOAuthToken(store.listTeam("acme")[0].id), null, "the dead credential is forgotten");
     });
   } finally {
@@ -337,7 +338,7 @@ test("a deployment with no GitHub App says so, instead of offering a button that
     const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "u@acme.co", password: "password123" }));
     const res = await fetch(base + "/api/github/installations", { headers: { cookie } });
     assert.equal(res.status, 503);
-    const body = await res.json();
+    const body = await readJson(res);
     assert.equal(body.reconnect, undefined, "there is nothing to reconnect to");
     assert.match(body.error, /CAVIX_GITHUB_CLIENT_ID/, "names the setting that is missing");
   });
@@ -352,7 +353,7 @@ test("tokens: demo mode still serves fixtures when there is no credential at all
     const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "u@acme.co", password: "password123" }));
     const res = await fetch(base + "/api/github/installations", { headers: { cookie } });
     assert.equal(res.status, 200);
-    assert.equal((await res.json()).demo, true);
+    assert.equal((await readJson(res)).demo, true);
   });
   delete process.env.CAVIX_DEMO;
 });
@@ -363,7 +364,12 @@ test("toggle + gatekeeper: enabling a repo makes the internal gate report enable
     store.createOrg("acme");
     store.createUser({ email: "o@acme.co", password: "password123", org: "acme", name: "O", role: "owner" });
     const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "o@acme.co", password: "password123" }));
-    const gate = (full) => fetch(base + `/api/internal/repos/enabled?fullName=${encodeURIComponent(full)}`, { headers: { authorization: "Bearer gate-tok" } }).then((r) => r.json());
+    const gate = (full: string) =>
+      readJson(
+        fetch(base + `/api/internal/repos/enabled?fullName=${encodeURIComponent(full)}`, {
+          headers: { authorization: "Bearer gate-tok" },
+        }),
+      );
 
     // before: disabled
     assert.equal((await gate("cavix-labs/payments-api")).enabled, false);

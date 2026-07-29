@@ -22,7 +22,9 @@ import type { ReviewPlatform } from "./github/client.ts";
 import { GitHubAppTokenProvider } from "./github/appAuth.ts";
 import { RestGitLabClient } from "./gitlab/rest.ts";
 import { RestBitbucketClient } from "./bitbucket/rest.ts";
-import { makeControlPlaneGitLabTokens } from "./gitlab/tokens.ts";
+import { RestBitbucketServerClient } from "./bitbucket/server.ts";
+import { RestAzureClient } from "./azure/rest.ts";
+import { makeControlPlaneTokens } from "./gitlab/tokens.ts";
 import { Reviewer } from "./reviewer/reviewer.ts";
 import { makeReviewHandler } from "./workflow/reviewWorkflow.ts";
 import { InlineEngine } from "./workflow/inline.ts";
@@ -326,7 +328,7 @@ async function main() {
   const platforms: Record<string, ReviewPlatform> = {};
   if (cpUrl && internalToken && process.env.CAVIX_GITLAB !== "off") {
     platforms.gitlab = new RestGitLabClient({
-      tokens: makeControlPlaneGitLabTokens({
+      tokens: makeControlPlaneTokens({
         url: cpUrl,
         token: internalToken,
         logger: { warn: (m, meta) => log("warn", m, meta) },
@@ -343,7 +345,7 @@ async function main() {
   // control-plane, so without one there is nowhere to authenticate from.
   if (cpUrl && internalToken && process.env.CAVIX_BITBUCKET !== "off") {
     platforms.bitbucket = new RestBitbucketClient({
-      tokens: makeControlPlaneGitLabTokens({
+      tokens: makeControlPlaneTokens({
         url: cpUrl,
         token: internalToken,
         platform: "bitbucket",
@@ -353,6 +355,48 @@ async function main() {
     });
     log("info", "bitbucket reviews on: pull request events only, no chat commands", {
       why: "authorizing an arbitrary commenter needs workspace-admin scope a review bot should not hold",
+    });
+  }
+
+  // Bitbucket Server / Data Center. A separate REST surface from Cloud, so a
+  // separate client, and it needs the instance URL: unlike Cloud there is no
+  // default host because every install has its own.
+  const bbServerUrl = process.env.CAVIX_BITBUCKET_SERVER_URL;
+  if (cpUrl && internalToken && bbServerUrl) {
+    platforms["bitbucket-server"] = new RestBitbucketServerClient({
+      tokens: makeControlPlaneTokens({
+        url: cpUrl,
+        token: internalToken,
+        platform: "bitbucket-server",
+        logger: { warn: (m, meta) => log("warn", m, meta) },
+      }),
+      baseUrl: bbServerUrl,
+      logger: { info: (m, meta) => log("info", m, meta) },
+    });
+    log("info", "bitbucket data center reviews on: pull request events only, no chat commands", {
+      instance: bbServerUrl,
+    });
+  }
+
+  // Azure DevOps, on the same terms. The one platform whose diff Cavix computes
+  // itself, because `diffs/commits` returns changed PATHS and no content: see
+  // the note at the top of azure/rest.ts, and `diffLimitations`, which is how a
+  // file that could not be diffed exactly reaches the reader instead of being
+  // dropped.
+  if (cpUrl && internalToken && process.env.CAVIX_AZURE !== "off") {
+    platforms["azure-devops"] = new RestAzureClient({
+      tokens: makeControlPlaneTokens({
+        url: cpUrl,
+        token: internalToken,
+        platform: "azure",
+        logger: { warn: (m, meta) => log("warn", m, meta) },
+      }),
+      baseUrl: process.env.CAVIX_AZURE_URL,
+      logger: { info: (m, meta) => log("info", m, meta) },
+    });
+    log("info", "azure devops reviews on: the diff is computed locally, files it cannot diff are named on the review", {
+      instance: process.env.CAVIX_AZURE_URL ?? "https://dev.azure.com",
+      commands: "off (an arbitrary commenter's push permission cannot be checked without org-level scopes)",
     });
   }
 

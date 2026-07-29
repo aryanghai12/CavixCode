@@ -355,6 +355,41 @@ code can branch: the workflow branches on a capability in exactly two places
 (skip reactions, and do not claim a block that cannot happen), and both of those
 change what a human is told rather than what the pipeline computes.
 
+### Stage 11 — why Azure DevOps needed a differ, and what that cost
+
+Four of the five hosts hand Cavix a unified diff. Azure's `diffs/commits` returns
+a list of CHANGED PATHS and a change type, with no content at all, so on Azure
+the diff is produced locally from the two versions of each file.
+
+That is not a detail, because everything downstream treats the diff as exact.
+`commentableLines` decides which lines an inline comment may anchor to and every
+platform rejects an anchor that is not in the diff. A finding's line number is
+where a human is sent. The sandbox reproduces a bug at a coordinate that came
+from it. An approximate diff does not fail: it silently moves findings onto lines
+they do not belong to, and nothing in the system can tell that it happened.
+
+So `packages/differ` is Myers' published algorithm (exact and minimal), verified
+line for line against `git diff --no-index -U3` on the cases that break a naive
+one: adjacent and distant hunks, added and deleted files, a file with no trailing
+newline, a reindent, and a file of repeated lines. And it is BOUNDED: past an
+edit budget, a line budget, or on binary content it REFUSES, and the file is left
+out of the review and **named on it** through `ReviewPlatform.diffLimitations`.
+
+The alternative is a heuristic that is usually right, and the reason it is not
+acceptable is the same reason the Scope module never states an unmeasured number:
+a review that quietly skipped two files is claiming coverage it does not have,
+and the first fabricated claim a customer catches costs us all the others.
+
+Two capabilities are declared false on Azure and both are refusals rather than
+gaps. There is no bot-blocking review, because a bot can only vote on a pull
+request it was added as a reviewer to; blocking is a pull request status a branch
+policy can require, exactly as on GitLab. And `commandsAllowed` returns false,
+because answering "may this arbitrary user push here?" needs Graph or
+Security-namespace scopes a review bot has no business holding. Bitbucket, Cloud
+and Data Center, refuse commands for the same reason. **A command path that
+cannot check permission is an open door**, and this codebase has shipped one of
+those once already.
+
 The rule this encodes: **a platform that cannot do something says so on the
 review.** A GitLab review that was quietly less than a GitHub one, with nobody
 told why, is the failure mode this codebase exists to avoid. The specific case
@@ -397,8 +432,39 @@ honest or merely plausible:
    survives whatever bar the workspace has learned. No volume of rejections can
    take a measured fact off a pull request.
 
-The Stage 10 half of the loop (calibrating the *verify* gate from the same
-history, so proof is spent where acceptance is genuinely mixed) is not wired.
+### Stage 12's other half — why the same history moves the sandbox
+
+The loop is now closed on both ends, and the second end is interesting because
+the case where a threshold is useless is exactly the case where execution is not.
+
+A threshold decides what a model is trusted to **say**. `verifyByCategory`
+decides where proof is worth **spending**, and it is read off the same decisions,
+on the same `review-config` call, so closing it cost zero additional round trips.
+
+Two branches, and the first is the one that earns it:
+
+1. **`"always"`.** When a workspace's accepts and rejects overlap at every
+   confidence level, no bar separates them and Stage 9 correctly refuses to move
+   one. That refusal is a statement about CONFIDENCE, not a shrug: what tells a
+   real finding from a plausible one there is whether it reproduces. So the
+   sandbox runs on that category, including on the findings the default gate
+   would have skipped as nits.
+2. **`"never"`.** When they accept essentially everything, a proof changes no
+   decision they were going to make, and a sandbox run is the most expensive
+   thing in a review.
+
+Critical, high and security are proven regardless, because they are checked
+before the learned policy is consulted. That line is load-bearing: their proof is
+the product's own claim, and no volume of accepts is a reason to stop making it.
+The policy also cannot suppress anything, only decide where proof is spent;
+Stage 9's invariants are untouched, and a deterministic fact is never sent to a
+sandbox that could add nothing to it.
+
+Like the threshold, the policy arrives per review on the `VerifyContext` rather
+than living on the `Verifier`, for the same reason the retention hook does: one
+`Verifier` is built at boot and shared by every review this orchestrator runs
+concurrently, and a policy held there would apply one customer's learned
+behaviour to another customer's pull request.
 
 ### Why FP-rate drops and F1 rises across phases
 

@@ -23,6 +23,17 @@
     "services/orchestrator/src/**/*.ts",
     "services/orchestrator/test/**/*.ts",
     "services/control-plane/src/**/*.ts",
-    "eval/**/*.ts"
+    "services/control-plane/test/**/*.ts",
+    "eval/**/*.ts",
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/node_modules",
+    // The VS Code extension is checked against the `vscode` module's own types,
+    // which this repo does not install. It has its own build; type-checking it
+    // here would report an unresolvable import on every run of the gate and
+    // train everybody to ignore the output.
+    "editors/**"
   ]
 }

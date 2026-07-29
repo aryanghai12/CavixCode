@@ -55,3 +55,37 @@ test("parseUnifiedDiff: marks deletions and skips /dev/null new side", () => {
   assert.equal(files.length, 1);
   assert.equal(files[0].deleted, true);
 });
+
+test("parseUnifiedDiff: a deleted file keeps the name it had", () => {
+  // git writes `+++ /dev/null` for a deletion, so the only place the path
+  // survives is the `---` line. Reading just the `+++` left `path` empty, and
+  // everything that names a file then had nothing to print: the walkthrough
+  // rendered an empty code span, and `subsystem("")` filed every deletion under
+  // the repository root and inflated the traversed-subsystem count with it.
+  const del = `diff --git a/src/legacy/old.ts b/src/legacy/old.ts
+deleted file mode 100644
+index 1234567..0000000
+--- a/src/legacy/old.ts
++++ /dev/null
+@@ -1,2 +0,0 @@
+-export function old() {}
+-
+`;
+  const [file] = parseUnifiedDiff(del);
+  assert.equal(file.deleted, true);
+  assert.equal(file.path, "src/legacy/old.ts");
+});
+
+test("parseUnifiedDiff: an added file takes its path from the new side, not the old one", () => {
+  const added = `diff --git a/src/new.ts b/src/new.ts
+new file mode 100644
+--- /dev/null
++++ b/src/new.ts
+@@ -0,0 +1,1 @@
++export const x = 1;
+`;
+  const [file] = parseUnifiedDiff(added);
+  assert.equal(file.deleted, false);
+  assert.equal(file.path, "src/new.ts");
+  assert.deepEqual([...(commentableLines([file]).get("src/new.ts") ?? [])], [1]);
+});

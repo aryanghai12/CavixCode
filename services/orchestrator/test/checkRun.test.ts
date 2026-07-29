@@ -86,6 +86,7 @@ function config(over: Partial<OrgReviewConfig> = {}): OrgReviewConfig {
     tone: "concise",
     pathFilters: { include: [], exclude: [] },
     thresholdByCategory: {},
+    verifyByCategory: {},
     ...over,
   };
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cavix/edge/internal/canonical"
@@ -28,6 +29,7 @@ type Handler struct {
 	secret          string
 	gitlabToken     string
 	bitbucketSecret string
+	azureSecret     string
 	queue           queue.Producer
 	dedupe          dedupe.Store
 	log             *slog.Logger
@@ -70,6 +72,16 @@ func (h *Handler) WithBitbucket(secret string) *Handler {
 	return h
 }
 
+// WithAzure enables Azure DevOps ingestion on the same endpoint.
+//
+// The secret is the PASSWORD half of the Basic credential configured on the
+// service hook subscription, because that is the only authentication an Azure
+// web hook can carry: it signs nothing. See azure.go for what that costs.
+func (h *Handler) WithAzure(secret string) *Handler {
+	h.azureSecret = secret
+	return h
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
@@ -98,6 +110,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event := r.Header.Get("X-GitHub-Event")
+
+	// Azure DevOps has no event header of its own to route on: a service hook
+	// sends plain JSON and whatever headers the operator typed in. So it is
+	// recognised either by the header we ask them to add, or by elimination,
+	// which is safe because the request is then authenticated against Azure's
+	// OWN secret before a byte of the body is trusted. A request that is neither
+	// GitHub-shaped nor Azure-shaped fails one check or the other; it is never
+	// accepted by both.
+	if h.azureSecret != "" && (strings.EqualFold(r.Header.Get(AzurePlatformHeader), AzurePlatformValue) || event == "") {
+		h.serveAzure(w, r, start, body)
+		return
+	}
 	delivery := r.Header.Get("X-GitHub-Delivery")
 	sig := r.Header.Get(SignatureHeader)
 
@@ -230,6 +254,33 @@ func (h *Handler) serveBitbucket(w http.ResponseWriter, r *http.Request, start t
 			return
 		}
 		h.log.Warn("bitbucket normalize failed", "event", event, "err", err.Error())
+		http.Error(w, "unprocessable payload", http.StatusBadRequest)
+		return
+	}
+	h.enqueue(w, r, start, delivery, job)
+}
+
+// serveAzure handles a pull request event. Comments are deliberately NOT
+// handled: see the note at the top of azure.go. A command whose author's
+// permission cannot be checked is an open door, and Azure does not let a review
+// bot check an arbitrary user's without organisation-level scopes.
+func (h *Handler) serveAzure(w http.ResponseWriter, r *http.Request, start time.Time, body []byte) {
+	if !VerifyAzureBasic(h.azureSecret, r.Header.Get("Authorization")) {
+		// Never echo the header: it carries the credential itself.
+		h.log.Warn("azure basic authentication failed")
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	// Azure sends no delivery id header; the idempotency key carries the weight.
+	delivery := r.Header.Get("X-Request-Id")
+	job, err := NormalizeAzurePullRequest(body, delivery)
+	if err != nil {
+		if errors.Is(err, ErrNotTrigger) {
+			h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"non_trigger_action"}`)
+			return
+		}
+		h.log.Warn("azure normalize failed", "err", err.Error())
 		http.Error(w, "unprocessable payload", http.StatusBadRequest)
 		return
 	}

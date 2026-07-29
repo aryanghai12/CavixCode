@@ -130,6 +130,29 @@ test("a team that rejects a category teaches Stage 9 a higher bar for it", async
   });
 });
 
+test("the Stage 10 half rides the same call: proof follows the same history", async () => {
+  // The loop closed on both ends, over one request. A second endpoint would have
+  // put another control-plane hop in front of every pull request in the
+  // deployment, for a number that changes when a human clicks Accept.
+  await withServer(async (base) => {
+    const cookie = await signIn(base, "acme");
+    // Accepts and rejects at the SAME confidence: no bar can separate them, so
+    // Stage 9 correctly refuses and Stage 10 is the instrument that is left.
+    await decide(base, cookie, { org: "acme", pr: 1, category: "correctness", confidence: 0.7, n: 10, accept: false });
+    await decide(base, cookie, { org: "acme", pr: 2, category: "correctness", confidence: 0.7, n: 10, accept: true });
+    // A category they accept outright: proof there changes no decision.
+    await decide(base, cookie, { org: "acme", pr: 3, category: "style", confidence: 0.8, n: 12, accept: true });
+
+    const config = (await (await reviewConfig(base, "acme")).json()) as {
+      thresholdByCategory: Record<string, number>;
+      verifyByCategory: Record<string, string>;
+    };
+    assert.equal(config.thresholdByCategory.correctness, undefined, "no bar can separate them");
+    assert.equal(config.verifyByCategory.correctness, "always", "so the sandbox proves them instead");
+    assert.equal(config.verifyByCategory.style, "never", "and stops paying where it changes nothing");
+  });
+});
+
 test("a workspace with three decisions gets no threshold at all", async () => {
   await withServer(async (base) => {
     const cookie = await signIn(base, "acme");

@@ -42,7 +42,13 @@ function job(over: Partial<ReviewJob> = {}): ReviewJob {
   };
 }
 
-function wire(opts: { platform?: "github" | "gitlab"; capabilities?: typeof GITLAB_CAPABILITIES } = {}) {
+function wire(
+  opts: {
+    platform?: "github" | "gitlab" | "bitbucket" | "bitbucket-server" | "azure-devops";
+    capabilities?: typeof GITLAB_CAPABILITIES;
+    webUrl?: string;
+  } = {},
+) {
   const provider = new FakeProvider(() =>
     JSON.stringify({
       summary: "Adds a DB lookup.",
@@ -68,6 +74,7 @@ function wire(opts: { platform?: "github" | "gitlab"; capabilities?: typeof GITL
     diff: DIFF,
     ...(opts.platform ? { platform: opts.platform } : {}),
     ...(opts.capabilities ? { capabilities: opts.capabilities } : {}),
+    ...(opts.webUrl ? { webUrl: opts.webUrl } : {}),
   });
   return { github, reviewer: new Reviewer({ gateway }) };
 }
@@ -137,6 +144,117 @@ test("a job for a platform with no client is dropped, never reviewed with the de
     logs.some((l) => l.msg.includes("no client for this platform")),
     "and it says so, because there is nowhere else to say it",
   );
+});
+
+test("all four platforms route to their own client, and none to anybody else's", async () => {
+  // The seam, proven at the width it now has. A job reviewed through the wrong
+  // client would call the right-looking API against the wrong repository.
+  const gh = wire();
+  const gl = wire({ platform: "gitlab", capabilities: GITLAB_CAPABILITIES });
+  const bb = wire({ platform: "bitbucket" });
+  const bs = wire({ platform: "bitbucket-server" });
+  const az = wire({ platform: "azure-devops" });
+  const handler = makeReviewHandler({
+    github: gh.github,
+    platforms: {
+      gitlab: gl.github,
+      bitbucket: bb.github,
+      "bitbucket-server": bs.github,
+      "azure-devops": az.github,
+    },
+    reviewer: gh.reviewer,
+    logger,
+  });
+
+  await handler(job());
+  await handler(job({ platform: "gitlab", repo: "acme/platform/billing" }));
+  await handler(job({ platform: "bitbucket" }));
+  await handler(job({ platform: "bitbucket-server", repo: "PAY/billing" }));
+  await handler(job({ platform: "azure-devops", repo: "acme/payments/billing-api" }));
+
+  for (const [name, c] of [
+    ["github", gh],
+    ["gitlab", gl],
+    ["bitbucket", bb],
+    ["bitbucket-server", bs],
+    ["azure-devops", az],
+  ] as const) {
+    assert.equal(c.github.submissions.length, 1, `${name} posted exactly its own review`);
+  }
+  // Azure's "organization/project" namespace survives refFromJob the same way a
+  // nested GitLab group does.
+  assert.equal(az.github.submissions[0].ref.owner, "acme/payments");
+  assert.equal(az.github.submissions[0].ref.repo, "billing-api");
+});
+
+// ── the review names the host it is going to ────────────────────────────────
+
+test("permalinks are built for the host the review is going to, on every platform", async () => {
+  // Every permalink used to be built against a hardcoded github.com, so a reader
+  // on any other host clicked a finding's line number and left for a repository
+  // that does not exist.
+  const cases = [
+    { platform: "gitlab" as const, webUrl: "https://gitlab.acme.com", expect: /gitlab\.acme\.com\/acme\/widget\/-\/blob\// },
+    { platform: "bitbucket" as const, webUrl: "https://bitbucket.org", expect: /bitbucket\.org\/acme\/widget\/src\// },
+    {
+      platform: "azure-devops" as const,
+      webUrl: "https://dev.azure.com",
+      expect: /dev\.azure\.com\/acme\/_git\/widget\?path=/,
+    },
+  ];
+  for (const c of cases) {
+    const { github, reviewer } = wire({ platform: c.platform, webUrl: c.webUrl });
+    await runReview(job({ platform: c.platform }), {
+      github,
+      platforms: { [c.platform]: github },
+      reviewer,
+      logger,
+      reviewConfig: async () => ({ ...DEFAULT_REVIEW_CONFIG, verifyFindings: false, sections: ALL_SECTIONS }),
+    });
+    const body = github.lastReview()!.body;
+    assert.match(body, c.expect, `${c.platform} links at its own host`);
+    assert.doesNotMatch(body, /github\.com\/acme\/widget/, `${c.platform} never links at github.com`);
+  }
+});
+
+test("files the host could not diff are NAMED on the review, never dropped quietly", async () => {
+  // Azure returns changed PATHS and no content, so Cavix builds the diff itself
+  // and a file can be too large, too rewritten or binary. A review that skipped
+  // two files without saying so claims coverage it does not have.
+  const { github, reviewer } = wire({ platform: "azure-devops" });
+  github.limitations = [
+    { path: "vendor/bundle.min.js", reason: "40200 lines, over the 20000 Cavix diffs in one file" },
+    { path: "assets/logo.png", reason: "binary file, not reviewable line by line" },
+  ];
+  await runReview(job({ platform: "azure-devops" }), {
+    github,
+    platforms: { "azure-devops": github },
+    reviewer,
+    logger,
+    reviewConfig: async () => ({ ...DEFAULT_REVIEW_CONFIG, verifyFindings: false, sections: ALL_SECTIONS }),
+  });
+
+  const body = github.lastReview()!.body;
+  assert.match(body, /### Not Reviewed/);
+  assert.match(body, /vendor\/bundle\.min\.js/);
+  assert.match(body, /assets\/logo\.png/);
+  assert.match(body, /binary file, not reviewable line by line/);
+  // ...and the Scope module qualifies everything under it, rather than letting a
+  // clean security row read as a clean read of the whole change.
+  assert.match(body, /Diff Coverage.*2 files could not be diffed exactly/);
+});
+
+test("a host that hands over the whole diff says nothing about coverage", async () => {
+  const { github, reviewer } = wire();
+  await runReview(job(), {
+    github,
+    reviewer,
+    logger,
+    reviewConfig: async () => ({ ...DEFAULT_REVIEW_CONFIG, verifyFindings: false, sections: ALL_SECTIONS }),
+  });
+  const body = github.lastReview()!.body;
+  assert.doesNotMatch(body, /Not Reviewed/);
+  assert.doesNotMatch(body, /Diff Coverage/);
 });
 
 // ── capabilities ────────────────────────────────────────────────────────────

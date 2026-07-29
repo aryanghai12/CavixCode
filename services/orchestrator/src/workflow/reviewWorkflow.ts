@@ -427,6 +427,22 @@ export async function runReview(
 
   // Step 2 — fetch the diff, then cut out the paths the owner excluded.
   const fullDiff = await deps.github.fetchPullDiff(ref);
+  // What the host could not hand over. Empty everywhere but Azure DevOps, which
+  // returns changed PATHS rather than content, so Cavix builds the diff itself
+  // and a file can be too large, too rewritten or binary. Read straight after
+  // the fetch, because it describes THAT fetch.
+  const diffLimitations = deps.github.diffLimitations(ref);
+  if (diffLimitations.length > 0) {
+    // Logged, not counted as a stage failure. A vendored file too large to diff
+    // is expected behaviour rather than a fault, and filing it under
+    // `cavix_stage_failures_total` would blunt the one counter an operator
+    // alerts on. The review names the files, which is what has to happen.
+    log.info("part of this change could not be diffed exactly; it is named on the review", {
+      ...base,
+      files: diffLimitations.length,
+      first: diffLimitations.slice(0, 5).map((d) => d.path),
+    });
+  }
   const filtered = filterDiff(fullDiff, config.pathFilters);
   const diff = filtered.diff;
   log.info("fetched diff", {
@@ -641,7 +657,21 @@ export async function runReview(
   const retention = makeRetentionCollector({ logger: log });
   if (deps.verify && config.verifyFindings && result.findings.length > 0) {
     try {
-      const outcome = await deps.verify(result.findings, ref, org, retention.onTeardown);
+      // Stage 12 closes on this end too. The same review-config fetch that
+      // carried the learned confidence bars into Stage 9 carries, for each
+      // category, whether this workspace's own history says proof is worth
+      // spending there. Where their accepts and rejects overlap at every
+      // confidence level, a threshold cannot help and execution can, so the
+      // sandbox runs on findings the default gate would skip; where they accept
+      // essentially everything, it stops running on the ones proof would not
+      // change. Critical, high and security are proven regardless.
+      const outcome = await deps.verify(
+        result.findings,
+        ref,
+        org,
+        retention.onTeardown,
+        config.verifyByCategory,
+      );
       result.findings = outcome.surfaced;
       suppressedCount = outcome.suppressed.length;
       verifyCost = outcome.costUsd;
@@ -665,7 +695,17 @@ export async function runReview(
     }
   }
 
-  const linkRef = { owner: ref.owner, repo: ref.repo, headSha: ref.headSha };
+  // The host as well as the coordinates. Without it every permalink in the
+  // review was built against a hardcoded github.com, so a GitLab or Bitbucket
+  // reader clicking a finding's line number left for a repository that does not
+  // exist, and a GitHub Enterprise reader left their own network.
+  const linkRef = {
+    owner: ref.owner,
+    repo: ref.repo,
+    headSha: ref.headSha,
+    host: deps.github.webUrl,
+    platform: deps.github.platform,
+  };
 
   // Step 4 — the summary goes in the PR DESCRIPTION, where a reviewer reads it
   // first and where it cannot scroll away. Attempted BEFORE the review is posted
@@ -717,6 +757,9 @@ export async function runReview(
     capabilities: deps.github.capabilities,
     blockUnavailable,
     sections: config.sections,
+    // What the host could not give us. Never dropped quietly: a review that
+    // skipped two files without saying so claims coverage it does not have.
+    ...(diffLimitations.length > 0 ? { diffLimitations } : {}),
     // Only used when the description could not be written (a fork PR, a revoked
     // permission), in which case the whole narrative folds into the comment and
     // the diagram goes with it rather than being the one piece that vanishes.
@@ -966,7 +1009,17 @@ async function runSummaryOnly(
   check: ReviewCheck,
   log: WorkflowLogger,
 ): Promise<ReviewOutcome> {
-  const linkRef = { owner: ref.owner, repo: ref.repo, headSha: ref.headSha };
+  // The host as well as the coordinates. Without it every permalink in the
+  // review was built against a hardcoded github.com, so a GitLab or Bitbucket
+  // reader clicking a finding's line number left for a repository that does not
+  // exist, and a GitHub Enterprise reader left their own network.
+  const linkRef = {
+    owner: ref.owner,
+    repo: ref.repo,
+    headSha: ref.headSha,
+    host: deps.github.webUrl,
+    platform: deps.github.platform,
+  };
   let descriptionUpdated = false;
   try {
     const meta = await deps.github.getPull(ref);

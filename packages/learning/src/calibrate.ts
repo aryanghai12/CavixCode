@@ -60,6 +60,30 @@ export interface DecisionRecord {
   at?: string;
 }
 
+/**
+ * What Stage 10 should do about a category, learned from the same history.
+ *
+ * This is the OTHER half of the loop. Stage 9's threshold decides what a model
+ * is trusted to SAY; this decides where the sandbox is worth SPENDING, and the
+ * two answer different questions about the same data:
+ *
+ *   "always"  The team's accepts and rejects overlap at every confidence level,
+ *             so no threshold separates them. Stage 9 correctly refuses to move
+ *             the bar there, which leaves execution as the only instrument that
+ *             can tell a real finding in this category from a plausible one. So
+ *             prove them, including the ones the default gate would skip.
+ *
+ *   "never"   The team accepts essentially everything in this category. A proof
+ *             changes no decision they were going to make, and a sandbox run is
+ *             the most expensive thing in a review. Applies ONLY to findings the
+ *             default gate would have verified merely for clearing the
+ *             confidence bar: critical, high and security are never skipped,
+ *             because those are the ones whose proof carries the product.
+ *
+ * Absent means no opinion, and the default gate applies unchanged.
+ */
+export type VerifyPolicy = "always" | "never";
+
 /** What was decided about one category, and what Cavix did about it. */
 export interface CategoryCalibration {
   category: string;
@@ -73,6 +97,10 @@ export interface CategoryCalibration {
   moved: boolean;
   /** Why, in the team's own numbers. Rendered verbatim on the Learnings page. */
   reason: string;
+  /** What Stage 10 does here, when the history says anything. See VerifyPolicy. */
+  verify?: VerifyPolicy;
+  /** Why, in the team's own numbers. Absent when `verify` is. */
+  verifyReason?: string;
 }
 
 export interface OrgCalibration {
@@ -85,6 +113,14 @@ export interface OrgCalibration {
    * reader, and only one of them is a claim.
    */
   thresholdByCategory: Record<string, number>;
+  /**
+   * category -> what Stage 10 does there. The Stage 10 half of the loop.
+   *
+   * Same rule as `thresholdByCategory`: only categories with an actual opinion
+   * appear, because an absent entry and an entry that happens to equal the
+   * default mean different things to a reader and only one of them is a claim.
+   */
+  verifyByCategory: Record<string, VerifyPolicy>;
   /** Every category with history, moved or not, with its reason. */
   categories: CategoryCalibration[];
   /** Laplace-smoothed accept rates, for display. Not used to set a threshold. */
@@ -189,13 +225,15 @@ export function calibrate(decisions: DecisionRecord[], options: CalibrateOptions
 
   const categories: CategoryCalibration[] = [];
   const thresholdByCategory: Record<string, number> = {};
+  const verifyByCategory: Record<string, VerifyPolicy> = {};
 
   for (const [category, rows] of byCategory) {
     const cal = calibrateCategory(category, rows, o, ceiling, floor);
     categories.push(cal);
-    // Nothing is fed to Stage 9 until the workspace as a whole has enough
-    // history, even for a category that has plenty of its own.
+    // Nothing is fed to Stage 9 or Stage 10 until the workspace as a whole has
+    // enough history, even for a category that has plenty of its own.
     if (active && cal.moved) thresholdByCategory[category] = cal.threshold;
+    if (active && cal.verify) verifyByCategory[category] = cal.verify;
   }
 
   categories.sort((a, b) => b.samples - a.samples || a.category.localeCompare(b.category));
@@ -203,6 +241,7 @@ export function calibrate(decisions: DecisionRecord[], options: CalibrateOptions
   return {
     base: o.baseThreshold,
     thresholdByCategory,
+    verifyByCategory,
     categories,
     categoryAcceptRate: acceptRate(inWindow, (d) => d.category),
     agentAcceptRate: acceptRate(inWindow.filter((d) => d.agent), (d) => d.agent as string),
@@ -267,6 +306,15 @@ function calibrateCategory(
       reason:
         `${accepted.length} of ${rows.length} accepted. Your team trusts this category, so the bar drops ` +
         `to ${fmt(floor)} (was ${fmt(base)}) and you see more of it.`,
+      // The Stage 10 half. A proof changes no decision this team was going to
+      // make here, and a sandbox run is the most expensive thing in a review.
+      // The gate still proves anything critical, high or security: skipping
+      // those would be trading the product's own claim for the saving.
+      verify: "never",
+      verifyReason:
+        `You accept ${Math.round(precision * 100)}% of this category, so proving one changes nothing you ` +
+        `were going to do. Cavix stops spending sandbox time here, except on anything critical, high or ` +
+        `security, which it still proves.`,
     };
   }
 
@@ -368,11 +416,24 @@ function calibrateCategory(
   // team rejects some of this category, but the rejections are not
   // lower-confidence than the accepts, so no bar tells them apart. Moving it
   // would drop the good findings at the same rate as the bad ones.
-  return stay(
-    `${rejected.length} rejected and ${accepted.length} accepted, at overlapping confidence levels. ` +
-      `No bar separates them, so Cavix has not moved this one. A confidence threshold is the wrong ` +
-      `instrument here.`,
-  );
+  //
+  // And this is exactly where the Stage 10 half earns its place. "A confidence
+  // threshold is the wrong instrument" is a statement about confidence, not a
+  // shrug: what separates a real finding from a plausible one here is whether it
+  // reproduces. So the sandbox runs on all of them, including the ones the
+  // default gate would have skipped as low-confidence nits.
+  return {
+    ...stay(
+      `${rejected.length} rejected and ${accepted.length} accepted, at overlapping confidence levels. ` +
+        `No bar separates them, so Cavix has not moved this one. A confidence threshold is the wrong ` +
+        `instrument here.`,
+    ),
+    verify: "always",
+    verifyReason:
+      `Because no confidence bar separates them, Cavix proves this category by execution instead: every ` +
+      `finding here is reproduced in a sandbox before you see it, including the ones it would normally ` +
+      `judge too small to be worth running.`,
+  };
 }
 
 /** Laplace-smoothed accept rate per key. Display only: it sets no threshold. */

@@ -956,6 +956,23 @@
         </div>
       </div>`;
 
+    // The OTHER half of the loop: where your history moved the SANDBOX, not the
+    // threshold. It answers a different question about the same decisions, so it
+    // gets its own panel rather than a column nobody would read: a bar decides
+    // what a model is trusted to say, this decides where proof is spent.
+    const proofRows = cal ? cal.categories.filter((c) => c.verify) : [];
+    const proofRow = (c) => `
+      <div class="settings-row">
+        <div class="sr-label">
+          <b>${esc(c.category)}</b>
+          <div class="t-faint" style="margin-top:4px;max-width:640px">${esc(c.verifyReason || "")}</div>
+        </div>
+        <div style="text-align:right;white-space:nowrap">
+          <b style="color:${c.verify === "always" ? "var(--green)" : "var(--text-dim)"}">${c.verify === "always" ? "⬢ proved" : "not proved"}</b>
+          <div class="t-faint">${c.samples} decided</div>
+        </div>
+      </div>`;
+
     const calibrationPanel = !cal
       ? ""
       : `<div class="panel">
@@ -971,7 +988,15 @@
             ? `<div style="margin-top:24px"><div class="t-faint" style="margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em;font-size:11px">Measured, left alone</div>${held.map((c) => barRow(c, false)).join("")}</div>`
             : ""}
         </div>
-      </div>`;
+      </div>
+      ${proofRows.length ? `<div class="panel">
+        <div class="panel-head"><div><h2>Where your decisions moved the proof</h2>
+          <span class="sub">${cal.active ? "Live on your pull requests now." : "Not applied yet."} Sandbox time follows the same history.</span></div></div>
+        <div class="panel-body">
+          <p class="sr-desc" style="margin-bottom:16px">A confidence bar decides what a model is trusted to <b>say</b>. This decides where Cavix spends a sandbox. Where your accepts and rejects overlap at every confidence level, no bar can tell them apart, so Cavix proves them by running the code instead. Where you accept nearly everything, a proof changes nothing you were going to do. Anything critical, high or security is proved either way.</p>
+          ${proofRows.map(proofRow).join("")}
+        </div>
+      </div>` : ""}`;
 
     content.innerHTML = `
       <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
@@ -1014,7 +1039,58 @@
     const gh = await api(`/api/github/status`).catch(() => ({ connected: false, demo: false }));
     // Same posture: if the status call fails, say "not connected" rather than
     // implying a connection that may not exist.
-    const gl = await api(`/api/orgs/${encodeURIComponent(org)}/gitlab-token`).catch(() => ({ connected: false }));
+    // Every host with no per-install credential connects the same way: a token
+    // the owner pastes, held per workspace. One list rather than four blocks,
+    // because they differ only in the words.
+    //
+    // These used to read "soon", which is what the panel said for months after
+    // Bitbucket Cloud went live. A dashboard that understates the product is the
+    // same failure as one that overstates it: in both cases the page and the
+    // pull requests disagree, and the customer believes the page.
+    const TOKEN_HOSTS = [
+      {
+        key: "gitlab",
+        mono: "GL",
+        name: "GitLab",
+        connected: "Connected. Merge requests on gitlab.com and self-managed are reviewed.",
+        idle: "Merge-request reviews, gitlab.com or self-managed. Needs an access token with api scope.",
+        prompt:
+          "Paste a GitLab access token with `api` scope.\n\nA project or group access token is best: it belongs to the project rather than to you, so reviews keep working after you leave.",
+      },
+      {
+        key: "bitbucket",
+        mono: "BB",
+        name: "Bitbucket Cloud",
+        connected: "Connected. Pull request events are reviewed. Chat commands are off on Bitbucket.",
+        idle: "Pull request reviews on bitbucket.org. Needs a workspace access token with pullrequest:write.",
+        prompt:
+          "Paste a Bitbucket Cloud access token with `pullrequest:write` and `repository` scopes.\n\nA workspace access token is best: it outlives whoever set it up.",
+      },
+      {
+        key: "bitbucket-server",
+        mono: "DC",
+        name: "Bitbucket Data Center",
+        connected: "Connected. Pull request events on your own server are reviewed.",
+        idle: "Self-hosted Bitbucket Server / Data Center. Needs an HTTP access token with repository write.",
+        prompt:
+          "Paste a Bitbucket Data Center HTTP access token with repository WRITE.\n\nA project token is best: it belongs to the project rather than to you.",
+      },
+      {
+        key: "azure",
+        mono: "AZ",
+        name: "Azure DevOps",
+        connected: "Connected. Pull requests are reviewed; Cavix builds the diff itself and names anything it could not.",
+        idle: "Pull request reviews on Azure DevOps. Needs a PAT with Code (read & write) and Build (read).",
+        prompt:
+          "Paste an Azure DevOps personal access token with Code (read & write), Pull Request Threads (read & write) and Build (read).",
+      },
+    ];
+    const statuses = await Promise.all(
+      TOKEN_HOSTS.map((h) =>
+        api(`/api/orgs/${encodeURIComponent(org)}/${h.key}-token`).catch(() => ({ connected: false })),
+      ),
+    );
+
     const row = (mono, name, desc, state, action) => `<div class="repo-row"><div class="mono-badge">${esc(mono)}</div><div class="r-main"><div class="r-name">${esc(name)}</div><div class="r-desc">${esc(desc)}</div></div>${state}${action || ""}</div>`;
     const connected = `<span class="badge badge-verified">connected</span>`;
     const soon = `<span class="badge">soon</span>`;
@@ -1033,17 +1109,15 @@
             gh.demo ? `<span class="badge">demo data</span>` : gh.connected ? connected : soon,
             gh.connected && !gh.demo ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`,
           )}
-          ${row(
-            "GL",
-            "GitLab",
-            gl.connected
-              ? "Connected. Merge requests on gitlab.com and self-managed are reviewed."
-              : "Merge-request reviews, gitlab.com or self-managed. Needs an access token with api scope.",
-            gl.connected ? connected : `<span class="badge">not connected</span>`,
-            `<button class="btn btn-soft btn-sm" id="glConnect">${gl.connected ? "Replace" : "Connect"}</button>`,
-          )}
-          ${row("BB", "Bitbucket", "PR reviews incl. Server (adapter ready)", soon)}
-          ${row("AZ", "Azure DevOps", "PR reviews (adapter ready)", soon)}
+          ${TOKEN_HOSTS.map((h, i) =>
+            row(
+              h.mono,
+              h.name,
+              statuses[i].connected ? h.connected : h.idle,
+              statuses[i].connected ? connected : `<span class="badge">not connected</span>`,
+              `<button class="btn btn-soft btn-sm" data-connect="${h.key}">${statuses[i].connected ? "Replace" : "Connect"}</button>`,
+            ),
+          ).join("")}
         </div>
       </div>
       <div class="panel">
@@ -1055,27 +1129,29 @@
         </div>
       </div>`;
 
-    $("glConnect")?.addEventListener("click", async () => {
-      // A token, not an OAuth flow. GitLab's OAuth issues a USER token that
-      // expires and that reviews would then post under a human's name; a project
-      // or group access token belongs to the project and outlives whoever set it
-      // up, which is what a bot needs.
-      const token = prompt(
-        "Paste a GitLab access token with `api` scope.\n\nA project or group access token is best: it belongs to the project rather than to you, so reviews keep working after you leave.",
-      );
-      if (token === null) return;
-      if (!token.trim()) return toast("No token entered");
-      try {
-        await api(`/api/orgs/${encodeURIComponent(org)}/gitlab-token`, {
-          method: "POST",
-          body: JSON.stringify({ token: token.trim() }),
-        });
-        toast("GitLab connected");
-        renderIntegrations();
-      } catch (e) {
-        toast(e.message);
-      }
-    });
+    // A token, not an OAuth flow, on every one of these. OAuth issues a USER
+    // token that expires and that reviews would then post under a human's name;
+    // a project or workspace token belongs to the project and outlives whoever
+    // set it up, which is what a bot needs.
+    for (const el of content.querySelectorAll("[data-connect]")) {
+      el.addEventListener("click", async () => {
+        const host = TOKEN_HOSTS.find((h) => h.key === el.getAttribute("data-connect"));
+        if (!host) return;
+        const token = prompt(host.prompt);
+        if (token === null) return;
+        if (!token.trim()) return toast("No token entered");
+        try {
+          await api(`/api/orgs/${encodeURIComponent(org)}/${host.key}-token`, {
+            method: "POST",
+            body: JSON.stringify({ token: token.trim() }),
+          });
+          toast(`${host.name} connected`);
+          renderIntegrations();
+        } catch (e) {
+          toast(e.message);
+        }
+      });
+    }
   }
 
   // ---------- ADMIN (founder / core team only) ----------

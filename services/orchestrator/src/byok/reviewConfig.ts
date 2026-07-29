@@ -79,6 +79,17 @@ export interface OrgReviewConfig {
    * Stage 9 uses its own default, which is what it did before this existed.
    */
   thresholdByCategory: Record<string, number>;
+  /**
+   * Stage 12's other half: where this workspace's history says PROOF is worth
+   * spending, per category.
+   *
+   * Rides on the same call as the thresholds, for the same reason, and answers a
+   * different question about the same data. A threshold decides what a model is
+   * trusted to say; this decides where the sandbox runs. Empty is the normal
+   * state and means the default gate, which is what every review did before
+   * this existed.
+   */
+  verifyByCategory: Record<string, "always" | "never">;
 }
 
 export const ALL_SECTIONS: ReviewSections = {
@@ -102,6 +113,7 @@ export const DEFAULT_REVIEW_CONFIG: OrgReviewConfig = {
   tone: "concise",
   pathFilters: { include: [], exclude: [] },
   thresholdByCategory: {},
+  verifyByCategory: {},
 };
 
 export type ReviewConfigFetcher = (org: string) => Promise<OrgReviewConfig>;
@@ -213,7 +225,27 @@ export function coerce(value: unknown): OrgReviewConfig {
     tone: typeof v.tone === "string" && v.tone.trim() !== "" ? v.tone : DEFAULT_REVIEW_CONFIG.tone,
     pathFilters: { include: globs(pf.include), exclude: globs(pf.exclude) },
     thresholdByCategory: thresholds(v.thresholdByCategory),
+    verifyByCategory: verifyPolicies(v.verifyByCategory),
   };
+}
+
+/**
+ * Narrow the learned verify policies off the wire.
+ *
+ * Only the two words mean anything. Anything else is dropped rather than
+ * coerced, because the failure mode of a stray value here is expensive in one
+ * direction (a sandbox run per finding on every review) and quiet in the other
+ * (a category silently stops being proven), and neither announces itself.
+ */
+function verifyPolicies(value: unknown): Record<string, "always" | "never"> {
+  if (typeof value !== "object" || value === null) return {};
+  const out: Record<string, "always" | "never"> = {};
+  for (const [category, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw !== "always" && raw !== "never") continue;
+    if (category.trim() === "") continue;
+    out[category] = raw;
+  }
+  return out;
 }
 
 /**

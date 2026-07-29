@@ -116,6 +116,8 @@ test("healing does not fire for failures that are not about the model", async ()
   const broken: ReviewPlatform = {
     platform: github.platform,
     capabilities: github.capabilities,
+    webUrl: github.webUrl,
+    diffLimitations: () => [],
     fetchPullDiff: async () => { throw new Error("github: fetch diff HTTP 404 Not Found"); },
     getPull: (r) => github.getPull(r),
     fetchFile: (r, p) => github.fetchFile(r, p),

@@ -1,4 +1,4 @@
-# Handoff: what is left to build in Cavix
+# Handoff: where Cavix stands, and what is left
 
 Paste the prompt at the bottom into a fresh Claude Code session in this repo.
 Everything above it is the context that prompt assumes.
@@ -7,12 +7,12 @@ Everything above it is the context that prompt assumes.
 
 ## Where the product stands
 
-The live review path (`services/orchestrator/src/main.ts` → `runReview`) now runs
-**all thirteen stages** on a real pull request.
+The live review path (`services/orchestrator/src/main.ts` → `runReview`) runs
+**all thirteen stages** on a real pull request, on **all five code hosts**.
 
 | Stage | Status |
 |---|---|
-| 0 Edge ingestion (Go) | live |
+| 0 Edge ingestion (Go) | live, all five hosts on one `/webhook` |
 | 1 Durable orchestration (BullMQ) | live |
 | 2 Sandbox | live |
 | 3 Deterministic scanners | live |
@@ -24,186 +24,169 @@ The live review path (`services/orchestrator/src/main.ts` → `runReview`) now r
 | 8 Seven-agent ensemble | live |
 | 9 Adjudication | live |
 | 10 Execution verification | live |
-| 11 Synthesis and posting | live, **GitHub, GitLab** (incl. self-managed) **and Bitbucket Cloud** |
-| 12 Learning loop | live, per-category confidence bars from the org's own decisions |
-| 13 Teardown, retention, observability, cost | **all four live**: verified teardown with a retrievable attestation, `/metrics` on both services, and cost |
+| 11 Synthesis and posting | live: **GitHub, GitLab, Bitbucket Cloud, Bitbucket Data Center, Azure DevOps** |
+| 12 Learning loop | live, **both halves**: the confidence bar AND where proof is spent |
+| 13 Teardown, retention, observability, cost | all four live |
 
-Run `npm test` (680 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
-and `cd services/edge && go test ./...`. All green as of this handoff.
+Gates, all green as of this handoff:
 
-## How stages 5 and 6 were wired, since the next ones should copy it
+```
+npm test                    749 tests
+npx tsc --noEmit            0 errors, and it now covers control-plane tests and scripts/
+cd services/edge && go test ./...
+npm run demo                npm run eval (F1 100%)  npm run airgap-demo  npm run phase4-demo
+```
 
-Both followed the same shape, and it is worth knowing before you add another:
+## What was built this session
 
-- **An injected step that fails soft.** `blastRadius` and `indexGraph` are
-  optional dependencies of the workflow, like `verify` and `deepReview` before
-  them. Absent, or throwing, costs that section of one review and nothing else.
-- **Work that is not on the critical path runs after the review is posted.** The
-  indexer is a tree listing plus a few dozen file reads; none of it changes the
-  review that just went out, so it runs afterwards and only when this
-  repository's slice has gone stale.
-- **The orchestrator computes, the control-plane stores.** Only the orchestrator
-  holds GitHub App installation tokens (the one credential that reads a private
-  repo without borrowing a human's OAuth token). Only the control-plane has
-  Postgres and knows which repositories a workspace connected.
-- **Bounded reads and bounded storage.** Twelve contract files and forty source
-  files per repository, shallowest first; four hundred CI runs per repository,
-  oldest out first. This runs on somebody else's rate limit and in our memory.
-- **Say only what was measured.** Both stages refuse to claim causation they
-  cannot demonstrate. The CI warning states in the finding body that it is not
-  blaming the pull request, because the trend is measured on a branch that
-  predates it.
+### Azure DevOps, and the differ it needed
 
-## How Stage 12 was wired, since it adds a rule to the list above
+The seam held for a fourth and a fifth platform with no workflow change: a client
+against `ReviewPlatform`, a `capabilities` declaration, a normalizer in the Go
+edge, one line in `main.ts`. What did NOT carry over is the diff.
 
-Same shape as 5 and 6, plus one that is new and worth keeping:
-
-- **Ride an existing call rather than adding one.** The learned bars come back on
-  `/api/internal/orgs/:org/review-config`, which the workflow already fetches once
-  per review and caches for 30 seconds. Closing the loop cost zero extra round
-  trips. A second endpoint would have been the obvious design and the wrong one.
-- **The refusal branch is a feature.** Most of the work in `packages/learning` is
-  deciding when NOT to move a bar, and the Learnings page renders that reason as
-  prominently as a bar that moved. A calibration that always finds something to
-  change is a calibration that is fitting to noise.
-
-## What is left, in the order I would do it
-
-### ~~1. Stage 12 closed: make the learning loop actually learn~~ DONE
-
-Live. `store.calibration(org)` derives a per-category confidence bar from that
-workspace's own decisions, it is served on the review-config call, and Stage 9
-applies it. The Learnings page shows every bar with the decisions behind it.
-
-Two things a future session should know:
-
-- **The Stage 10 half is still open.** `ARCHITECTURE.md` describes Stage 12 as
-  feeding both Stage 9's threshold and Stage 10's verify gate. Only Stage 9 is
-  wired. Spending proof where a team's acceptance is genuinely mixed, and less
-  where the answer is already obvious from history, is a real cost saving and
-  the data to do it is now stored.
-- **`services/control-plane/test` is still outside the tsconfig `include`.** The
-  `src` half is now checked, which is what mattered (see below). The tests need
-  an `await res.json()` typing cleanup first, roughly 150 sites.
-
-### ~~2. Mermaid sequence diagrams in the review~~ DONE
-
-Live. `traceSequence` in `packages/analyzer` walks Stage 4's graph from the
-symbols the diff touched, and `poster/mermaid.ts` renders it into the PR
-description under the walkthrough. The dashboard toggle is real.
-
-Three things a future session should know:
-
-- **The reach is the index's reach.** Stage 4 indexes the changed files and
-  nothing else, so the diagram shows how the CHANGED FILES call each other, not
-  how the change reaches the rest of the codebase. Widening it means fetching
-  imported files during a review, which is API reads on the hot path, and the
-  architecture deliberately puts a full-repo index in an onboarding job instead.
-  If you widen it, widen `fetchSources`, not the trace.
-- **Do not let a model near it.** Every arrow is a resolved call. The moment one
-  arrow is inferred, a reader cannot tell which arrows are measured, and the
-  diagram is worth less than nothing.
-- **`@cavixcode summary` drops the diagram**, because summary mode never builds
-  the graph and the block is rewritten whole. That is deliberate: republishing
-  the previous diagram would show the code as it was before the push that
-  prompted the refresh. Worth revisiting only if summary mode ever gets a graph.
-
-### ~~3. The other four platforms~~ GITLAB DONE
-
-Live. The port is `ReviewPlatform` with a `capabilities` declaration,
-`RestGitLabClient` implements it, the edge ingests GitLab webhooks on the same
-`/webhook` endpoint, and `platform` on the canonical `ReviewJob` routes each job
-to its client.
+**`packages/differ` is the load-bearing part of this session.** Azure's
+`diffs/commits` returns a list of changed PATHS and no content, so on Azure the
+diff is computed from the two versions of each file. It is Myers' published
+algorithm, exact and minimal, and it was checked line for line against
+`git diff --no-index -U3` on ten cases BEFORE a line of the Azure client existed.
+That comparison immediately caught a real bug (see below), which is the argument
+for doing it in that order.
 
 Four things a future session should know:
 
-- **The seam held for a third platform.** Bitbucket Cloud was a client, its
-  capabilities, an edge normalizer and one line in `main.ts`. No workflow change.
-- **`packages/platforms/` is deleted.** It defined a second, two-method
-  `ReviewPlatform` that no longer matched the real port, so two types shared one
-  name and the next person would have wired the wrong one.
-- **`ReviewWorkflowDeps.github` is the default client and is no longer only
-  GitHub.** The type is right (`ReviewPlatform`), the property name is
-  historical, and renaming it touches every construction site in the service. Do
-  it in a commit that does nothing else.
-- **GitLab commands are authorized in the ORCHESTRATOR, not the edge, and that
-  asymmetry is permanent.** GitHub sends the commenter's association, so the edge
-  refuses a passer-by before anything is queued. GitLab's note webhook says who
-  commented and nothing about what they may do, so `ReviewPlatform.commandsAllowed`
-  asks the API (`members/all`, access level >= 30 = Developer) and fails CLOSED.
-  GitHub's implementation returns true without a request, because the edge
-  already decided. Any third platform must implement this or it is an open door.
+- **It refuses rather than approximating, and that is the design.** Everything
+  downstream treats the diff as exact: which lines a comment may anchor to, what
+  line a finding points at, where the sandbox reproduces a bug. An approximate
+  diff does not fail, it silently moves findings onto the wrong lines. So past
+  the edit budget, the line budget, or on binary content, the file is left out
+  and NAMED on the review through `ReviewPlatform.diffLimitations`.
+- **`diffLimitations` is keyed by pull request, not held on the client.** One
+  client serves every review this orchestrator runs concurrently. A plain field
+  there would report whichever pull request finished last, under somebody else's
+  review, which is a bug this repo has already shipped once (the GitLab client's
+  refused-anchor counter).
+- **The memory bound is the `maxEdits` cap, not the line cap.** Myers needs one
+  frontier per edit distance to backtrack, so memory is O(D²). The frontiers are
+  stored at their live width rather than the worst case, which is the difference
+  between kilobytes on a normal file and megabytes on every file.
+- **Azure refuses chat commands, on purpose.** Same reason as Bitbucket:
+  answering "may this arbitrary user push here?" needs organisation-level scopes
+  a review bot should not hold. `commandsAllowed` returns false and the edge
+  mints no command job.
 
-### ~~4. Bitbucket~~ DONE (Azure DevOps still open, see item 7)
+One genuinely new thing at the edge: **Azure service hooks sign nothing.** HTTP
+Basic is the only credential they can carry, so that is what is verified, in
+constant time, before the body is parsed. It authenticates the sender but not the
+body, which is why it has its own secret. Azure also sends no event header to
+route on, so it is recognised by an optional `X-Cavix-Platform` header or by
+elimination, and then authenticated against its own secret either way.
 
-Bitbucket Cloud is live: `RestBitbucketClient`, an edge normalizer on the same
-`/webhook`, and a per-workspace token. Three things to know:
+### Bitbucket Data Center
 
-- **Bitbucket takes no chat commands, on purpose.** Authorizing an arbitrary
-  commenter needs workspace-admin scope a review bot should not hold, so
-  `commandsAllowed` returns false and the edge has no note handler. Do not
-  "fix" this without a permission check that actually works.
-- **Bitbucket Server / Data Center is a separate REST surface** (`/rest/api/1.0`,
-  a different inline anchor shape) and therefore a separate client. It shares
-  nothing with Cloud but the name.
-- **Azure DevOps is NOT mechanical, which is why it is still here.** Every other
-  platform hands you a unified diff; Azure's `diffs/commits` API returns a list
-  of CHANGED PATHS, not content. Producing a diff means fetching each file at
-  both commits and diffing locally, which is a differ this repo does not have and
-  should not write casually. That is the whole of the remaining work; the posting
-  side (threads with a `threadContext`) is ordinary.
+A separate client, not a base URL on the Cloud one, and worth saying why: the two
+share only the name. Different REST surface (`/rest/api/1.0/projects/KEY/...`),
+different payload shapes (`text` not `content.raw`), different anchors (`anchor`
+not `inline`), different pagination, a build-status API on a different root, and
+**optimistic locking on every write** (a stale `version` is a 409 rather than a
+silent clobber). A shared class would have meant a branch in every method.
 
+It can list a repository tree cheaply, which Cloud cannot, so Stage 5 works here.
+It has no CI duration to trend, so `ciHistory` is false rather than reporting
+plausible zeros.
 
+### Stage 12's other half
 
-### ~~5. Zero-retention, live~~ DONE
+`ARCHITECTURE.md` had described the learning loop as feeding both Stage 9's
+threshold and Stage 10's verify gate. Only Stage 9 was wired. Now both are, on
+the same `review-config` call, so it cost zero extra round trips.
 
-Live. `checkPurged` runs after every sandbox the verifier tears down, the
-workflow collects the checks into one attestation per review, and it is stored on
-the review and served at `GET /api/reviews/:id/retention`.
+The interesting property, and the reason it is worth having:
 
-Three things a future session should know:
+- **The case where a threshold is useless is exactly the case where execution is
+  not.** When a workspace's accepts and rejects overlap at every confidence
+  level, Stage 9 correctly refuses to move the bar. That refusal is a statement
+  about CONFIDENCE, not a shrug: what separates a real finding from a plausible
+  one there is whether it reproduces. So `verify: "always"` runs the sandbox on
+  that category, including on findings the default gate would skip as nits.
+- `verify: "never"` where they accept essentially everything, because a proof
+  changes no decision they were going to make and a sandbox run is the most
+  expensive thing in a review.
+- **Critical, high and security are proven regardless.** They are checked BEFORE
+  the learned policy is consulted. Their proof is the product's own claim, and no
+  volume of accepts is a reason to stop making it. There is a test.
+- Like the retention hook, the policy rides on the per-review `VerifyContext` and
+  never on the `Verifier`, which is built once at boot and shared by every
+  concurrent review.
 
-- **`unverifiable` is not a bug to fix.** Cloudflare and Firecracker expose
-  nothing this process can inspect after teardown, so their checks say so. The
-  temptation will be to report those as clean because the backend's contract says
-  they are; do not. The moment "we could not check" and "we checked" report the
-  same thing, the artefact is worth nothing to the auditor it exists for.
-- **Nothing about customer code may enter the attestation.** There is a test that
-  asserts the wire payload contains no path, file name, commit or repository, and
-  the control-plane narrows the record on arrival. A future field that seems
-  harmless (a workspace id, a sandbox label carrying a repo name) is how this
-  becomes the retention problem it exists to disprove.
-- **The Docker check proves the container is gone, not that nothing was ever
-  written to a disk.** The tmpfs argument is in the `check` string precisely so a
-  reader can evaluate it themselves. If someone adds a bind-mounted backend, that
-  sentence stops being true and the check has to change with it.
+## Bugs found and fixed this session
 
-### ~~6. Observability, the other half of Stage 13~~ DONE
+The warning at the bottom of this file held again. Seven, six of them live:
 
-Live. `packages/metrics` is a dependency-free Prometheus registry; both services
-serve `/metrics`. Three things to know:
+- **Every file and line permalink in a review pointed at `github.com`.** The
+  poster hardcoded the host. GitLab and Bitbucket have had users since they
+  shipped, and on both of them a reader who clicked a finding's line number left
+  for a github.com repository that does not exist; on GitHub Enterprise they left
+  their own network. Fixed with `ReviewPlatform.webUrl` plus per-host URL
+  grammars, which all four differ in and none of which is derivable from another.
+  A host that cannot be named renders paths as plain text rather than a wrong link.
+- **A deleted file lost its name in `parseUnifiedDiff`.** git writes
+  `+++ /dev/null` for a deletion, so the only place the path survives is the
+  `---` line, which the parser ignored. Every deleted file rendered as an empty
+  code span in the walkthrough, and `subsystem("")` filed each one under the
+  repository root and inflated the traversed-subsystem count with it.
+- **The secret scanner reported only the FIRST match per pattern per file.** A
+  bare `exec` returns one match and stops, so a file leaking a key on line 12 and
+  another on line 400 reported the first and said nothing about the second. The
+  one nobody is told about is the one nobody rotates.
+- **The air-gap egress guard followed redirects without checking them.** An
+  allowed host answering `307 Location: https://evil.example` made the runtime
+  RE-SEND the request, body and all, to a host the policy forbids. The guard's
+  one check passed, and the prompt left the cluster. Redirects are now followed
+  by hand, one host check per hop, bounded at five.
+- **The Docker sandbox interpolated paths into a shell string and did not confine
+  them.** The paths reaching it come from findings, which come from a model
+  reading somebody else's diff, and one apostrophe in a filename closed the
+  quote. It also let a traversal through where the Local backend has always
+  refused one: two implementations of one port disagreeing about that is a port
+  that cannot be swapped, which is the entire reason it exists.
+- **The dashboard's Integrations panel said "soon" for Bitbucket and Azure**, and
+  had done for months after Bitbucket Cloud went live. A dashboard that
+  understates the product fails the same way one that overstates it does: the
+  page and the pull requests disagree, and the customer believes the page.
 
-- **`cavix_stage_failures_total` is the metric that matters.** Every stage
-  degrades rather than failing, so a broken stage still posts reviews. That
-  counter is the only place it shows. If you add a stage, add its failure
-  counter next to the log line you were going to write anyway.
-- **Never add a label with an unbounded value.** No repo, org, path, branch,
-  commit, finding or model. Series are capped per metric so a mistake becomes one
-  `overflow="true"` series rather than an outage, but the cap is a safety net and
-  not a licence.
-- **The two services' metrics are not redundant.** A control-plane rejecting
-  every record looks perfectly healthy from the orchestrator, which logs a
-  warning and carries on by design.
+And one caught by the git comparison before it could ship, which is the whole
+argument for writing the fixture first:
 
-### 7. What is genuinely left
+- **The Myers backtrack read past its own frontier at `d = 0`.** Storing each
+  frontier at its live width (`-d..d`) is correct for every step except the
+  first, where the backtrack reads diagonal `k+1` and that is the seed. Every
+  hunk silently lost its leading context and every `@@` start line was wrong with
+  it. Nothing about the output looked broken; it just did not match git.
 
-- **Azure DevOps** (above), and **Bitbucket Server**.
-- **Stage 12's Stage 10 half**: `ARCHITECTURE.md` says the learning loop feeds
-  both Stage 9's threshold and Stage 10's verify gate. Only Stage 9 is wired.
-- **`services/control-plane/test` is still outside the tsconfig `include`**,
-  pending an `await res.json()` typing cleanup (~150 sites).
-- **`ReviewWorkflowDeps.github` should be renamed**, in a commit that does
-  nothing else.
+## What is genuinely left
+
+Nothing in the thirteen stages. What remains is smaller:
+
+1. **`ReviewWorkflowDeps.github` should be renamed.** It is the default platform
+   client and its type is right (`ReviewPlatform`); only the property name is
+   historical, and it is now wrong on five hosts rather than two. Do it in a
+   commit that does nothing else, because it touches every construction site in
+   the service and in the tests.
+2. **Azure's `diffs/commits` truncation is reported but not paged.** When Azure
+   says `allChangesIncluded: false` the review says so honestly, which is the
+   important half. Paging `$top`/`$skip` to get the rest is ordinary work.
+3. **`packages/differ` has no move detection.** git does not do this by default
+   either, so the output matches, but a large refactor that moves a function
+   between files reads as a delete plus an add. It is a quality-of-diff question,
+   not a correctness one.
+4. **Bitbucket Data Center's `whoAmI` costs a request** (`X-AUSERNAME` off a
+   `/projects?limit=1` probe), and `setParticipantStatus` calls it each time. Only
+   on the blocking and dismiss paths, so it is a handful of requests per review at
+   worst, but it could be cached per client with a short TTL.
+5. **The IDE extension (`editors/vscode`) is excluded from `tsc`**, because it
+   type-checks against the `vscode` module's own types, which this repo does not
+   install. It has its own build. Everything else shippable is now under the gate.
 
 ## Things to know before you start
 
@@ -211,129 +194,38 @@ serve `/metrics`. Three things to know:
   that fails the build). No em dashes or en dashes. Geometric marks: `◆` critical,
   `◈` high, `◇` medium, `▪` low, `▫` info, `⬢` proven, `▲` attention.
 - **The Scope module never states a number it did not measure.** Rows render only
-  when their stage actually ran and covered what it claims. Follow that rule; it
-  is the product's whole credibility.
-- **Every new stage must fail soft.** `deepReview` and `verify` are both injected
-  steps whose failure falls back rather than costing a customer their review.
-  Copy that shape.
+  when their stage actually ran and covered what it claims. The newest example is
+  the `Diff Coverage` row and the `Not Reviewed` section, which exist so an Azure
+  review cannot quietly claim to have read a file it could not diff.
+- **Every new stage must fail soft.** `deepReview`, `verify`, `blastRadius`,
+  `regression` and `indexGraph` are all injected steps whose failure falls back
+  rather than costing a customer their review. Copy that shape.
 - **The PR description carries no findings.** Only what the change does. Findings
   go on the review comment, which is dated and supersedable.
+- **Per-review state never lives on a client or a `Verifier`.** Both are built
+  once at boot and shared by every concurrent review. Key it by ref, or put it on
+  the per-review context. This has been the source of two separate bugs.
+- **A platform that cannot do something says so on the review.** `capabilities`
+  exists so the product can say it, not so the code can branch: the workflow
+  branches on a capability in exactly two places and both change what a human is
+  told rather than what the pipeline computes.
 - Tests run with zero infrastructure. Keep it that way.
 
-## Bugs found and fixed in the metrics + Bitbucket session
+## Where the seams are, if you are adding a sixth platform
 
-- **`packages/platforms/` defined a second `ReviewPlatform`** with the same name
-  and a different two-method shape. Two types sharing a name is how the next
-  person wires the wrong one. Deleted.
-- **Bitbucket's pull request update would have blanked the title.** The endpoint
-  takes the whole object, so sending a description alone clears the title. Caught
-  by writing the test before trusting the call.
-- Two things caught before they shipped rather than after: a `constantTimeEqual`
-  helper in the Bitbucket normalizer that nothing called, and a `recordApi`
-  counter wired into the orchestrator's review counter, which would have filed
-  control-plane HTTP responses under `cavix_reviews_total`.
+Five worked examples now. In order:
 
-## Bugs found and fixed in the zero-retention session
-
-- **The retention proof verified nothing on the backend customers run.** The
-  residual check asked whether `sandbox.workdir` existed on the host. Real on
-  Local; on Docker the workdir is `/work` INSIDE the container and no host path
-  was ever created, so the check looked, found nothing, and reported clean. A
-  proof that cannot fail is not a proof, and this one could not fail anywhere it
-  mattered.
-- **The attestation's review id would have named the repository.** The
-  orchestrator's only candidate was `owner/repo#12@sha`, which puts a repository
-  name inside the artefact built to carry nothing about the customer's code. The
-  control-plane stamps its own id instead.
-- **The verdict was trusted from the wire.** A caller could have asserted
-  "proven" over a set of checks that did not support it, manufacturing the exact
-  claim the artefact exists to make. It is recomputed server-side now.
-- **The air-gapped demo printed `clean=undefined`** once the attestation shape
-  changed, which is the failure mode where a demo keeps running and stops
-  demonstrating anything.
-
-Plus one found while writing the tests: a fixture whose fake provider matched
-`system.includes("test")` also matched the single-model review prompt, so it
-returned a generated test instead of findings, nothing was ever verified, no
-sandbox was provisioned, and the test asserting the sandbox was destroyed passed
-against a review that never made one.
-
-## Bugs found and fixed in the GitLab session
-
-- **`refFromJob` split the repository full name at the FIRST slash.** Harmless on
-  GitHub, where a full name has exactly one; on a nested GitLab group
-  ("acme/platform/billing") it gave owner `acme` and repo `platform`, silently
-  dropping the project so every API call named a repository that is not the one
-  under review. It would have broken every subgroup customer on day one.
-- **A GitLab command from anyone would have run a review.** The edge cannot check
-  a GitLab commenter's permission (no association field in the payload), so the
-  first version enqueued the job marked `GITLAB_UNVERIFIED` and nothing checked
-  it downstream. Anyone who could see a merge request could have spent a
-  customer's model budget in a loop. Closed with `commandsAllowed`, which fails
-  closed and gates the free commands too: a passer-by who can `pause` Cavix has
-  turned it off for the people who do have access.
-- **A shared client held per-review state.** Refused inline anchors were counted
-  on the instance, and one client serves every review this orchestrator runs
-  concurrently, so the count named whichever merge request finished last.
-- **The review re-read the merge request it had just fetched**, once per review,
-  for three strings `/changes` already returns.
-
-## Bugs found and fixed in the sequence-diagram session
-
-Two live, two found by probing before trusting:
-
-- **Two more dashboard toggles that changed nothing**, the same class as the
-  `sequenceDiagram` one this item was about. `policyEnabled` was a live switch
-  duplicating the real Pre-merge checks switch (the field the orchestrator
-  actually reads); the duplicate is gone. `airgapped` was a live switch for a
-  control enforced process-wide by the gateway's `EgressGuard` and a
-  NetworkPolicy, neither of which has ever read the field. It is now derived from
-  the deployment and is not patchable: a page that can set it can show a security
-  control as ON while the process makes outbound calls.
-- **`mermaidText` exceeded its own width cap**, returning `max + 2` characters.
-- **Local helper calls crowded the flow out of the diagram.** Drawing every
-  same-file call as a self-message filled the step budget on any realistic
-  handler; past about fifteen helpers it removed every cross-file arrow and left
-  no diagram at all, on exactly the changes most worth one.
-- **A non-ASCII identifier was mangled rather than sanitised**: `über()` became
-  `ber()`, a wrong label rather than a safe one.
-
-## Bugs found and fixed in the Stage 12 session
-
-The warning at the bottom of this file held. Five in the repo, four of them live:
-
-- **`requireOrgMember` was called twice and defined nowhere.** `GET
-  /api/orgs/:org/analytics` threw a ReferenceError on every request, so the
-  Reports page has been answering `500 {"error":"requireOrgMember is not
-  defined"}` since it shipped.
-- **`services/control-plane` was not in the tsconfig `include` list**, which is
-  why that could ship: `npx tsc --noEmit`, a documented gate, had never looked at
-  the service. `src` is now included, and fixing what surfaced turned up the next
-  one.
-- **An unrecognised severity made `reviewerHoursSaved` NaN** for a whole
-  workspace. `StoredFinding.severity` is a bare string off the wire and the ROI
-  model looks its minutes up by severity, so one odd value poisons the sum.
-- **`StoredFinding` dropped `confidence`**, which the orchestrator has always
-  sent, and `listDecisions()` dropped `agent`. Both are fields `DecisionRecord`
-  declares, so the learning package's inputs were unreachable from the only real
-  source of decisions in the product.
-- **`Calibration.filterFindings` was a second thresholding path** parallel to
-  Stage 9's, and it double-counted: a trusted category had its threshold lowered
-  AND each finding's confidence multiplied by up to 1.5, from one signal.
-  Removed rather than wired.
-
-Plus two in `calibrate()` itself that only a realistic fixture showed. Probing it
-with a simulated three-month workspace before trusting it is the single highest
-value thing done this session:
-
-- **The ceiling was a cap, and the cap lied.** A category rejected at 0.78 got a
-  bar of 0.75 (the ceiling), which suppresses none of them, under a sentence
-  claiming it held back 100%. The ceiling is now a refusal: a category needing a
-  higher bar is left alone and told why.
-- **It fitted to a 0.02 gap.** Accepts at 0.80 and rejects at 0.78 produced a
-  confident-looking cut at 0.79 that predicts nothing, because the next finding
-  lands either side of it by chance. A minimum margin between the bar and the
-  lowest finding the team kept now reads that as the noise it is.
+1. `services/orchestrator/src/<host>/rest.ts` implementing `ReviewPlatform`, with
+   an honest `capabilities` object.
+2. `commandsAllowed` must WORK or return false. GitHub answers true because the
+   edge already decided from the webhook's association. GitLab asks the members
+   API. Bitbucket (both) and Azure refuse. There is no fourth option.
+3. A normalizer in `services/edge/internal/webhook/`, with its own secret, routed
+   by its own header before the body is parsed.
+4. `PlatformName`, the `canonical.Platform*` constant, `PLATFORM_LABEL` in the
+   poster, and the `blobUrl` grammar.
+5. One block in `main.ts`, and the platform's key in the control-plane's
+   `TokenPlatform`.
 
 ---
 
@@ -342,54 +234,41 @@ value thing done this session:
 > I am continuing work on Cavix, an AI code reviewer. Read `HANDOFF.md`,
 > `README.md` and `CHANGELOG.md` first, then `ARCHITECTURE.md` for the seams.
 >
-> All thirteen stages already run on real pull requests, on GitHub, GitLab and
-> Bitbucket Cloud. What is left is listed in HANDOFF.md under item 7. Build
-> **Azure DevOps**, the last platform.
+> All thirteen stages run on real pull requests, on all five code hosts, and the
+> learning loop is closed on both ends. There is no large feature outstanding.
+> What is left is listed in HANDOFF.md under "What is genuinely left", and item 1
+> (renaming `ReviewWorkflowDeps.github`) is the one worth doing first, in a commit
+> that does nothing else.
 >
-> The seam is proven three times over: a client against `ReviewPlatform`, its
-> `capabilities`, a normalizer in the Go edge, one line in `main.ts`. Read the
-> GitLab and Bitbucket notes in HANDOFF.md first, particularly `commandsAllowed`,
-> which is a security control and not a formality.
+> So the real task is the one this codebase rewards most: **pick a package, probe
+> it with a realistic fixture, and tell me what breaks.** Every package here was
+> written and tested and then, in most cases, never run against real input, and
+> every single one that has been wired so far had bugs that only appeared on
+> realistic data. Eight sessions have found forty-one between them, including
+> matching logic that reported nothing at all, a metric that told reviewers to
+> ignore real failures, a page that had been returning 500 since it shipped,
+> three dashboard switches a customer could flip that changed nothing, a command
+> path anyone on the internet could have driven, a compliance proof that could not
+> fail on the only backend customers run, every permalink in every non-GitHub
+> review pointing at a repository that does not exist, and an egress guard that
+> would follow a redirect straight out of an air-gapped cluster.
 >
-> One thing makes Azure genuinely different, and it is the whole of the work.
-> Every other platform hands you a unified diff. Azure's `diffs/commits` API
-> returns a list of CHANGED PATHS and not content, so producing something
-> `parseUnifiedDiff` can read means fetching each file at both commits and
-> diffing locally. This repo has no differ and should not gain a careless one:
-> every finding's line number, every inline anchor and every sandbox
-> reproduction is downstream of that diff being right.
+> The packages with the least real-input exposure are, roughly in order:
+> `packages/context` (Stage 7's assembler and compressor), `packages/orggraph`
+> (Stage 5's contract and consumer extraction), `packages/telemetry` (Stage 6's
+> regression predictor), `packages/analyzer`'s heuristic parsers, and
+> `packages/agents`' prompt and parse layer. Any of those, probed properly, is
+> worth more than a new feature.
 >
-> Specifically:
-> 1. Decide how the diff is produced and defend it. A hand-rolled Myers
->    implementation, a bounded LCS, or refusing files over some size and saying
->    so on the review are all defensible; silently producing an approximate diff
->    is not, because everything downstream treats it as exact.
-> 2. Declare the capabilities honestly. Azure has threads rather than reviews,
->    and its status/check equivalent is a pull request status. Say which of the
->    six are real and which are not, and let the review say so.
-> 3. `commandsAllowed` must work or return false. Azure has an identity API that
->    can answer it; if you cannot make it work, refuse commands as Bitbucket does
->    rather than shipping a path anyone can drive.
-> 4. Nothing may regress for the three platforms that have users.
->
-> Before writing anything, tell me the plan, especially how you intend to produce
-> the diff and what happens on a file too large to diff in memory. Do not start
-> building until I have seen it. While you are in there, sweep the repo for bugs
-> and tell me what you find.
+> Write the fixture before you write or change any code, and make it realistic:
+> a real-shaped OpenAPI file, a real monorepo path layout, a three-month run of
+> CI timings with the variance real pipelines have. If the fixture shows the code
+> is right, say so and move on; a session that proves a package works is a good
+> session.
 >
 > House rules, all enforced by tests: no emoji anywhere Cavix posts, no em or en
-> dashes, the Scope module never states a number that was not measured, and every
-> new stage fails soft rather than costing a customer their review. Add tests
-> that need no infrastructure, and keep `npm test`, `npx tsc --noEmit` and
+> dashes, the Scope module never states a number that was not measured, every
+> stage fails soft rather than costing a customer their review, and per-review
+> state never lives on an object built at boot. Add tests that need no
+> infrastructure, and keep `npm test`, `npx tsc --noEmit` and
 > `cd services/edge && go test ./...` green.
->
-> A warning worth taking seriously: every package in this repo was written and
-> tested and then never run against real input, and every single one I have wired
-> so far had bugs that only appeared on realistic data. The last seven sessions
-> found thirty-four between them, including matching logic that reported nothing at
-> all, a metric that told reviewers to ignore real failures, a page that has been
-> returning 500 since it shipped, three dashboard switches a customer could flip
-> that changed nothing, a command path anyone on the internet could have driven,
-> and a compliance proof that could not fail on the only backend customers run.
-> Probe it with a realistic fixture before you trust a line of it, and write the
-> fixture before you write the code.

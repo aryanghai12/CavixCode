@@ -61,6 +61,9 @@ export function isCommandJob(job: ReviewJob): boolean {
 export const PLATFORM_GITHUB = "github";
 export const PLATFORM_GITLAB = "gitlab";
 export const PLATFORM_BITBUCKET = "bitbucket";
+/** Bitbucket Server / Data Center: a different REST surface from Cloud entirely. */
+export const PLATFORM_BITBUCKET_SERVER = "bitbucket-server";
+export const PLATFORM_AZURE_DEVOPS = "azure-devops";
 
 /**
  * Which platform a job belongs to, defaulting to GitHub.

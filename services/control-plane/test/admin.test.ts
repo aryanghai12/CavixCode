@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createControlPlane, InMemoryStore, isPlatformAdmin } from "@cavix/control-plane";
+import { readJson, type Body } from "./http.ts";
 
 async function withServer(fn: (base: string, store: InMemoryStore) => Promise<void>) {
   const store = new InMemoryStore();
@@ -75,10 +76,10 @@ test("admin API: only platform admins may access it", async () => {
     const adminCookie = cookieFrom(await post(base, "/api/auth/login", { email: "founder@cavix.dev", password: "password123" }));
     const list = await fetch(base + "/api/admin/orgs", { headers: { cookie: adminCookie } });
     assert.equal(list.status, 200);
-    assert.ok(Array.isArray(await list.json()));
+    assert.ok(Array.isArray(await readJson(list)));
 
     // /me tells the UI who is an admin
-    const me = await (await fetch(base + "/api/auth/me", { headers: { cookie: adminCookie } })).json();
+    const me = await readJson(await fetch(base + "/api/auth/me", { headers: { cookie: adminCookie } }));
     assert.equal(me.user.platformAdmin, true);
   });
   delete process.env.CAVIX_ADMIN_EMAILS;
@@ -95,22 +96,22 @@ test("admin API: change tier, start trial, override limit, suspend — and enfor
     // override the free org's limit up to 5
     let res = await post(base, "/api/admin/orgs/startup", { reviewsPerDay: 5 }, admin);
     assert.equal(res.status, 200);
-    assert.equal((await res.json()).effectiveReviewsPerDay, 5);
+    assert.equal((await readJson(res)).effectiveReviewsPerDay, 5);
 
     // upgrade to paid tier
     res = await post(base, "/api/admin/orgs/startup", { tier: "paid" }, admin);
-    assert.equal((await res.json()).tier, "paid");
+    assert.equal((await readJson(res)).tier, "paid");
 
     // clear the override, start a 7-day trial
     await post(base, "/api/admin/orgs/startup", { reviewsPerDay: null, trialDays: 7 }, admin);
-    const view = (await (await fetch(base + "/api/admin/orgs", { headers: { cookie: admin } })).json()).find((o) => o.name === "startup");
+    const view = (await readJson(await fetch(base + "/api/admin/orgs", { headers: { cookie: admin } }))).find((o: Body) => o.name === "startup");
     assert.equal(view.trialActive, true);
 
     // suspend it → reviews are blocked with 429
     await post(base, "/api/admin/orgs/startup", { suspended: true }, admin);
     const blocked = await post(base, "/api/reviews", { org: "startup", repo: "r", pr: 1, title: "t", findings: [] });
     assert.equal(blocked.status, 429);
-    assert.match((await blocked.json()).error, /suspended/);
+    assert.match((await readJson(blocked)).error, /suspended/);
 
     // unsuspend → reviews flow again
     await post(base, "/api/admin/orgs/startup", { suspended: false }, admin);

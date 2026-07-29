@@ -4,6 +4,7 @@ import {
   REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
+  type DiffLimitation,
   type ReviewPlatform,
   type OwnReview,
   type PullRef,
@@ -47,6 +48,7 @@ export class RestGitHubClient implements ReviewPlatform {
   // GitHub is the platform the product was built against, so it is the one that
   // has all of it. Every other adapter is measured against this line.
   readonly capabilities = FULL_CAPABILITIES;
+  readonly webUrl: string;
   private readonly tokens: TokenProvider;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -55,6 +57,7 @@ export class RestGitHubClient implements ReviewPlatform {
   constructor(opts: RestGitHubOptions) {
     this.tokens = opts.tokens;
     this.baseUrl = opts.baseUrl ?? "https://api.github.com";
+    this.webUrl = webRootFrom(this.baseUrl);
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.userAgent = opts.userAgent ?? "cavix-orchestrator";
   }
@@ -78,6 +81,11 @@ export class RestGitHubClient implements ReviewPlatform {
       throw new Error(`github: fetch diff HTTP ${res.status} ${res.statusText}`);
     }
     return res.text();
+  }
+
+  /** GitHub hands over the whole diff, so nothing is ever left out of it. */
+  diffLimitations(): DiffLimitation[] {
+    return [];
   }
 
   async getPull(ref: PullRef): Promise<PullMeta> {
@@ -468,6 +476,30 @@ export class RestGitHubClient implements ReviewPlatform {
     }
     const data = (await res.json()) as { id: number; html_url: string };
     return { id: data.id, htmlUrl: data.html_url };
+  }
+}
+
+/**
+ * The browser root that matches an API root.
+ *
+ * GitHub.com splits the two across hosts (api.github.com vs github.com); GitHub
+ * Enterprise puts both on one host and hangs the API off /api/v3. Getting this
+ * wrong does not fail loudly, it just links every finding in every review at a
+ * URL nobody can open, so both shapes are handled explicitly and anything
+ * unrecognised keeps its own origin rather than being rewritten to github.com.
+ */
+export function webRootFrom(apiBaseUrl: string): string {
+  const trimmed = apiBaseUrl.replace(/\/+$/, "");
+  try {
+    const u = new URL(trimmed);
+    if (u.hostname === "api.github.com") return "https://github.com";
+    // Enterprise: https://ghe.acme.com/api/v3 -> https://ghe.acme.com
+    return `${u.origin}${u.pathname.replace(/\/api\/v3$/, "").replace(/\/+$/, "")}`;
+  } catch {
+    // A base URL that is not a URL is a misconfiguration the client will report
+    // on its first call. Returning "" here means the review renders paths as
+    // plain text, which is the honest outcome for "we do not know the host".
+    return "";
   }
 }
 

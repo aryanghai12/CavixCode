@@ -28,6 +28,49 @@ test("builtins+secrets: catch real bugs in seed-like files (hermetic)", async ()
   assert.ok(findings.every((f) => f.source === "sast" || f.source === "secret"));
 });
 
+test("secrets: EVERY committed key is reported, not just the first in the file", async () => {
+  // This was a bare `exec`, which returns one match and stops. A file leaking a
+  // key on line 2 and another on line 6 reported the first and said nothing
+  // about the second, and the one nobody is told about is the one nobody
+  // rotates. For a secret scanner that is the job, not a completeness nicety.
+  const files = [
+    {
+      path: "src/config.js",
+      content: [
+        "// staging",
+        'const staging = "AKIAIOSFODNN7EXAMPLE";',
+        "",
+        "// production, added in this pull request",
+        'const prod = "AKIAJ2K7LMNOPQRSTUVW";',
+        "",
+        'const slack = "xoxb-1234567890-abcdefghijkl";',
+      ].join("\n"),
+    },
+  ];
+  const { findings } = await runDeterministic({ files });
+  const aws = findings.filter((f) => f.ruleId === "secret/aws-access-key-id");
+  assert.equal(aws.length, 2, "both AWS keys");
+  assert.deepEqual(aws.map((f) => f.line).sort((a, b) => a - b), [2, 5]);
+  assert.equal(findings.filter((f) => f.ruleId === "secret/slack-token").length, 1);
+});
+
+test("secrets: a file full of matches is capped rather than flooding the review", async () => {
+  const line = 'const k = "AKIAIOSFODNN7EXAMPLE";';
+  const files = [{ path: "fixtures/keys.js", content: Array.from({ length: 50 }, () => line).join("\n") }];
+  const { findings } = await runDeterministic({ files });
+  assert.equal(findings.length, 20, "capped, because 50 inline comments is a review nobody reads");
+});
+
+test("secrets: a shared pattern never carries match position from one file to the next", async () => {
+  // The classic global-regex bug: a module-level /g RegExp keeps `lastIndex`
+  // between calls, so the second file starts scanning from wherever the first
+  // one stopped and the key at its top is missed.
+  const content = 'const k = "AKIAIOSFODNN7EXAMPLE";';
+  const files = Array.from({ length: 3 }, (_, i) => ({ path: `src/f${i}.js`, content }));
+  const { findings } = await runDeterministic({ files });
+  assert.equal(findings.filter((f) => f.ruleId === "secret/aws-access-key-id").length, 3);
+});
+
 test("ssrf content rule: request var flown into fetch is flagged", async () => {
   const files = [
     {

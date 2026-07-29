@@ -38,7 +38,7 @@ export async function verifyAndFilter(
       surfaced.push(f);
       continue;
     }
-    if (!verifier.shouldVerify(f)) {
+    if (!verifier.shouldVerify(f, ctx.verifyByCategory)) {
       // Not worth proving (trivial nit): keep only if confident.
       if (f.confidence >= highConf) surfaced.push(f);
       else suppressed.push({ finding: f, reason: "below verification gate and low confidence" });

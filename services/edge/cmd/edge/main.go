@@ -61,6 +61,12 @@ func main() {
 		handler = handler.WithBitbucket(cfg.BitbucketSecret)
 		log.Info("bitbucket ingestion enabled on /webhook")
 	}
+	if cfg.AzureSecret != "" {
+		handler = handler.WithAzure(cfg.AzureSecret)
+		log.Info("azure devops ingestion enabled on /webhook",
+			"auth", "http basic (azure service hooks sign nothing)",
+			"header", webhook.AzurePlatformHeader+": "+webhook.AzurePlatformValue+" (optional)")
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", handler)

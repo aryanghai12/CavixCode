@@ -153,6 +153,61 @@ test("buildReviewSubmission: without a ref the comment still names paths and lin
   assert.doesNotMatch(built.submission.body, /https:\/\/github\.com/);
 });
 
+// Every permalink used to be built against a hardcoded github.com, so a GitLab
+// or Bitbucket reader who clicked a finding's line number left for a github.com
+// repository that does not exist, and a GitHub Enterprise reader left their own
+// network. Four hosts, four URL grammars, and none is derivable from another.
+test("buildReviewSubmission: permalinks are built for the host the review is going to", () => {
+  const gitlab = buildReviewSubmission(resultWith(finding({ endLine: 13 })), DIFF, {
+    ref: { ...REF, host: "https://gitlab.example.com", platform: "gitlab" },
+  }).submission.body;
+  assert.match(
+    gitlab,
+    /https:\/\/gitlab\.example\.com\/acme\/widgets\/-\/blob\/abc123\/src\/auth\.js#L12-13/,
+    "GitLab puts the commit under /-/blob and writes a range as L12-13",
+  );
+  assert.doesNotMatch(gitlab, /github\.com/);
+
+  const bitbucket = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: { ...REF, host: "https://bitbucket.org", platform: "bitbucket" },
+  }).submission.body;
+  assert.match(
+    bitbucket,
+    /https:\/\/bitbucket\.org\/acme\/widgets\/src\/abc123\/src\/auth\.js#lines-12/,
+    "Bitbucket serves files under /src and anchors lines as #lines-N",
+  );
+
+  const azure = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: { ...REF, owner: "acme/payments", host: "https://dev.azure.com", platform: "azure-devops" },
+  }).submission.body;
+  assert.match(
+    azure,
+    /https:\/\/dev\.azure\.com\/acme\/payments\/_git\/widgets\?path=\/src\/auth\.js&version=GCabc123&line=12/,
+    "Azure passes the path, the commit (GC = a commit, not a branch) and the line as query parameters",
+  );
+
+  // A GitHub Enterprise install serves files from its own host, not github.com.
+  const ghe = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: { ...REF, host: "https://ghe.acme.internal", platform: "github" },
+  }).submission.body;
+  assert.match(ghe, /https:\/\/ghe\.acme\.internal\/acme\/widgets\/blob\/abc123\/src\/auth\.js#L12/);
+  assert.doesNotMatch(ghe, /github\.com/);
+});
+
+test("buildReviewSubmission: a host we cannot name renders paths as text, never as a wrong link", () => {
+  // "" is what `webRootFrom` returns for an unparseable API base. A review that
+  // names a file without linking it is complete; one that links it to the wrong
+  // repository is worse than one that does not link it at all.
+  // Badges off, so the only URLs left in the body would be permalinks.
+  const body = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: { ...REF, host: "", platform: "gitlab" },
+    badges: false,
+  }).submission.body;
+  assert.match(body, /#### ◈ `src\/auth\.js`/);
+  assert.match(body, /\| ◈ \| 12 \| \*\*SQL injection/);
+  assert.doesNotMatch(body, /https:\/\//);
+});
+
 test("buildReviewSubmission: a finding off the diff keeps its full explanation in the summary", () => {
   const built = buildReviewSubmission(resultWith(finding({ line: 999 })), DIFF); // not a diff line
   assert.equal(built.inlineCount, 0);

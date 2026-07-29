@@ -38,14 +38,41 @@ export class Verifier {
     this.gate = opts.confidenceGate ?? 0.5;
   }
 
-  // Gate: deterministic facts (secret/sast/linter) and immutable policy findings
-  // are already proven — don't pay sandbox cost. Verify LLM findings that are
-  // high-impact or confident; skip trivial nits.
-  shouldVerify(f: Finding): boolean {
+  /**
+   * Is this finding worth a sandbox?
+   *
+   * Deterministic facts (secret/sast/linter) and immutable policy findings are
+   * already proven, so they never pay sandbox cost. Of the rest, anything
+   * high-impact or confident is verified and trivial nits are not.
+   *
+   * `policy` is Stage 12's other half: what this WORKSPACE'S own accept and
+   * reject history says about spending proof in this category. It is a
+   * parameter rather than a field for the same reason the retention hook is on
+   * the context: a Verifier is built once at boot and shared by every review
+   * this orchestrator runs concurrently, so one held here would apply one
+   * customer's learned policy to another customer's pull request.
+   *
+   * Two things it may NOT do, and both are the point:
+   *   - it cannot skip critical, high or security. Those are checked before it
+   *     is consulted, because their proof is the product's own claim and no
+   *     volume of accepts is a reason to stop making it.
+   *   - it cannot suppress anything. It decides where proof is SPENT, never
+   *     what reaches the pull request; that is Stage 9's job and its invariants
+   *     are untouched.
+   */
+  shouldVerify(f: Finding, policy?: Record<string, "always" | "never">): boolean {
     if (f.immutable) return false;
     if (f.source !== "llm") return false;
     if (f.severity === "critical" || f.severity === "high") return true;
     if (f.category === "security") return true;
+    const learned = policy?.[f.category];
+    // "always": this team's accepts and rejects overlap at every confidence
+    // level, so a threshold cannot separate them and execution is the only
+    // instrument left. Prove even the ones the gate would skip.
+    if (learned === "always") return true;
+    // "never": they accept essentially all of this category, so a proof changes
+    // no decision they were going to make.
+    if (learned === "never") return false;
     return f.confidence >= this.gate;
   }
 

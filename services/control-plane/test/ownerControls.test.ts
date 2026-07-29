@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createControlPlane, InMemoryStore } from "@cavix/control-plane";
+import { readJson, readList } from "./http.ts";
 
 // The settings a repo owner flips on the dashboard have to reach the thing that
 // runs the review. These tests cover that contract end to end: what the store
@@ -70,7 +71,7 @@ test("an owner can turn verification off and blocking on from the dashboard API"
       failOn: ["critical", "high"],
     }, cookie);
     assert.equal(res.status, 200);
-    const s = await res.json();
+    const s = await readJson(res);
     assert.equal(s.verifyFindings, false);
     assert.equal(s.summaryInDescription, false);
     assert.equal(s.requestChangesOnFail, true);
@@ -102,7 +103,7 @@ test("the internal review-config endpoint reports exactly what the owner chose",
       headers: { authorization: "Bearer internal-secret" },
     });
     assert.equal(res.status, 200);
-    const cfg = await res.json();
+    const cfg = await readJson(res);
     assert.equal(cfg.verifyFindings, false);
     assert.equal(cfg.requestChangesOnFail, true);
     assert.equal(cfg.preMergeChecks.enabled, true);
@@ -133,7 +134,7 @@ test("the compile endpoint reports which plain-English rules became real checks"
       rules: ["Disallow calls to console.log", "please be nice to the code"],
     }, cookie);
     assert.equal(res.status, 200);
-    const [good, bad] = await res.json();
+    const [good, bad] = await readList(res);
     assert.equal(good.ok, true);
     assert.match(good.ruleId, /no-call/);
     assert.equal(bad.ok, false);

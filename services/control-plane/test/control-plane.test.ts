@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createControlPlane, InMemoryStore, renderDashboardHtml } from "@cavix/control-plane";
+import { readJson } from "./http.ts";
 
 async function withServer(fn: (base: string, store: InMemoryStore) => Promise<void>) {
   const store = new InMemoryStore();
@@ -33,9 +34,9 @@ async function signIn(base: string, org: string, email = `owner@${org}.test`): P
 
 test("onboarding: create org + repo", async () => {
   await withServer(async (base) => {
-    const org = await (await post(base, "/api/orgs", { name: "acme" })).json();
+    const org = await readJson(await post(base, "/api/orgs", { name: "acme" }));
     assert.equal(org.name, "acme");
-    const repo = await (await post(base, "/api/orgs/acme/repos", { name: "widget" })).json();
+    const repo = await readJson(await post(base, "/api/orgs/acme/repos", { name: "widget" }));
     assert.equal(repo.org, "acme");
     assert.equal(repo.name, "widget");
   });
@@ -53,7 +54,7 @@ test("reviews: save a review and list it", async () => {
     }, cookie);
     assert.equal(saved.status, 201);
 
-    const reviews = await (await fetch(base + "/api/reviews?org=acme", { headers: { cookie } })).json();
+    const reviews = await readJson(await fetch(base + "/api/reviews?org=acme", { headers: { cookie } }));
     assert.equal(reviews.length, 1);
     assert.equal(reviews[0].findings.length, 1);
     assert.equal(reviews[0].url, "https://github.com/acme/widget/pull/7", "the dashboard row links back to the PR");
@@ -72,7 +73,7 @@ test("reviews: a workspace's findings are not readable by anyone who names its o
     assert.equal((await fetch(base + "/api/reviews?org=acme")).status, 401);
     const other = await signIn(base, "rival");
     assert.equal((await fetch(base + "/api/reviews?org=acme", { headers: { cookie: other } })).status, 403);
-    const own = await (await fetch(base + "/api/reviews", { headers: { cookie: other } })).json();
+    const own = await readJson(await fetch(base + "/api/reviews", { headers: { cookie: other } }));
     assert.deepEqual(own, [], "a workspace with no reviews sees its own emptiness, not someone else's data");
   });
 });
@@ -96,11 +97,14 @@ test("reviews: recording needs the service token once one is configured", async 
 test("reviews: a review link that is not plain https is dropped, never stored", async () => {
   await withServer(async (base) => {
     const cookie = await signIn(base, "acme");
-    const saved = await (await post(base, "/api/reviews", {
-      org: "acme", repo: "widget", pr: 3, title: "t",
-      url: "javascript:alert(document.cookie)",
-      findings: [],
-    }, cookie)).json();
+    const saved = await readJson(
+      post(
+        base,
+        "/api/reviews",
+        { org: "acme", repo: "widget", pr: 3, title: "t", url: "javascript:alert(document.cookie)", findings: [] },
+        cookie,
+      ),
+    );
     assert.equal(saved.url, undefined);
   });
 });
@@ -108,13 +112,13 @@ test("reviews: a review link that is not plain https is dropped, never stored", 
 test("decisions: accept/reject is recorded (the learning-loop signal)", async () => {
   await withServer(async (base) => {
     const cookie = await signIn(base, "acme", "alice@acme.test");
-    const review = await (await post(base, "/api/reviews", {
+    const review = await readJson(await post(base, "/api/reviews", {
       org: "acme", repo: "widget", pr: 9, title: "t",
       findings: [
         { path: "a.js", line: 1, severity: "high", category: "security", title: "sqli", body: "", source: "sast", confidence: 0.9 },
         { path: "b.js", line: 2, severity: "low", category: "standards", title: "nit", body: "", source: "llm", confidence: 0.5, agent: "standards" },
       ],
-    }, cookie)).json();
+    }, cookie));
 
     const accepted = review.findings[0].id;
     const rejected = review.findings[1].id;
@@ -124,24 +128,24 @@ test("decisions: accept/reject is recorded (the learning-loop signal)", async ()
     const r2 = await post(base, `/api/findings/${rejected}/decision`, { state: "rejected" }, cookie);
     assert.equal(r2.status, 200);
 
-    const decisions = await (await fetch(base + "/api/decisions", { headers: { cookie } })).json();
+    const decisions = await readJson(await fetch(base + "/api/decisions", { headers: { cookie } }));
     assert.equal(decisions.length, 2);
     const byFinding = Object.fromEntries(decisions.map((d: { findingId: string; state: string }) => [d.findingId, d.state]));
     assert.equal(byFinding[accepted], "accepted");
     assert.equal(byFinding[rejected], "rejected");
     // Attribution comes from the session, so a decision can never be filed under
     // a colleague's name by a client that simply asks to.
-    assert.equal((await r1.json()).decision.user, "alice@acme.test");
+    assert.equal((await readJson(r1)).decision.user, "alice@acme.test");
   });
 });
 
 test("decisions: a decision needs a member of the workspace that owns the finding", async () => {
   await withServer(async (base) => {
     const cookie = await signIn(base, "acme");
-    const review = await (await post(base, "/api/reviews", {
+    const review = await readJson(await post(base, "/api/reviews", {
       org: "acme", repo: "widget", pr: 9, title: "t",
       findings: [{ path: "a.js", line: 1, severity: "high", category: "security", title: "sqli", body: "", source: "sast", confidence: 0.9 }],
-    }, cookie)).json();
+    }, cookie));
     const id = review.findings[0].id;
 
     assert.equal((await post(base, `/api/findings/${id}/decision`, { state: "accepted" })).status, 401);
@@ -160,7 +164,7 @@ test("billing: /api/orgs answers for your workspace, not every customer", async 
     await signIn(base, "rival");
 
     assert.equal((await fetch(base + "/api/orgs")).status, 401);
-    const mine = await (await fetch(base + "/api/orgs", { headers: { cookie: acme } })).json();
+    const mine = await readJson(await fetch(base + "/api/orgs", { headers: { cookie: acme } }));
     assert.equal(mine.length, 1);
     assert.equal(mine[0].name, "acme");
   });
@@ -172,15 +176,15 @@ test("learnings: /api/decisions answers for your workspace only", async () => {
     const rival = await signIn(base, "rival", "bob@rival.test");
 
     for (const [org, cookie] of [["acme", acme], ["rival", rival]] as const) {
-      const rev = await (await post(base, "/api/reviews", {
+      const rev = await readJson(await post(base, "/api/reviews", {
         org, repo: "r", pr: 1, title: "t",
         findings: [{ path: "a.js", line: 1, severity: "high", category: "security", title: `${org} finding`, body: "", source: "llm", confidence: 0.9 }],
-      }, cookie)).json();
+      }, cookie));
       await post(base, `/api/findings/${rev.findings[0].id}/decision`, { state: "accepted" }, cookie);
     }
 
     assert.equal((await fetch(base + "/api/decisions")).status, 401);
-    const mine = await (await fetch(base + "/api/decisions", { headers: { cookie: rival } })).json();
+    const mine = await readJson(await fetch(base + "/api/decisions", { headers: { cookie: rival } }));
     assert.equal(mine.length, 1, "one workspace, one decision: not the platform's");
     assert.equal(mine[0].user, "bob@rival.test");
   });
@@ -227,7 +231,7 @@ test("proven-catches feed: only verified findings from opted-in public repos", a
         { path: "b.js", line: 2, severity: "low", category: "standards", title: "unverified nit", body: "", source: "llm", confidence: 0.5, verified: false },
       ],
     });
-    const feed = await (await fetch(base + "/api/feed/proven")).json();
+    const feed = await readJson(await fetch(base + "/api/feed/proven"));
     assert.equal(feed.length, 1, "only the verified finding is published");
     assert.equal(feed[0].title, "verified sqli");
   });
@@ -238,7 +242,7 @@ test("proven feed excludes private repos even when opted in", async () => {
     await post(base, "/api/orgs", { name: "co", tier: "paid", provenFeedOptIn: true });
     await post(base, "/api/orgs/co/repos", { name: "app", visibility: "private" });
     await post(base, "/api/reviews", { org: "co", repo: "app", pr: 1, title: "t", findings: [{ path: "a", line: 1, severity: "high", category: "security", title: "secret bug", body: "", source: "llm", confidence: 0.9, verified: true }] });
-    const feed = await (await fetch(base + "/api/feed/proven")).json();
+    const feed = await readJson(await fetch(base + "/api/feed/proven"));
     assert.equal(feed.length, 0, "private repo never leaks to the public feed");
   });
 });

@@ -112,6 +112,18 @@ services:
         generateValue: true
       - key: CAVIX_BOT_HANDLE          # mention handles, comma-separated
         value: cavixcode,cavix
+      # The other four hosts arrive on the SAME /webhook endpoint, each with its
+      # own secret so no host's hook can forge another's. Leave any of these
+      # unset and that host's deliveries are refused, which is the default.
+      - key: CAVIX_GITLAB_WEBHOOK_SECRET     # GitLab project hook "Secret token"
+        sync: false
+      - key: CAVIX_BITBUCKET_WEBHOOK_SECRET  # Bitbucket Cloud webhook secret (HMAC)
+        sync: false
+      # Azure DevOps service hooks SIGN NOTHING: the only credential they can
+      # carry is HTTP Basic, so this is the PASSWORD half of it. Put anything in
+      # the username box.
+      - key: CAVIX_AZURE_WEBHOOK_SECRET
+        sync: false
 
   # ---------- orchestrator: runs the review, posts to GitHub ----------
   - type: web
@@ -167,3 +179,16 @@ services:
         value: cavixcode,cavix
       - key: CAVIX_SANDBOX_BACKEND     # "local" runs fine on Render's free box
         value: local
+      # The other four hosts. Each needs no orchestrator secret: a workspace
+      # pastes its access token in the dashboard under Integrations, and it is
+      # held encrypted PER WORKSPACE rather than per deployment, because one
+      # shared token would read every customer's repositories.
+      #
+      # These two only name a SELF-HOSTED instance. gitlab.com, bitbucket.org
+      # and dev.azure.com are the defaults and need nothing here.
+      - key: CAVIX_GITLAB_URL              # e.g. https://gitlab.acme.com
+        sync: false
+      - key: CAVIX_BITBUCKET_SERVER_URL    # e.g. https://bitbucket.acme.com (required for Data Center)
+        sync: false
+      - key: CAVIX_AZURE_URL               # e.g. https://tfs.acme.local/tfs (on-premises Azure DevOps Server)
+        sync: false

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createControlPlane, InMemoryStore } from "@cavix/control-plane";
 import { hashPassword, verifyPassword, signSession, verifySession, encryptSecret, decryptSecret, fingerprint } from "@cavix/control-plane";
+import { readJson } from "./http.ts";
 
 async function withServer(fn: (base: string, store: InMemoryStore) => Promise<void>) {
   const store = new InMemoryStore();
@@ -59,7 +60,7 @@ test("signup: creates first user as owner and sets a session cookie", async () =
   await withServer(async (base) => {
     const res = await post(base, "/api/auth/signup", { email: "boss@acme.co", password: "password123", org: "acme", name: "Boss" });
     assert.equal(res.status, 201);
-    const body = await res.json();
+    const body = await readJson(res);
     assert.equal(body.user.role, "owner");
     assert.ok((res.headers.get("set-cookie") ?? "").includes("cavix_session="));
   });
@@ -82,7 +83,7 @@ test("login: valid credentials succeed, invalid fail, /me reflects the session",
     const cookie = cookieFrom(ok);
     const me = await fetch(base + "/api/auth/me", { headers: { cookie } });
     assert.equal(me.status, 200);
-    assert.equal((await me.json()).user.email, "me@acme.co");
+    assert.equal((await readJson(me)).user.email, "me@acme.co");
     // no cookie → 401
     assert.equal((await fetch(base + "/api/auth/me")).status, 401);
   });
@@ -104,17 +105,17 @@ test("settings: require auth and reject other orgs; BYOK stores fingerprint only
     // update settings
     const put = await fetch(base + "/api/orgs/acme/settings", { method: "PUT", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ llmModel: "claude-opus-4-8", autoReview: false }) });
     assert.equal(put.status, 200);
-    assert.equal((await put.json()).llmModel, "claude-opus-4-8");
+    assert.equal((await readJson(put)).llmModel, "claude-opus-4-8");
 
     // set BYOK key — response exposes only a fingerprint, never the raw key
     const keyRes = await post(base, "/api/orgs/acme/apikey", { apiKey: "sk-ant-topsecret-1234" }, cookie);
     assert.equal(keyRes.status, 200);
-    const keyBody = await keyRes.json();
+    const keyBody = await readJson(keyRes);
     assert.ok(keyBody.apiKeyFingerprint && !JSON.stringify(keyBody).includes("topsecret"), "raw key must never be returned");
 
     // the store can still decrypt it for the orchestrator
     // (fetched via the GET settings route, which never includes the raw key)
-    const get = await (await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } })).json();
+    const get = await readJson(await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } }));
     assert.ok(!JSON.stringify(get).includes("topsecret"));
     assert.ok(get.apiKeyFingerprint);
   });
@@ -126,7 +127,7 @@ test("settings: pre-merge checks + tone + path filters persist", async () => {
     const cookie = cookieFrom(signup);
 
     // defaults: pre-merge off, no rules
-    let s = await (await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } })).json();
+    let s = await readJson(await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } }));
     assert.equal(s.preMergeChecks.enabled, false);
     assert.deepEqual(s.preMergeChecks.rules, []);
 
@@ -140,7 +141,7 @@ test("settings: pre-merge checks + tone + path filters persist", async () => {
       }),
     });
     assert.equal(put.status, 200);
-    s = await put.json();
+    s = await readJson(put);
     assert.equal(s.tone, "educational");
     assert.equal(s.preMergeChecks.enabled, true);
     assert.equal(s.preMergeChecks.rules.length, 2);
@@ -152,7 +153,7 @@ test("settings: review-comment structure sections persist", async () => {
   await withServer(async (base) => {
     const cookie = cookieFrom(await post(base, "/api/auth/signup", { email: "rs@acme.co", password: "password123", org: "acme" }));
     // defaults on
-    let s = await (await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } })).json();
+    let s = await readJson(await fetch(base + "/api/orgs/acme/settings", { headers: { cookie } }));
     assert.equal(s.reviewSections.summary, true);
     assert.equal(s.reviewSections.sequenceDiagram, true);
     // turn a couple off
@@ -160,7 +161,7 @@ test("settings: review-comment structure sections persist", async () => {
       method: "PUT", headers: { "content-type": "application/json", cookie },
       body: JSON.stringify({ reviewSections: { summary: true, changedFiles: true, sequenceDiagram: false, reviewEffort: false, relatedIssues: true, inlineFindings: true, proof: true } }),
     });
-    s = await put.json();
+    s = await readJson(put);
     assert.equal(s.reviewSections.sequenceDiagram, false);
     assert.equal(s.reviewSections.reviewEffort, false);
     assert.equal(s.reviewSections.inlineFindings, true);
@@ -179,7 +180,7 @@ test("internal BYOK endpoint: token-gated, returns the org's decrypted key for t
 
     const res = await fetch(base + "/api/internal/orgs/acme/llm", { headers: { authorization: "Bearer internal-shhh" } });
     assert.equal(res.status, 200);
-    const body = await res.json();
+    const body = await readJson(res);
     assert.equal(body.provider, "anthropic");
     assert.equal(body.model, "claude-opus-4-8");
     assert.equal(body.apiKey, "sk-ant-real-key", "returns the decrypted BYOK key over the internal channel");
@@ -202,7 +203,7 @@ test("stats: aggregates reviews/findings/decisions for the dashboard", async () 
     await post(base, "/api/reviews", { org: "acme", repo: "r", pr: 1, title: "t", findings: [
       { path: "a.js", line: 1, severity: "critical", category: "security", title: "x", body: "", source: "sast", confidence: 0.9, verified: true },
     ]});
-    const stats = await (await fetch(base + "/api/orgs/acme/stats", { headers: { cookie } })).json();
+    const stats = await readJson(await fetch(base + "/api/orgs/acme/stats", { headers: { cookie } }));
     assert.equal(stats.reviews, 1);
     assert.equal(stats.findings, 1);
     assert.equal(stats.verified, 1);
@@ -225,7 +226,7 @@ test("team: role changes require owner/admin", async () => {
     // owner can
     const promote = await post(base, `/api/orgs/acme/team/${member.id}/role`, { role: "admin" }, ownerCookie);
     assert.equal(promote.status, 200);
-    assert.equal((await promote.json()).role, "admin");
+    assert.equal((await readJson(promote)).role, "admin");
     void owner;
   });
 });
