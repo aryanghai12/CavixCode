@@ -8,7 +8,7 @@ Everything above it is the context that prompt assumes.
 ## Where the product stands
 
 The live review path (`services/orchestrator/src/main.ts` → `runReview`) now runs
-stages 0 through 12 and part of 13 on a real pull request.
+**all thirteen stages** on a real pull request.
 
 | Stage | Status |
 |---|---|
@@ -24,11 +24,11 @@ stages 0 through 12 and part of 13 on a real pull request.
 | 8 Seven-agent ensemble | live |
 | 9 Adjudication | live |
 | 10 Execution verification | live |
-| 11 Synthesis and posting | live, **GitHub and GitLab** (incl. self-managed) |
+| 11 Synthesis and posting | live, **GitHub, GitLab** (incl. self-managed) **and Bitbucket Cloud** |
 | 12 Learning loop | live, per-category confidence bars from the org's own decisions |
-| 13 Teardown, retention, cost | live: teardown verified per review with a retrievable attestation, plus cost. Observability still absent |
+| 13 Teardown, retention, observability, cost | **all four live**: verified teardown with a retrievable attestation, `/metrics` on both services, and cost |
 
-Run `npm test` (655 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
+Run `npm test` (680 tests), `npx tsc --noEmit`, `npm run demo`, `npm run eval`,
 and `cd services/edge && go test ./...`. All green as of this handoff.
 
 ## How stages 5 and 6 were wired, since the next ones should copy it
@@ -117,16 +117,11 @@ to its client.
 
 Four things a future session should know:
 
-- **Bitbucket and Azure DevOps are now mechanical, and that was the point.** The
-  seam is proven by a second platform. A third means writing a client against
-  `ReviewPlatform`, declaring its capabilities, adding a normalizer to the edge,
-  and adding it to `platforms` in `main.ts`. No workflow change.
-- **`packages/platforms/` is still unused and now actively misleading.** Its
-  `ReviewPlatform` is a different, two-method interface that no longer matches
-  the real port. Either port its Bitbucket and Azure adapters onto
-  `services/orchestrator/src/github/client.ts` and delete the package, or delete
-  the package. Leaving two types with the same name is how the next person wires
-  the wrong one.
+- **The seam held for a third platform.** Bitbucket Cloud was a client, its
+  capabilities, an edge normalizer and one line in `main.ts`. No workflow change.
+- **`packages/platforms/` is deleted.** It defined a second, two-method
+  `ReviewPlatform` that no longer matched the real port, so two types shared one
+  name and the next person would have wired the wrong one.
 - **`ReviewWorkflowDeps.github` is the default client and is no longer only
   GitHub.** The type is right (`ReviewPlatform`), the property name is
   historical, and renaming it touches every construction site in the service. Do
@@ -139,12 +134,26 @@ Four things a future session should know:
   GitHub's implementation returns true without a request, because the edge
   already decided. Any third platform must implement this or it is an open door.
 
-### 4. Bitbucket and Azure DevOps
+### ~~4. Bitbucket~~ DONE (Azure DevOps still open, see item 7)
 
-Same seam, now proven by GitLab. A third platform is: a client against
-`ReviewPlatform`, its `capabilities`, a normalizer in the Go edge, and an entry
-in `platforms` in `main.ts`. No workflow change. Read the GitLab notes above
-first, particularly `commandsAllowed`.
+Bitbucket Cloud is live: `RestBitbucketClient`, an edge normalizer on the same
+`/webhook`, and a per-workspace token. Three things to know:
+
+- **Bitbucket takes no chat commands, on purpose.** Authorizing an arbitrary
+  commenter needs workspace-admin scope a review bot should not hold, so
+  `commandsAllowed` returns false and the edge has no note handler. Do not
+  "fix" this without a permission check that actually works.
+- **Bitbucket Server / Data Center is a separate REST surface** (`/rest/api/1.0`,
+  a different inline anchor shape) and therefore a separate client. It shares
+  nothing with Cloud but the name.
+- **Azure DevOps is NOT mechanical, which is why it is still here.** Every other
+  platform hands you a unified diff; Azure's `diffs/commits` API returns a list
+  of CHANGED PATHS, not content. Producing a diff means fetching each file at
+  both commits and diffing locally, which is a differ this repo does not have and
+  should not write casually. That is the whole of the remaining work; the posting
+  side (threads with a `threadContext`) is ordinary.
+
+
 
 ### ~~5. Zero-retention, live~~ DONE
 
@@ -169,14 +178,32 @@ Three things a future session should know:
   reader can evaluate it themselves. If someone adds a bind-mounted backend, that
   sentence stops being true and the check has to change with it.
 
-### 6. Observability, the other half of Stage 13
+### ~~6. Observability, the other half of Stage 13~~ DONE
 
-Stage 13 is "teardown, zero retention, observability, cost accounting". Teardown,
-retention and cost are live. There is no metrics surface at all: no request
-counts, no stage latencies, no queue depth, nothing an operator could put on a
-dashboard or alert from. Every number the product has is either on a pull request
-or on the customer's own dashboard, and none of it tells the person running
-Cavix whether it is healthy.
+Live. `packages/metrics` is a dependency-free Prometheus registry; both services
+serve `/metrics`. Three things to know:
+
+- **`cavix_stage_failures_total` is the metric that matters.** Every stage
+  degrades rather than failing, so a broken stage still posts reviews. That
+  counter is the only place it shows. If you add a stage, add its failure
+  counter next to the log line you were going to write anyway.
+- **Never add a label with an unbounded value.** No repo, org, path, branch,
+  commit, finding or model. Series are capped per metric so a mistake becomes one
+  `overflow="true"` series rather than an outage, but the cap is a safety net and
+  not a licence.
+- **The two services' metrics are not redundant.** A control-plane rejecting
+  every record looks perfectly healthy from the orchestrator, which logs a
+  warning and carries on by design.
+
+### 7. What is genuinely left
+
+- **Azure DevOps** (above), and **Bitbucket Server**.
+- **Stage 12's Stage 10 half**: `ARCHITECTURE.md` says the learning loop feeds
+  both Stage 9's threshold and Stage 10's verify gate. Only Stage 9 is wired.
+- **`services/control-plane/test` is still outside the tsconfig `include`**,
+  pending an `await res.json()` typing cleanup (~150 sites).
+- **`ReviewWorkflowDeps.github` should be renamed**, in a commit that does
+  nothing else.
 
 ## Things to know before you start
 
@@ -192,6 +219,19 @@ Cavix whether it is healthy.
 - **The PR description carries no findings.** Only what the change does. Findings
   go on the review comment, which is dated and supersedable.
 - Tests run with zero infrastructure. Keep it that way.
+
+## Bugs found and fixed in the metrics + Bitbucket session
+
+- **`packages/platforms/` defined a second `ReviewPlatform`** with the same name
+  and a different two-method shape. Two types sharing a name is how the next
+  person wires the wrong one. Deleted.
+- **Bitbucket's pull request update would have blanked the title.** The endpoint
+  takes the whole object, so sending a description alone clears the title. Caught
+  by writing the test before trusting the call.
+- Two things caught before they shipped rather than after: a `constantTimeEqual`
+  helper in the Bitbucket normalizer that nothing called, and a `recordApi`
+  counter wired into the orchestrator's review counter, which would have filed
+  control-plane HTTP responses under `cavix_reviews_total`.
 
 ## Bugs found and fixed in the zero-retention session
 
@@ -302,41 +342,40 @@ value thing done this session:
 > I am continuing work on Cavix, an AI code reviewer. Read `HANDOFF.md`,
 > `README.md` and `CHANGELOG.md` first, then `ARCHITECTURE.md` for the seams.
 >
-> Stages 0 through 13 already run on real pull requests, on GitHub and GitLab.
-> What is left is listed in HANDOFF.md. Build **item 6: observability, the other
-> half of Stage 13.**
+> All thirteen stages already run on real pull requests, on GitHub, GitLab and
+> Bitbucket Cloud. What is left is listed in HANDOFF.md under item 7. Build
+> **Azure DevOps**, the last platform.
 >
-> Stage 13 is "teardown, zero retention, observability, cost accounting". Three
-> of those four are live. There is no metrics surface at all: no stage latencies,
-> no queue depth, no error rates, no counter anywhere. Every number Cavix
-> produces is either on a customer's pull request or on their dashboard, and none
-> of it tells the person RUNNING Cavix whether it is healthy.
+> The seam is proven three times over: a client against `ReviewPlatform`, its
+> `capabilities`, a normalizer in the Go edge, one line in `main.ts`. Read the
+> GitLab and Bitbucket notes in HANDOFF.md first, particularly `commandsAllowed`,
+> which is a security control and not a formality.
 >
-> That gap is why every bug in the list above was found by reading code rather
-> than by an alert. A page returning 500 since it shipped, a command path open to
-> anyone, a retention proof that verified nothing: all of them were live, none of
-> them was visible.
+> One thing makes Azure genuinely different, and it is the whole of the work.
+> Every other platform hands you a unified diff. Azure's `diffs/commits` API
+> returns a list of CHANGED PATHS and not content, so producing something
+> `parseUnifiedDiff` can read means fetching each file at both commits and
+> diffing locally. This repo has no differ and should not gain a careless one:
+> every finding's line number, every inline anchor and every sandbox
+> reproduction is downstream of that diff being right.
 >
 > Specifically:
-> 1. Decide what an operator actually needs to see, and defend the list. A
->    metrics endpoint that exposes everything is a metrics endpoint nobody reads.
->    Latency per stage, queue depth and per-org error rate are candidates; say
->    which you chose and which you rejected.
-> 2. Pick the surface and say why. Prometheus text on a `/metrics` endpoint is
->    the obvious answer; the orchestrator already has a health server. An
->    air-gapped install cannot ship telemetry anywhere, so whatever you choose
->    must work with nothing outbound.
-> 3. It must carry NO customer code, repository names, paths or finding text. A
->    metrics endpoint is scraped, stored for a year and often less protected than
->    the database. Cardinality is the trap: one label per repository is a
->    time series per repository, which is both a leak and an outage.
-> 4. It must cost nothing when nobody is scraping, and it must never be able to
->    fail a review. The same rule as every other stage.
+> 1. Decide how the diff is produced and defend it. A hand-rolled Myers
+>    implementation, a bounded LCS, or refusing files over some size and saying
+>    so on the review are all defensible; silently producing an approximate diff
+>    is not, because everything downstream treats it as exact.
+> 2. Declare the capabilities honestly. Azure has threads rather than reviews,
+>    and its status/check equivalent is a pull request status. Say which of the
+>    six are real and which are not, and let the review say so.
+> 3. `commandsAllowed` must work or return false. Azure has an identity API that
+>    can answer it; if you cannot make it work, refuse commands as Bitbucket does
+>    rather than shipping a path anyone can drive.
+> 4. Nothing may regress for the three platforms that have users.
 >
-> Before writing anything, tell me the plan, including the exact metric names and
-> labels and what each one would let an operator diagnose that they cannot
-> diagnose today. Do not start building until I have seen it. While you are in
-> there, sweep the repo for bugs and tell me what you find.
+> Before writing anything, tell me the plan, especially how you intend to produce
+> the diff and what happens on a file too large to diff in memory. Do not start
+> building until I have seen it. While you are in there, sweep the repo for bugs
+> and tell me what you find.
 >
 > House rules, all enforced by tests: no emoji anywhere Cavix posts, no em or en
 > dashes, the Scope module never states a number that was not measured, and every
@@ -346,8 +385,8 @@ value thing done this session:
 >
 > A warning worth taking seriously: every package in this repo was written and
 > tested and then never run against real input, and every single one I have wired
-> so far had bugs that only appeared on realistic data. The last six sessions
-> found thirty between them, including matching logic that reported nothing at
+> so far had bugs that only appeared on realistic data. The last seven sessions
+> found thirty-four between them, including matching logic that reported nothing at
 > all, a metric that told reviewers to ignore real failures, a page that has been
 > returning 500 since it shipped, three dashboard switches a customer could flip
 > that changed nothing, a command path anyone on the internet could have driven,

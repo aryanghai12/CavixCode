@@ -57,6 +57,10 @@ func main() {
 		handler = handler.WithGitLab(cfg.GitLabToken)
 		log.Info("gitlab ingestion enabled on /webhook")
 	}
+	if cfg.BitbucketSecret != "" {
+		handler = handler.WithBitbucket(cfg.BitbucketSecret)
+		log.Info("bitbucket ingestion enabled on /webhook")
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", handler)

@@ -5,6 +5,70 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Observability: `/metrics` on both services
+
+Stage 13 is "teardown, zero retention, observability, cost accounting". Three of
+those four were live. There was no metrics surface at all, which is why every bug
+the last five sessions found was found by reading code rather than by an alert.
+
+#### Added
+- **`packages/metrics`**, a dependency-free Prometheus registry. Counters,
+  gauges, cumulative histograms and the text exposition format, which is the
+  whole of what is needed and smaller than the dependency would have been.
+- **`/metrics` on the orchestrator**, on the health port that is already open,
+  and **on the control-plane**. Pull-based with nothing outbound, so it exists in
+  an air-gapped cluster. Nothing is computed until something scrapes.
+- **`cavix_stage_failures_total{stage}`**, which is the reason for the item.
+  Every stage in Cavix degrades rather than failing, on purpose, so a stage can
+  be broken one hundred per cent of the time for a week while every review still
+  posts and nothing says so. This is the only surface it appears on.
+- Review outcome and duration, per-stage duration, queue depth (from
+  `XINFO GROUPS`, so lag and pending together), model spend, findings by
+  surfaced/suppressed, and the control-plane's own request and record counters.
+  The last of those matters because a dashboard rejecting every record looks
+  perfectly healthy from the orchestrator, which logs a warning and carries on.
+
+#### The cardinality trap, designed out
+No label carries a repository, org, path, branch, commit, finding or model. All
+are unbounded, which is one time series per value in a store that keeps them for
+a year, and three of them are customer data in an endpoint usually less protected
+than the database. Series are **capped per metric**: past the cap further label
+combinations fold into one `overflow="true"` series rather than being created, so
+a future mistake is a visible wrong series an operator can act on rather than a
+slow memory leak here and a slow ingestion failure over there. A test asserts the
+whole exposition uses only `le`, `outcome`, `stage` and `version`.
+
+### Bitbucket Cloud, live
+
+The third platform, and the one that tests whether the seam generalises past a
+lucky second. It does: `RestBitbucketClient` implements the same
+`ReviewPlatform` port, the edge ingests its webhooks on the same `/webhook`
+endpoint with its own HMAC secret, and the workflow did not change.
+
+#### What Bitbucket cannot do, all declared
+- No comment reactions. There is no API for it.
+- No repository tree listing: `/src` pages one directory at a time, so mapping a
+  repository is one request per directory, spent before a review is posted.
+  Reported false rather than implemented badly.
+- **No chat commands, deliberately.** A command must be authorized before it
+  spends a customer's model budget, and Bitbucket's permission lookup for an
+  arbitrary commenter needs workspace-admin scope a review bot should not hold.
+  `commandsAllowed` returns false and the edge has no note handler. The GitLab
+  session in this repo already shipped one command path that could not check
+  permission; this is that lesson applied before the fact.
+
+Changes-requested IS real here and reversible, unlike GitLab, so blocking and
+dismissal both work.
+
+#### Fixed
+- **`packages/platforms/` is gone.** It defined a second, two-method
+  `ReviewPlatform` that no longer matched the real port, so two different types
+  shared one name and the next person to wire a platform would have found the
+  wrong one. Its URL shapes live on in the real clients.
+- **Bitbucket's PR update would have blanked the title.** The endpoint takes the
+  whole object, so sending a description alone clears the title, which is the one
+  field the author cares most about. It is read and echoed back.
+
 ### Zero-retention, live
 
 `packages/zero-retention/` proved no customer code persists after a review, and

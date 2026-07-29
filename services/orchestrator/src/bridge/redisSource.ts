@@ -66,6 +66,37 @@ export class RedisStreamSource implements StreamSource {
     await this.client.command("XACK", this.opts.stream, this.opts.group, ...ids);
   }
 
+  /**
+   * Backlog from XINFO GROUPS: `lag` (never delivered to this group) plus
+   * `pending` (delivered, not yet acked).
+   *
+   * Returns 0 rather than throwing on anything unexpected. This runs once per
+   * pump loop to feed a gauge, and a monitoring call that can break the loop
+   * that consumes reviews would be a spectacularly bad trade.
+   */
+  async depth(): Promise<number> {
+    try {
+      const reply = (await this.client.command("XINFO", "GROUPS", this.opts.stream)) as unknown;
+      for (const group of Array.isArray(reply) ? reply : []) {
+        const fields = Array.isArray(group) ? group : [];
+        let name = "";
+        let lag = 0;
+        let pending = 0;
+        for (let i = 0; i + 1 < fields.length; i += 2) {
+          const k = String(fields[i]);
+          const v = fields[i + 1];
+          if (k === "name") name = String(v);
+          else if (k === "lag" && typeof v === "number") lag = v;
+          else if (k === "pending" && typeof v === "number") pending = v;
+        }
+        if (name === this.opts.group) return lag + pending;
+      }
+    } catch {
+      /* a gauge is never worth the consumer */
+    }
+    return 0;
+  }
+
   async close(): Promise<void> {
     this.client.close();
   }

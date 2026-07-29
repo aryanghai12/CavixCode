@@ -20,6 +20,15 @@ import type { GitLabTokenProvider } from "./rest.ts";
 
 export interface ControlPlaneGitLabTokenOptions {
   url: string;
+  /**
+   * Which platform's token to fetch: "gitlab" or "bitbucket".
+   *
+   * One fetcher rather than one per platform, because the reasoning is identical
+   * for both (no per-install credential exists, so a workspace's token lives in
+   * the control-plane) and a copy would be a second place for the timeout, the
+   * cache cap and the fail-loud behaviour to drift.
+   */
+  platform?: "gitlab" | "bitbucket";
   /** Shared secret matching the control-plane's CAVIX_INTERNAL_TOKEN. */
   token: string;
   cacheMs?: number;
@@ -37,6 +46,8 @@ export function makeControlPlaneGitLabTokens(opts: ControlPlaneGitLabTokenOption
   const cacheMs = opts.cacheMs ?? 60_000;
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const cache = new Map<string, { at: number; token: string }>();
+  const platform = opts.platform ?? "gitlab";
+  const label = platform === "gitlab" ? "GitLab" : "Bitbucket";
 
   return {
     async token(org: string): Promise<string> {
@@ -47,7 +58,7 @@ export function makeControlPlaneGitLabTokens(opts: ControlPlaneGitLabTokenOption
       const timer = setTimeout(() => abort.abort(), timeoutMs);
       try {
         const res = await doFetch(
-          `${base}/api/internal/orgs/${encodeURIComponent(org)}/gitlab-token`,
+          `${base}/api/internal/orgs/${encodeURIComponent(org)}/${platform}-token`,
           { headers: { authorization: `Bearer ${opts.token}` }, signal: abort.signal },
         );
         if (!res.ok) {
@@ -56,14 +67,14 @@ export function makeControlPlaneGitLabTokens(opts: ControlPlaneGitLabTokenOption
           // an unauthenticated request that fails later with a confusing 401 on
           // somebody's merge request.
           throw new Error(
-            `gitlab: no token for workspace "${org}" (control-plane answered HTTP ${res.status}). ` +
-              "Add a GitLab access token under Integrations in the dashboard.",
+            `${platform}: no token for workspace "${org}" (control-plane answered HTTP ${res.status}). ` +
+              `Add a ${label} access token under Integrations in the dashboard.`,
           );
         }
         const data = (await res.json()) as { token?: string };
         if (!data.token) {
           throw new Error(
-            `gitlab: workspace "${org}" has no GitLab access token saved. ` +
+            `${platform}: workspace "${org}" has no ${label} access token saved. ` +
               "Add one under Integrations in the dashboard.",
           );
         }
@@ -75,9 +86,9 @@ export function makeControlPlaneGitLabTokens(opts: ControlPlaneGitLabTokenOption
         return data.token;
       } catch (err) {
         if (abort.signal.aborted) {
-          throw new Error(`gitlab: timed out reading the workspace token after ${timeoutMs}ms`);
+          throw new Error(`${platform}: timed out reading the workspace token after ${timeoutMs}ms`);
         }
-        opts.logger?.warn("gitlab token lookup failed", { org, err: (err as Error).message });
+        opts.logger?.warn("platform token lookup failed", { platform, org, err: (err as Error).message });
         throw err;
       } finally {
         clearTimeout(timer);

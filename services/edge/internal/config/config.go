@@ -27,6 +27,9 @@ type Config struct {
 	// GitLab ingestion is off, which is the default: a deployment that has not
 	// configured it rejects GitLab deliveries rather than trusting them.
 	GitLabToken string
+	// BitbucketSecret is the HMAC secret set on a Bitbucket Cloud webhook. Empty
+	// means Bitbucket ingestion is off, which is the default.
+	BitbucketSecret string
 }
 
 // Load reads config from env with safe defaults.
@@ -42,12 +45,13 @@ func Load() (Config, error) {
 	}
 
 	c := Config{
-		Addr:          addr,
-		WebhookSecret: os.Getenv("CAVIX_WEBHOOK_SECRET"),
-		GitLabToken:   os.Getenv("CAVIX_GITLAB_WEBHOOK_SECRET"),
-		StreamKey:     getenv("CAVIX_STREAM_KEY", "cavix:reviewjobs"),
-		DedupeTTL:     24 * time.Hour,
-		EnqueueDialMs: 3 * time.Second,
+		Addr:            addr,
+		WebhookSecret:   os.Getenv("CAVIX_WEBHOOK_SECRET"),
+		GitLabToken:     os.Getenv("CAVIX_GITLAB_WEBHOOK_SECRET"),
+		BitbucketSecret: os.Getenv("CAVIX_BITBUCKET_WEBHOOK_SECRET"),
+		StreamKey:       getenv("CAVIX_STREAM_KEY", "cavix:reviewjobs"),
+		DedupeTTL:       24 * time.Hour,
+		EnqueueDialMs:   3 * time.Second,
 		// Default answers to BOTH the GitHub App slug people actually type
 		// ("@cavixcode review") and the short alias ("@cavix review"). Override
 		// with CAVIX_BOT_HANDLE if your App slug differs.

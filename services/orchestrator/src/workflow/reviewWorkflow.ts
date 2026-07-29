@@ -31,6 +31,7 @@ import {
   type ReviewMode,
 } from "./commands.ts";
 import { filterDiff } from "./pathFilter.ts";
+import { NOOP_RECORDER, type Recorder } from "@cavix/metrics";
 import { makeRetentionCollector } from "../verify/retention.ts";
 import type { DeepReviewResult, DeepReviewStep } from "../pipeline/deepReview.ts";
 import type { BlastRadiusStep } from "../orggraph/blastRadius.ts";
@@ -169,6 +170,14 @@ export interface ReviewWorkflowDeps {
    * request by then, so nothing here may fail (or retry) the job.
    */
   recordReview?: ReviewRecorder;
+  /**
+   * Stage 13's observability half. Records stage timings and, above all, the
+   * SOFT failures below: every stage here degrades rather than failing, so a
+   * stage that has been broken for a week still posts reviews and this is the
+   * only place that shows. Absent means nothing is recorded, which is what a
+   * deployment with metrics switched off wants.
+   */
+  metrics?: Recorder;
   /**
    * Answer a free-text question someone asked on the pull request. Absent means
    * "@cavixcode <question>" replies that questions are not enabled here, rather
@@ -380,6 +389,7 @@ export async function runReview(
   } = {},
 ): Promise<ReviewOutcome> {
   const log = deps.logger ?? noopLogger;
+  const metrics = deps.metrics ?? NOOP_RECORDER;
   const ref = refFromJob(job);
   // Wall-clock for the whole review, reported to the dashboard. Latency per PR is
   // one of the roadmap's product metrics and nothing was measuring it.
@@ -489,6 +499,7 @@ export async function runReview(
       // The deep path reads files through the API and fans out to seven models.
       // Plenty can go wrong there that has nothing to do with this pull request,
       // and none of it is worth the customer's review.
+      metrics.stageFailed("deep_review");
       log.error("deep review failed; falling back to the single-model pass", {
         ...base,
         err: (err as Error).message,
@@ -539,6 +550,7 @@ export async function runReview(
         });
       }
     } catch (err) {
+      metrics.stageFailed("cross_repo");
       log.error("cross-repo impact could not be traced; reviewing this repo alone", {
         ...base,
         err: (err as Error).message,
@@ -561,6 +573,7 @@ export async function runReview(
       // never more urgent than a defect in the code they are reading.
       if (ci.findings.length > 0) result.findings = [...result.findings, ...ci.findings];
     } catch (err) {
+      metrics.stageFailed("ci_telemetry");
       log.error("CI telemetry could not be read; reviewing without it", {
         ...base,
         err: (err as Error).message,
@@ -609,6 +622,7 @@ export async function runReview(
       // human sees it, and never claim a failure we did not actually measure.
       const reason = (err as Error).message;
       preMerge = preMergeUnavailable(config.preMergeChecks.rules, reason);
+      metrics.stageFailed("pre_merge");
       log.error("pre-merge checks could not run", { ...base, err: reason });
     }
   }
@@ -643,6 +657,7 @@ export async function runReview(
     } catch (err) {
       // Verification is an enhancement, never a gate on posting. A sandbox that
       // is down must not cost the org its review — it costs them the receipts.
+      metrics.stageFailed("verify");
       log.error("verification failed; posting unverified findings", {
         ...base,
         err: (err as Error).message,
@@ -668,6 +683,7 @@ export async function runReview(
       descriptionUpdated = true;
       log.info("summary written to the PR description", base);
     } catch (err) {
+      metrics.stageFailed("description");
       log.error("could not update the PR description; summary stays in the comment", {
         ...base,
         err: (err as Error).message,
@@ -842,12 +858,20 @@ export async function runReview(
         retention: attestation,
       });
     } catch (err) {
+      metrics.stageFailed("record");
       log.error("could not record the review on the dashboard", {
         ...base,
         err: (err as Error).message,
       });
     }
   }
+
+  // The review-level numbers, recorded once at the end so a review that threw
+  // partway is counted as failed by the handler rather than as posted here.
+  metrics.review("posted", (Date.now() - startedAt) / 1000);
+  metrics.cost(result.costUsd + verifyCost);
+  metrics.finding("surfaced", result.findings.length);
+  if (suppressedCount > 0) metrics.finding("suppressed", suppressedCount);
 
   return {
     posted,
@@ -1103,6 +1127,7 @@ export function clientFor(deps: ReviewWorkflowDeps, job: ReviewJob): ReviewPlatf
 /** Wrap runReview as a WorkflowEngine handler (fire-and-forget per job). */
 export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
   const log = deps.logger ?? noopLogger;
+  const metrics = deps.metrics ?? NOOP_RECORDER;
   return async (rawJob: ReviewJob) => {
     const job = rawJob;
     const ref = refFromJob(job);
@@ -1133,6 +1158,7 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       const decision = await deps.gate(job.repo);
       org = decision.org;
       if (!decision.enabled) {
+        metrics.review("skipped");
         log.info("skipped by the gate", {
           repo: job.repo,
           pr: job.pr_number,
@@ -1298,6 +1324,7 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
     } catch (err) {
       const message = (err as Error).message;
       const permanent = isPermanentFailure(message);
+      metrics.review("failed");
       log.error("review failed", {
         repo: job.repo,
         pr: job.pr_number,

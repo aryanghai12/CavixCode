@@ -11,6 +11,7 @@ export {
   type RestGitLabOptions,
 } from "./gitlab/rest.ts";
 export { makeControlPlaneGitLabTokens, type ControlPlaneGitLabTokenOptions } from "./gitlab/tokens.ts";
+export { RestBitbucketClient, StaticBitbucketToken, BITBUCKET_CAPABILITIES, type BitbucketTokenProvider, type RestBitbucketOptions } from "./bitbucket/rest.ts";
 
 export { Reviewer, type ReviewInput, type AskInput, type AskResult } from "./reviewer/reviewer.ts";
 export { parseModelReview, extractJsonObject } from "./reviewer/parse.ts";

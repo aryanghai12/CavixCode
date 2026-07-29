@@ -18,6 +18,7 @@ import {
 import type { OrgTier } from "./store.ts";
 import * as gh from "./github.ts";
 import { compileEnglishRule } from "@cavix/policy";
+import { Registry } from "@cavix/metrics";
 import { explainAttestation, verdictOf, type PurgeCheck, type RetentionAttestation } from "@cavix/zero-retention";
 import {
   listAnthropicModels,
@@ -87,6 +88,43 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
+/**
+ * This service's own metrics, which are NOT the orchestrator's.
+ *
+ * Both are needed and they answer different questions. The orchestrator's say
+ * whether reviews are being produced; these say whether they are landing. A
+ * control-plane rejecting every record looks perfectly healthy from the
+ * orchestrator, which logs a warning and carries on BY DESIGN, so a review that
+ * never reaches a customer's dashboard is invisible without this.
+ *
+ * Module-level, because a Prometheus scrape has no way to name a server instance
+ * and this process only ever runs one.
+ */
+const metricsRegistry = new Registry();
+const apiRequests = metricsRegistry.counter(
+  "cavix_api_requests_total",
+  "Control-plane API responses by class (ok, client_error, server_error).",
+);
+const reviewsRecorded = metricsRegistry.counter(
+  "cavix_reviews_recorded_total",
+  "Reviews accepted onto the dashboard by outcome (stored, rejected). A steady rejected line means reviews are being produced and lost.",
+);
+metricsRegistry.gauge("cavix_build_info", "Always 1. The version is the label.").set(1, {
+  version: process.env.CAVIX_VERSION ?? "dev",
+});
+
+/**
+ * Count a response. Status class only: a per-route label would be a per-path
+ * time series, and several of these paths carry a workspace name.
+ */
+function recordApi(status: number): void {
+  try {
+    apiRequests.inc({ class: status >= 500 ? "server_error" : status >= 400 ? "client_error" : "ok" });
+  } catch {
+    /* a metric never costs a request */
+  }
+}
+
 export function createControlPlane(store: Store): http.Server {
   return http.createServer(async (req, res) => {
     try {
@@ -103,6 +141,19 @@ async function route(store: Store, req: http.IncomingMessage, res: http.ServerRe
   const m = req.method ?? "GET";
 
   if (m === "GET" && p === "/healthz") return void sendJson(res, 200, { status: "ok" });
+
+  // Stage 13's observability half, for the other service.
+  //
+  // The control-plane's numbers are DIFFERENT from the orchestrator's and both
+  // are needed: this is the process that answers "did the review reach the
+  // dashboard", and a dashboard silently rejecting every record looks perfectly
+  // healthy from the orchestrator, which logs a warning and carries on by
+  // design. Same rule as the orchestrator's: no org, no repo, no path.
+  if (m === "GET" && p === "/metrics") {
+    if (process.env.CAVIX_METRICS === "off") return void sendJson(res, 404, { error: "metrics are disabled" });
+    res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
+    return void res.end(metricsRegistry.render());
+  }
 
   // ---------- API ----------
   if (p.startsWith("/api/")) return void (await apiRoute(store, req, res, url, p, m));
@@ -465,18 +516,19 @@ async function apiRoute(
   // nothing like that, so a bot authenticates with a token an owner pasted, and
   // it is stored per workspace (encrypted) rather than per deployment: one
   // shared token would read every customer's repositories.
-  im = /^\/api\/internal\/orgs\/([^/]+)\/gitlab-token$/.exec(p);
+  im = /^\/api\/internal\/orgs\/([^/]+)\/(gitlab|bitbucket)-token$/.exec(p);
   if (m === "GET" && im) {
     const token = process.env.CAVIX_INTERNAL_TOKEN;
     if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
     const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
     if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
     const org = decodeURIComponent(im[1]);
-    const saved = store.getGitLabToken(org);
+    const platform = im[2];
+    const saved = platform === "gitlab" ? store.getGitLabToken(org) : store.getBitbucketToken(org);
     // 404 rather than 200-with-null: the orchestrator must fail loudly on a
     // missing credential, not carry on and make an unauthenticated request that
     // surfaces later as a confusing 401 on somebody's merge request.
-    if (!saved) return void sendJson(res, 404, { error: `no GitLab token saved for "${org}"` });
+    if (!saved) return void sendJson(res, 404, { error: `no ${platform} token saved for "${org}"` });
     return void sendJson(res, 200, { token: saved });
   }
 
@@ -666,17 +718,21 @@ async function apiRoute(
 
   // The workspace's GitLab access token. Owners and admins only: it is a
   // credential that can read every repository the token's own account can.
-  mm = /^\/api\/orgs\/([^/]+)\/gitlab-token$/.exec(p);
+  mm = /^\/api\/orgs\/([^/]+)\/(gitlab|bitbucket)-token$/.exec(p);
   if (mm) {
     const org = decodeURIComponent(mm[1]);
+    const platform = mm[2];
     const auth = requireOrg(req, res, org, ["owner", "admin"]);
     if (!auth) return;
+    const set = (t: string) => (platform === "gitlab" ? store.setGitLabToken(org, t) : store.setBitbucketToken(org, t));
+    const get = () => (platform === "gitlab" ? store.getGitLabToken(org) : store.getBitbucketToken(org));
+    const clear = () => (platform === "gitlab" ? store.clearGitLabToken(org) : store.clearBitbucketToken(org));
     if (m === "POST") {
       const body = await readJson(req);
       const raw = String(body.token ?? "");
       if (!raw.trim()) return void sendJson(res, 400, { error: "token required" });
       try {
-        store.setGitLabToken(org, raw);
+        set(raw);
         // Never echoed back, not even to the person who just set it. A
         // fingerprint is enough to confirm which one is stored.
         return void sendJson(res, 200, { connected: true, fingerprint: fingerprint(raw.trim()) });
@@ -685,11 +741,11 @@ async function apiRoute(
       }
     }
     if (m === "DELETE") {
-      store.clearGitLabToken(org);
+      clear();
       return void sendJson(res, 200, { connected: false });
     }
     if (m === "GET") {
-      const saved = store.getGitLabToken(org);
+      const saved = get();
       return void sendJson(res, 200, {
         connected: !!saved,
         ...(saved ? { fingerprint: fingerprint(saved) } : {}),
@@ -810,11 +866,15 @@ async function apiRoute(
     const limit = store.effectiveReviewsPerDay(org);
     if (store.reviewCountSince(org, 24 * 3600_000) >= limit) {
       const reason = limit === 0 ? "organization is suspended" : `rate limit reached for ${tier} tier (${limit}/day)`;
+      // A review that was produced and then dropped. The orchestrator logs a
+      // warning and carries on by design, so without this the loss is silent.
+      reviewsRecorded.inc({ outcome: "rejected" });
       return void sendJson(res, 429, { error: reason });
     }
     // Only ever an https link. An attacker-controlled URL here would otherwise
     // become a javascript: link rendered inside the dashboard.
     const link = safeReviewUrl(body.url);
+    reviewsRecorded.inc({ outcome: "stored" });
     const record = store.saveReview({
       org,
       repo: String(body.repo),
@@ -1257,6 +1317,10 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 function sendJson(res: http.ServerResponse, code: number, obj: unknown): void {
+  // Every JSON response passes through here, so this is the one place that sees
+  // them all. Counting at each route would mean the next route added is the one
+  // that is not counted.
+  recordApi(code);
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(obj));
 }

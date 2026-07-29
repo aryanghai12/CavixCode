@@ -60,6 +60,7 @@ export function isCommandJob(job: ReviewJob): boolean {
 /** Code hosts the edge can produce jobs for. */
 export const PLATFORM_GITHUB = "github";
 export const PLATFORM_GITLAB = "gitlab";
+export const PLATFORM_BITBUCKET = "bitbucket";
 
 /**
  * Which platform a job belongs to, defaulting to GitHub.

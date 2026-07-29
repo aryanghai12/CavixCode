@@ -21,6 +21,7 @@ import { RestGitHubClient, StaticTokenProvider } from "./github/rest.ts";
 import type { ReviewPlatform } from "./github/client.ts";
 import { GitHubAppTokenProvider } from "./github/appAuth.ts";
 import { RestGitLabClient } from "./gitlab/rest.ts";
+import { RestBitbucketClient } from "./bitbucket/rest.ts";
 import { makeControlPlaneGitLabTokens } from "./gitlab/tokens.ts";
 import { Reviewer } from "./reviewer/reviewer.ts";
 import { makeReviewHandler } from "./workflow/reviewWorkflow.ts";
@@ -44,6 +45,7 @@ import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
 import { makeReviewConfigFetcher } from "./byok/reviewConfig.ts";
 import { makeReviewRecorder } from "./report/recorder.ts";
 import { preflight, formatPreflight } from "./preflight.ts";
+import { createMetrics, makeRecorder, NOOP_RECORDER, type Recorder } from "@cavix/metrics";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "orchestrator", msg, ...meta }));
@@ -54,7 +56,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // A tiny always-on HTTP server so the orchestrator can run on a free "web service"
 // host (Render/Railway/Fly), which requires an open port and kills processes that
 // don't bind one. Also gives you a real /healthz to watch. Binds $PORT when set.
-function startHealthServer(status: { redis: string }): void {
+function startHealthServer(status: { redis: string }, metrics: Recorder): void {
   if (process.env.CAVIX_HEALTH_SERVER === "off") return;
   const port = Number(process.env.PORT ?? process.env.CAVIX_HEALTH_PORT ?? "8080");
   http
@@ -62,16 +64,35 @@ function startHealthServer(status: { redis: string }): void {
       if (req.url === "/healthz" || req.url === "/") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ status: "ok", service: "orchestrator", redis: status.redis }));
+      } else if (req.url === "/metrics") {
+        // Stage 13's observability half, on the port that is already open.
+        //
+        // Prometheus text, pull-based, on a port the operator already exposes:
+        // an air-gapped install cannot ship telemetry anywhere, so anything
+        // push-based would be a feature that does not exist for the customers
+        // who most need it. Nothing is computed until this line runs, which is
+        // the other half of the requirement: metrics cost nothing when nobody
+        // is scraping.
+        res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8" });
+        res.end(metrics.render());
       } else {
         res.writeHead(404);
         res.end();
       }
     })
-    .listen(port, "0.0.0.0", () => log("info", "health server listening", { port }));
+    .listen(port, "0.0.0.0", () => log("info", "health server listening", { port, metrics: "/metrics" }));
 }
 
 async function main() {
   const cfg = loadConfig();
+
+  // Metrics are ON unless switched off. They are in-process counters behind a
+  // pull endpoint, so they add no dependency, no egress and no work until
+  // something scrapes; the reason to turn them off is policy, not cost.
+  const metrics: Recorder =
+    process.env.CAVIX_METRICS === "off"
+      ? NOOP_RECORDER
+      : makeRecorder(createMetrics(process.env.CAVIX_VERSION ?? "dev"));
 
   // Provider registry. EVERY provider offered in the dashboard's AI & BYOK
   // dropdown must be registered here — an org that picks one we did not register
@@ -318,6 +339,23 @@ async function main() {
     });
   }
 
+  // Bitbucket Cloud, on the same terms as GitLab: a workspace token from the
+  // control-plane, so without one there is nowhere to authenticate from.
+  if (cpUrl && internalToken && process.env.CAVIX_BITBUCKET !== "off") {
+    platforms.bitbucket = new RestBitbucketClient({
+      tokens: makeControlPlaneGitLabTokens({
+        url: cpUrl,
+        token: internalToken,
+        platform: "bitbucket",
+        logger: { warn: (m, meta) => log("warn", m, meta) },
+      }),
+      logger: { info: (m, meta) => log("info", m, meta) },
+    });
+    log("info", "bitbucket reviews on: pull request events only, no chat commands", {
+      why: "authorizing an arbitrary commenter needs workspace-admin scope a review bot should not hold",
+    });
+  }
+
   const handler = makeReviewHandler({
     github,
     platforms,
@@ -333,6 +371,7 @@ async function main() {
     verify,
     reviewConfig,
     recordReview,
+    metrics,
     // "@cavixcode <question>" answers in prose instead of running a review.
     answer: async (job, ref, orgId, question) => {
       const diff = await github.fetchPullDiff(ref);
@@ -359,7 +398,7 @@ async function main() {
   // Health server first, so the port is open immediately (keeps free web hosts happy
   // even while we wait for Redis to become reachable).
   const health = { redis: "connecting" };
-  startHealthServer(health);
+  startHealthServer(health, metrics);
 
   // Durable engine: BullMQ if available, else inline (dev). Same port either way.
   const useBull = (process.env.CAVIX_ENGINE ?? "bullmq") === "bullmq";
@@ -405,6 +444,7 @@ async function main() {
       log("info", "connected to redis; consuming review jobs", { host: cfg.redis.host, tls: !!cfg.redis.tls });
       await runBridge(source, engine, controller.signal, {
         logger: { info: (m, meta) => log("info", m, meta), error: (m, meta) => log("error", m, meta) },
+        metrics,
       });
       return; // bridge returned (clean shutdown)
     } catch (err) {

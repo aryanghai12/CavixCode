@@ -10,10 +10,9 @@ never gets posted. What lands on your pull request is a review with receipts.
 
 It runs on your own servers if you want it to (including with no internet access
 at all), and uses your own AI provider key so your code never touches ours.
-It reviews **GitHub pull requests and GitLab merge requests**, including
-self-managed GitLab. Bitbucket and Azure DevOps adapters exist in
-[packages/platforms/](packages/platforms/) and are not yet reachable from the
-running service.
+It reviews **GitHub pull requests, GitLab merge requests** (including
+self-managed) **and Bitbucket Cloud pull requests**. Azure DevOps is not
+supported yet.
 
 ---
 
@@ -293,7 +292,7 @@ dishonest claim in a product whose whole pitch is that it does not make those.
 | 8 | Multi-agent ensemble with model routing | yes (7 agents) | **yes** |
 | 9 | Adjudication: dedupe, vote, calibrate, threshold | yes | **yes** |
 | 10 | Execution-grounded verification: reproduce, PoC, fix-and-run | yes | **yes** |
-| 11 | Synthesis and posting | yes (5 platforms) | **yes**, GitHub and GitLab |
+| 11 | Synthesis and posting | yes | **yes**, GitHub, GitLab and Bitbucket Cloud |
 | 12 | Feedback and learning loop | yes | **yes**, per-category confidence bars from your own decisions |
 | 13 | Teardown, zero retention, observability, cost accounting | yes | **yes**, teardown verified per review, plus cost accounting |
 
@@ -506,7 +505,7 @@ packages/
   orggraph/        Stage 5. Cross-repo impact, contracts to consumer call sites
   telemetry/       Stage 6. CI/CD telemetry and regression prediction
   learning/        Stage 12. The accept and reject calibration loop
-  platforms/       Stage 11. GitHub, GitLab, Bitbucket and Azure adapters
+  metrics/         Stage 13. A dependency-free Prometheus registry
   governance/      SSO/SAML, SCIM, RBAC, tamper-evident audit log
   zero-retention/  Stage 13. Verified proof that no customer code persists
   license/         Offline Ed25519 signed licences
@@ -551,11 +550,62 @@ likely to touch:
 | `CAVIX_GITLAB` | on | Set to `off` to stop reviewing GitLab merge requests |
 | `CAVIX_GITLAB_URL` | `https://gitlab.com` | Your self-managed GitLab instance |
 | `CAVIX_GITLAB_WEBHOOK_SECRET` | none | On the **edge**. The token you set on the GitLab project hook. Without it, GitLab deliveries are rejected |
+| `CAVIX_BITBUCKET` | on | Set to `off` to stop reviewing Bitbucket Cloud pull requests |
+| `CAVIX_BITBUCKET_WEBHOOK_SECRET` | none | On the **edge**. The secret on your Bitbucket webhook. Without it, Bitbucket deliveries are rejected |
+| `CAVIX_METRICS` | on | Set to `off` to disable `/metrics` on both services |
 
 See [SETUP_KEYS.md](SETUP_KEYS.md) for how to get each credential, and
 [GUIDE.md](GUIDE.md) §8B for the full production install walkthrough.
 
 ---
+
+## Bitbucket Cloud
+
+Same workflow, same output, one honest subtraction.
+
+| Where | What |
+|---|---|
+| Edge | `CAVIX_BITBUCKET_WEBHOOK_SECRET`, and a repository webhook at the same `/webhook` URL with **Pull request: Created** and **Updated** ticked |
+| Dashboard | Paste a Bitbucket access token under **Integrations** |
+
+**Cavix does not take chat commands on Bitbucket, and will not.** A command has
+to be authorized before it spends your model budget, and Bitbucket's permission
+lookup for an arbitrary commenter needs workspace-admin scope a review bot has no
+business holding. Automatic reviews on pull request events work fully.
+
+Two other differences, both declared rather than faked: there are no comment
+reactions (so no acknowledgment emoji), and no repository tree listing, because
+Bitbucket pages `/src` one directory at a time and mapping a repository would
+spend your rate limit before a review is posted. Changes-requested IS real here
+and reversible, so blocking works as it does on GitHub.
+
+## Observability
+
+Both services expose Prometheus text at `/metrics`, pull-based and off by nothing
+outbound, so it works in an air-gapped cluster. Set `CAVIX_METRICS=off` to
+disable.
+
+| Metric | What it answers |
+|---|---|
+| `cavix_reviews_total{outcome}` | Is Cavix working at all |
+| `cavix_review_duration_seconds` | Is it getting slower |
+| `cavix_stage_duration_seconds{stage}` | WHICH part got slower |
+| `cavix_stage_failures_total{stage}` | **Which stage has been silently degrading** |
+| `cavix_queue_depth` | Is it falling behind |
+| `cavix_model_cost_usd_total` | Is spend running away |
+| `cavix_findings_total{outcome}` | Is verification still suppressing anything |
+| `cavix_api_requests_total{class}` | Is the dashboard rejecting what the orchestrator sends |
+
+The fourth row is the one that matters. Every stage in Cavix degrades rather than
+failing, on purpose, which means a stage can be broken for a week while every
+review still posts and looks fine. That counter is the only place it shows.
+
+**No label carries a repository, organisation, path, branch, commit, finding or
+model.** All of those are unbounded (one time series per value, kept for a year)
+and three of them are customer data in an endpoint usually less protected than
+the database. The per-customer view is the dashboard, which is authenticated and
+scoped. Series are capped per metric, so a mistake becomes one visible
+`overflow="true"` series rather than an outage in your monitoring.
 
 ## Running it yourself
 

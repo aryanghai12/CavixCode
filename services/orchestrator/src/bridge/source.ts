@@ -15,6 +15,15 @@ export interface StreamSource {
   read(count: number, blockMs: number): Promise<StreamEntry[]>;
   /** Acknowledge processed entries so they are not redelivered. */
   ack(ids: string[]): Promise<void>;
+  /**
+   * Jobs waiting: undelivered backlog plus delivered-but-unacked.
+   *
+   * Optional because not every source can answer it, and the metric it feeds is
+   * worth strictly less than the pump loop it sits in. It answers the one
+   * question latency cannot: a queue can be an hour deep while every individual
+   * review is fast, and only this tells an operator they are falling behind.
+   */
+  depth?(): Promise<number>;
   close(): Promise<void>;
 }
 

@@ -1,6 +1,7 @@
 import { parseReviewJob } from "@cavix/core";
 import type { WorkflowEngine } from "../workflow/engine.ts";
 import type { StreamSource } from "./source.ts";
+import type { Recorder } from "@cavix/metrics";
 
 // The bridge pumps jobs from the StreamSource (Stage 0 output) into the
 // WorkflowEngine (Stage 1). It is the only component that reads the stream, so
@@ -23,6 +24,8 @@ export interface BridgeOptions {
   batch?: number;
   blockMs?: number;
   logger?: BridgeLogger;
+  /** Stage 13. Records the queue depth once per pump. Absent records nothing. */
+  metrics?: Recorder;
 }
 
 const noopLogger: BridgeLogger = { info() {}, error() {} };
@@ -36,6 +39,11 @@ export async function pumpOnce(
   const log = opts.logger ?? noopLogger;
   const batch = opts.batch ?? 16;
   const blockMs = opts.blockMs ?? 5000;
+
+  // Sampled here rather than on a timer: this is the loop that drains the
+  // queue, so it is the only place the number is meaningful and the only place
+  // that cannot report a depth for a consumer that has stopped consuming.
+  if (opts.metrics && source.depth) opts.metrics.queue(await source.depth());
 
   const entries = await source.read(batch, blockMs);
   for (const entry of entries) {

@@ -418,6 +418,10 @@ export interface Store {
   getGitLabToken(org: string): string | null;
   /** Forget it, so the dashboard offers "Connect" again. */
   clearGitLabToken(org: string): void;
+  /** The same, for Bitbucket Cloud. Same reasoning: no per-install token exists. */
+  setBitbucketToken(org: string, rawToken: string): void;
+  getBitbucketToken(org: string): string | null;
+  clearBitbucketToken(org: string): void;
 
   // --- dashboard ---
   stats(org: string): OrgStats;
@@ -468,6 +472,7 @@ export interface StoreSnapshot {
   oauthTokens: Array<[string, string]>;
   /** Optional so a snapshot written before GitLab support still restores. */
   gitlabTokens?: Array<[string, string]>;
+  bitbucketTokens?: Array<[string, string]>;
   /** Optional so a snapshot written before these existed still restores. */
   mutes?: MuteEvent[];
   /** Stage 5's cross-repo contract graph, per workspace. See `orgGraph`. */
@@ -517,6 +522,8 @@ export class InMemoryStore implements Store {
   private apiKeys = new Map<string, string>();  // org → encrypted key blob
   /** org → encrypted GitLab access token. See setGitLabToken. */
   private gitlabTokens = new Map<string, string>();
+  /** org -> encrypted Bitbucket access token. See setBitbucketToken. */
+  private bitbucketTokens = new Map<string, string>();
   private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
   private mutes: MuteEvent[] = [];
   private orgGraphs = new Map<string, StoredOrgGraph>();
@@ -935,6 +942,19 @@ export class InMemoryStore implements Store {
     this.gitlabTokens.delete(org);
   }
 
+  setBitbucketToken(org: string, rawToken: string): void {
+    const t = rawToken.trim();
+    if (!t) throw new Error("bitbucket token is empty");
+    this.bitbucketTokens.set(org, encryptSecret(t));
+  }
+  getBitbucketToken(org: string): string | null {
+    const blob = this.bitbucketTokens.get(org);
+    return blob ? decryptSecret(blob) : null;
+  }
+  clearBitbucketToken(org: string): void {
+    this.bitbucketTokens.delete(org);
+  }
+
   // ---------- dashboard stats ----------
 
   stats(org: string): OrgStats {
@@ -1290,6 +1310,7 @@ export class InMemoryStore implements Store {
       apiKeys: [...this.apiKeys.entries()],
       oauthTokens: [...this.oauthTokens.entries()],
       gitlabTokens: [...this.gitlabTokens.entries()],
+      bitbucketTokens: [...this.bitbucketTokens.entries()],
       mutes: this.mutes,
       orgGraphs: [...this.orgGraphs.entries()],
       ciRuns: [...this.ciRuns.entries()],
@@ -1312,6 +1333,7 @@ export class InMemoryStore implements Store {
     this.apiKeys = new Map(s.apiKeys ?? []);
     this.oauthTokens = new Map(s.oauthTokens ?? []);
     this.gitlabTokens = new Map(s.gitlabTokens ?? []);
+    this.bitbucketTokens = new Map(s.bitbucketTokens ?? []);
     // Both default to empty rather than being left alone, so a restore replaces
     // every field. Skipping them left the previous process's mutes and graph
     // sitting in memory beside freshly loaded orgs they no longer belonged to.

@@ -12,8 +12,9 @@ const SchemaVersion = "1"
 
 // Platform values. The orchestrator picks its client from this.
 const (
-	PlatformGitHub = "github"
-	PlatformGitLab = "gitlab"
+	PlatformGitHub    = "github"
+	PlatformGitLab    = "gitlab"
+	PlatformBitbucket = "bitbucket"
 )
 
 // ReviewJob is the canonical unit of work that flows edge → queue → orchestrator.

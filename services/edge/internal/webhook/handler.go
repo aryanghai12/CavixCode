@@ -25,13 +25,14 @@ const enqueueTimeout = 80 * time.Millisecond
 // ACK fast. It depends only on ports (queue.Producer, dedupe.Store), so tests
 // run with in-memory fakes and no infrastructure.
 type Handler struct {
-	secret      string
-	gitlabToken string
-	queue       queue.Producer
-	dedupe      dedupe.Store
-	log         *slog.Logger
-	botHandle   string          // comma-separated mention handles, e.g. "cavixcode,cavix"
-	allowedCmd  map[string]bool // author_associations allowed to run commands
+	secret          string
+	gitlabToken     string
+	bitbucketSecret string
+	queue           queue.Producer
+	dedupe          dedupe.Store
+	log             *slog.Logger
+	botHandle       string          // comma-separated mention handles, e.g. "cavixcode,cavix"
+	allowedCmd      map[string]bool // author_associations allowed to run commands
 }
 
 // NewHandler wires the edge handler. botHandle is the GitHub App's mention handle,
@@ -61,6 +62,14 @@ func (h *Handler) WithGitLab(token string) *Handler {
 	return h
 }
 
+// WithBitbucket enables Bitbucket Cloud ingestion on the same endpoint, with its
+// own secret, for the same reasons as WithGitLab: one URL for an operator to
+// configure, and separate secrets so one host's hook cannot forge another's.
+func (h *Handler) WithBitbucket(secret string) *Handler {
+	h.bitbucketSecret = secret
+	return h
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
@@ -77,10 +86,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1b. GitLab arrives on the same endpoint and is told apart by its own
-	// header, before anything GitHub-shaped is looked at.
+	// 1b. GitLab and Bitbucket arrive on the same endpoint and are told apart by
+	// their own headers, before anything GitHub-shaped is looked at.
 	if gl := r.Header.Get(GitLabEventHeader); gl != "" {
 		h.serveGitLab(w, r, start, gl, body)
+		return
+	}
+	if bb := r.Header.Get(BitbucketEventHeader); bb != "" {
+		h.serveBitbucket(w, r, start, bb, body)
 		return
 	}
 
@@ -187,6 +200,36 @@ func (h *Handler) serveGitLab(w http.ResponseWriter, r *http.Request, start time
 			return
 		}
 		h.log.Warn("gitlab normalize failed", "event", event, "err", err.Error())
+		http.Error(w, "unprocessable payload", http.StatusBadRequest)
+		return
+	}
+	h.enqueue(w, r, start, delivery, job)
+}
+
+// serveBitbucket handles a pull request event. Comments are deliberately NOT
+// handled: see the note at the top of bitbucket.go. A command whose author's
+// permission cannot be checked is an open door, and Bitbucket does not let a
+// review bot check an arbitrary commenter's without workspace-admin scope.
+func (h *Handler) serveBitbucket(w http.ResponseWriter, r *http.Request, start time.Time, event string, body []byte) {
+	if h.bitbucketSecret == "" {
+		h.log.Warn("bitbucket webhook received but no bitbucket secret is configured", "event", event)
+		http.Error(w, "bitbucket ingestion is not enabled", http.StatusUnauthorized)
+		return
+	}
+	if !VerifyBitbucketSignature(h.bitbucketSecret, r.Header.Get(BitbucketSignatureHeader), body) {
+		h.log.Warn("bitbucket signature verification failed", "event", event)
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	delivery := r.Header.Get("X-Request-UUID")
+	job, err := NormalizeBitbucketPullRequest(body, delivery, event)
+	if err != nil {
+		if errors.Is(err, ErrNotTrigger) {
+			h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"non_trigger_action"}`)
+			return
+		}
+		h.log.Warn("bitbucket normalize failed", "event", event, "err", err.Error())
 		http.Error(w, "unprocessable payload", http.StatusBadRequest)
 		return
 	}
