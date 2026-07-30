@@ -96,7 +96,19 @@ export type StageName =
   | "description"
   | "post"
   | "record"
-  | "retention";
+  | "retention"
+  /**
+   * Reconciling this review against what earlier reviews of the same pull
+   * request left open.
+   *
+   * Worth its own name rather than folding into `record`, because the two fail
+   * differently and only one of them is a correctness problem. A failed
+   * `record` costs a dashboard row. A failed `pr_ledger` costs a merge gate its
+   * memory: the review still posts, but its verdict is computed from one run of
+   * a model instead of from everything still open, which is the shape of the
+   * bug this stage exists to prevent.
+   */
+  | "pr_ledger";
 
 export function createMetrics(version = "dev"): CavixMetrics {
   const registry = new Registry();

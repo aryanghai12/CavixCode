@@ -46,6 +46,7 @@ import { makeRepoGate } from "./byok/gate.ts";
 import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
 import { makeReviewConfigFetcher } from "./byok/reviewConfig.ts";
 import { makeReviewRecorder } from "./report/recorder.ts";
+import { makeLedgerClient } from "./report/ledger.ts";
 import { preflight, formatPreflight } from "./preflight.ts";
 import { createMetrics, makeRecorder, NOOP_RECORDER, type Recorder } from "@cavix/metrics";
 
@@ -317,6 +318,28 @@ async function main() {
     fix: "set CAVIX_CONTROL_PLANE_URL and CAVIX_INTERNAL_TOKEN on the orchestrator",
   });
 
+  // The per-pull-request finding ledger: what every review of a pull request has
+  // raised, and what is still open.
+  //
+  // Without it each review's verdict is computed from its own findings alone, so
+  // a pull request with three open findings, one of them fixed and pushed, goes
+  // green the moment the next pass does not happen to re-report the other two.
+  // A model is not a function, and a merge gate built on one run of it is a coin
+  // toss. Warned about loudly for that reason: this is a correctness difference,
+  // not a missing dashboard row.
+  const ledger = cpUrl && internalToken
+    ? makeLedgerClient({
+        url: cpUrl,
+        token: internalToken,
+        logger: { info: (m, meta) => log("info", m, meta), warn: (m, meta) => log("warn", m, meta) },
+      })
+    : undefined;
+  if (ledger) log("info", "findings are tracked across every review of a pull request");
+  else log("warn", "no control-plane configured: each review's verdict stands alone", {
+    effect: "a re-review that does not re-report an open finding will not carry it forward",
+    fix: "set CAVIX_CONTROL_PLANE_URL and CAVIX_INTERNAL_TOKEN on the orchestrator",
+  });
+
   // Stage 11 — the second live platform.
   //
   // On unless it has nothing to authenticate with. GitLab holds no per-install
@@ -415,6 +438,7 @@ async function main() {
     verify,
     reviewConfig,
     recordReview,
+    ledger,
     metrics,
     // "@cavixcode <question>" answers in prose instead of running a review.
     answer: async (job, ref, orgId, question) => {

@@ -75,6 +75,16 @@ export interface CommandDeps {
   ask?: (question: string) => Promise<string>;
   /** Post or edit Cavix's single status comment on the PR. */
   say: (body: string) => Promise<void>;
+  /**
+   * Close every finding still open in this pull request's ledger.
+   *
+   * "@cavixcode resolve" has to reach the ledger as well as the platform, or it
+   * only half works: the blocking review would be dismissed and the inline
+   * comments deleted, and then the very next push would carry every one of those
+   * findings straight back onto the pull request. Returns how many it closed, so
+   * the reply can state a number it measured.
+   */
+  clearLedger?: () => Promise<number>;
   logger?: { info(msg: string, meta?: Record<string, unknown>): void };
 }
 
@@ -158,20 +168,43 @@ async function resolve(deps: CommandDeps, ref: PullRef): Promise<void> {
   const commentIds = await deps.github.listReviewCommentIds(ref, mine.map((r) => r.id));
   for (const id of commentIds) await deps.github.deleteReviewComment(ref, id);
 
+  // The ledger too, and this is the half that makes the command mean anything.
+  // Dismissing the review without closing the ledger clears the page for about
+  // one push: the next review reads the same open findings back out and posts
+  // them again, and the human who typed "resolve" watches it undo itself.
+  //
+  // Best-effort, like everything else here. Tidying up is worth less than the
+  // review that follows it.
+  let cleared = 0;
+  if (deps.clearLedger) {
+    try {
+      cleared = await deps.clearLedger();
+    } catch (err) {
+      deps.logger?.info("could not clear the pull request ledger (continuing)", {
+        repo: `${ref.owner}/${ref.repo}`,
+        pr: ref.number,
+        err: (err as Error).message,
+      });
+    }
+  }
+
   deps.logger?.info("resolved Cavix's own review artifacts", {
     repo: `${ref.owner}/${ref.repo}`,
     pr: ref.number,
     dismissed: blocking.length,
     comments_deleted: commentIds.length,
+    ledger_closed: cleared,
   });
 
   const parts: string[] = [];
   if (blocking.length > 0) parts.push(`dismissed ${plural(blocking.length, "blocking review")}`);
   if (commentIds.length > 0) parts.push(`removed ${plural(commentIds.length, "inline comment")}`);
+  if (cleared > 0) parts.push(`closed ${plural(cleared, "open finding")}`);
   await deps.say(
     parts.length > 0
-      ? `**Resolved.** Cavix ${parts.join(" and ")}. Comment \`@cavixcode review\` for a fresh look.`
-      : "**Nothing to resolve.** Cavix has no blocking review or inline comments left on this pull request.",
+      ? `**Resolved.** Cavix ${parts.join(", ")}. Nothing here will be raised again unless the code ` +
+          "changes. Comment `@cavixcode review` for a fresh look."
+      : "**Nothing to resolve.** Cavix has no blocking review, inline comments or open findings left on this pull request.",
   );
 }
 

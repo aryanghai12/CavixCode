@@ -258,6 +258,8 @@ so you can **skip them** unless you want to change behavior.
 | `CAVIX_REDIS_ADDR` | Same, for the edge service | `127.0.0.1:6379`, or omit for in‑memory |
 | `CAVIX_CONTROL_PLANE_PORT` | Dashboard web port | `8088` (default) |
 | `CAVIX_FREE_REVIEWS_PER_DAY` | Free‑tier daily limit | a number, your choice |
+| `CAVIX_FREE_REVIEWS_PER_PR` | Free‑tier limit per pull request | `10` (default). Free workspaces cannot raise this themselves |
+| `CAVIX_PAID_REVIEWS_PER_PR` | Paid default per pull request | `50` (default). Paid maintainers change theirs in Review settings |
 | `CAVIX_AIRGAPPED` | Block all internet (offline mode) | `true` only for air‑gapped self‑host |
 
 > **Redis note for a non‑tech user:** Redis is a small "waiting line" for jobs. You

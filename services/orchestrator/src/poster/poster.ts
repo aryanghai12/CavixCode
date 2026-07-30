@@ -10,6 +10,7 @@ import {
   type Verification,
 } from "@cavix/core";
 import type { CallTrace } from "@cavix/analyzer";
+import type { LedgerEntry } from "@cavix/review-session";
 import {
   CHECK_NAME,
   INLINE_MARKER,
@@ -290,6 +291,48 @@ export interface PosterOptions {
    * the same failure as a Scope row with no measurement behind it.
    */
   diffLimitations?: DiffLimitation[];
+  /**
+   * Findings raised by EARLIER reviews that are still open, and that this review
+   * did not re-report.
+   *
+   * Each one has been checked against the code: the file it points at has not
+   * changed since it was raised. That is why it is still here, and why it counts
+   * towards the verdict exactly as a fresh finding does. They are rendered as a
+   * list rather than as inline comments because their line numbers belong to an
+   * older head and anchoring them there would put a comment on the wrong line.
+   */
+  carried?: LedgerEntry[];
+  /**
+   * Findings from earlier reviews that this one CLEARED: the code moved and the
+   * reviewer no longer raises them.
+   *
+   * Rendered as prominently as the carried ones, and that is deliberate. Someone
+   * who pushed a fix needs to see it land. Showing only what is still open makes
+   * a review that noticed the fix look identical to one that ignored it, which
+   * is how a reviewer stops being trusted.
+   */
+  resolved?: LedgerEntry[];
+  /**
+   * Did the ledger actually answer this review?
+   *
+   * False when the control-plane could not be reached, and it changes what may
+   * be SAID rather than what is computed: with no answer, the review cannot
+   * claim a clean pass on the pull request as a whole, because it does not know
+   * what earlier reviews left open. The Scope module states measurements, and an
+   * unanswered question is not one.
+   */
+  ledgerKnown?: boolean;
+  /**
+   * How many of THIS review's findings sit at or above the owner's blocking
+   * severity.
+   *
+   * Passed in rather than derived here, because the bar is `failOn` and only the
+   * workflow reads the org's config. It exists so the blocking sentence can name
+   * where the block came from: on the run where every blocking finding is a
+   * carried one, "a finding was posted" sends the reader hunting through a
+   * review that does not contain it.
+   */
+  blockingFindings?: number;
 }
 
 export interface BuiltReview {
@@ -326,13 +369,21 @@ export function buildCheckOutput(
   const counts = countBySeverity(all);
   const worst = SEVERITY_ORDER.find((s) => counts[s] > 0);
   const verified = all.filter(isVerified).length;
+  const carried = opts.carried ?? [];
 
+  // The title is the one line a reader sees without expanding anything, and on a
+  // required check it is the line they read before clicking merge. "No issues
+  // found" while two findings from earlier reviews are still open is the exact
+  // sentence this feature was built to stop printing.
   const title = opts.requestChanges
     ? `Changes requested: ${blockingReason(opts)}`
-    : all.length === 0
-      ? "Review complete. No issues found"
-      : `Review complete. ${plural(all.length, "finding")}, highest ${worst}` +
-        (verified > 0 ? `, ${verified} verified by execution` : "");
+    : all.length === 0 && carried.length > 0
+      ? `Nothing new. ${plural(carried.length, "finding")} still open from earlier reviews`
+      : all.length === 0
+        ? "Review complete. No issues found"
+        : `Review complete. ${plural(all.length, "finding")}, highest ${worst}` +
+          (carried.length > 0 ? `, plus ${carried.length} still open from earlier reviews` : "") +
+          (verified > 0 ? `, ${verified} verified by execution` : "");
 
   const lines: string[] = [];
   const rows = scopeRows(result, all, files, opts);
@@ -349,10 +400,21 @@ export function buildCheckOutput(
       "",
     );
   }
+  // Named in the check summary as well as the title. A required check is often
+  // read from the Checks box alone, and a reader who never opens the review
+  // comment still has to be told what is holding the pull request.
+  if (carried.length > 0) {
+    lines.push(
+      `**${plural(carried.length, "finding")} still open from earlier reviews of this pull ` +
+        "request.** Cavix did not raise them again in this review, and it checked why: the files " +
+        "they point at have not changed since. They are listed in the review comment.",
+      "",
+    );
+  }
   // The check row is a summary, not the review. Say where the review is, because
   // a reader who opened this from the Checks box has not seen the comment yet.
   lines.push(
-    all.length === 0
+    all.length === 0 && carried.length === 0
       ? "<sub>Cavix read every changed line and had nothing to raise. The full review is in the pull request conversation.</sub>"
       : "<sub>Every finding is listed in the Cavix review comment on the pull request, with the detail on the line at fault.</sub>",
   );
@@ -616,6 +678,17 @@ function renderReviewComment(
   if (notDiffed.length > 0) findingSections.push(["", "---", "", ...notDiffed]);
   const gate = renderPreMerge(opts.preMerge, opts.requestChanges === true);
   if (gate.length > 0) findingSections.push(["", "---", "", ...gate]);
+  // Before this review's own findings, and before the pre-merge gate would have
+  // been a mistake: what is STILL OPEN outranks what is new. A reader scrolling
+  // a long review must not have to reach the bottom to learn that the thing
+  // holding their merge was raised three pushes ago.
+  //
+  // `assemble` drops whole sections from the end when the body is too long for
+  // the host, so position is also what guarantees these survive truncation.
+  const stillOpen = renderCarried(opts.carried ?? [], ref);
+  if (stillOpen.length > 0) findingSections.push(["", "---", "", ...stillOpen]);
+  const cleared = renderResolved(opts.resolved ?? []);
+  if (cleared.length > 0) findingSections.push(["", "---", "", ...cleared]);
   if (groups.length > 0) {
     findingSections.push(["", "---", "", "### Findings", "", ...renderPriority(all, ref)]);
     for (const g of groups) findingSections.push(["", ...renderFileSection(g, offDiff, ref, sections)]);
@@ -716,6 +789,27 @@ function scopeRows(
       mark: MARK_NEUTRAL,
       signal: "CI Telemetry",
       reading: `${plural(signals.ciRuns, "completed pipeline run")} analysed for regression`,
+    });
+  }
+
+  // 3a2. What earlier reviews of this pull request left open.
+  //
+  // A measurement like every other row here, and stated in those terms: not
+  // "the model stayed quiet", but "the file has not changed since". That is the
+  // fact the row stands on, and it is the one a reader needs in order to trust
+  // a finding nothing in this review re-raised.
+  //
+  // No row when nothing is carried, and no row when the ledger could not be
+  // read. "Nothing open from earlier reviews" is a claim, and this module does
+  // not make claims it did not measure.
+  const carried = opts.carried ?? [];
+  if (carried.length > 0) {
+    rows.push({
+      mark: MARK_ATTENTION,
+      signal: "Still Open",
+      reading:
+        `${plural(carried.length, "finding")} from earlier reviews, in ` +
+        `${plural(new Set(carried.map((e) => e.path)).size, "file")} unchanged since ${carried.length === 1 ? "it was" : "they were"} raised`,
     });
   }
 
@@ -988,7 +1082,32 @@ function badgeSegment(s: string): string {
  * NOTE (blue) for the rest. A reader knows the outcome before reading a word.
  */
 function verdict(all: Finding[], fileCount: number, opts: PosterOptions = {}): string[] {
+  const carried = opts.carried ?? [];
+
   if (all.length === 0) {
+    // "Clean pass" is a claim about the pull request, not about this run, and it
+    // is the sentence a reader acts on. Making it while findings from earlier
+    // reviews are still open is the single most misleading thing this file can
+    // print, and it is what happened every time somebody fixed one of three
+    // findings and pushed.
+    if (carried.length > 0) {
+      const isAre = carried.length === 1 ? "is" : "are";
+      return [
+        SEVERITY_RANK[worstOfEntries(carried)] >= SEVERITY_RANK.high ? "> [!WARNING]" : "> [!NOTE]",
+        `> **Nothing new on this push.** ${plural(carried.length, "finding")} from earlier ` +
+          `reviews of this pull request ${isAre} still open, listed below.`,
+      ];
+    }
+    if (opts.ledgerKnown === false) {
+      // Cavix could not read what earlier reviews left open, so it cannot say
+      // the pull request is clean. It can only say what it did on this push.
+      return [
+        "> [!NOTE]",
+        "> **Nothing to raise on the changed lines in this review.** Cavix could not reach its " +
+          "record of earlier reviews on this pull request, so this is not a statement about " +
+          "findings raised before now.",
+      ];
+    }
     return ["> [!TIP]", "> **Clean pass.** Nothing to raise on the changed lines."];
   }
 
@@ -1010,6 +1129,12 @@ function verdict(all: Finding[], fileCount: number, opts: PosterOptions = {}): s
     ">",
     `> ${tally}`,
   ];
+  // Named in the headline callout, not left for the reader to find further down.
+  // Someone deciding whether to merge reads this box and stops, so the count it
+  // shows has to be the count the check run gated on.
+  if (carried.length > 0) {
+    out.push(">", `> plus ${plural(carried.length, "finding")} still open from earlier reviews`);
+  }
   if (opts.requestChanges) {
     out.push(">", `> **Changes requested: ${blockingReason(opts)}.**`);
     out.push(
@@ -1028,6 +1153,94 @@ function verdict(all: Finding[], fileCount: number, opts: PosterOptions = {}): s
   }
   return out;
 }
+
+/**
+ * A severity off a stored ledger entry, or the quietest one.
+ *
+ * Entries are restored from a payload rather than produced in this process, so
+ * the severity is a plain string. An unrecognised value must land on "info" and
+ * never on undefined: `SEVERITY_RANK[undefined]` is NaN, every comparison
+ * against it is false, and a carried critical would quietly render as a note.
+ */
+function entrySeverity(e: LedgerEntry): Severity {
+  const s = e.severity;
+  return s === "critical" || s === "high" || s === "medium" || s === "low" || s === "info" ? s : "info";
+}
+
+/** The worst severity among carried entries, for colouring the callout. */
+function worstOfEntries(entries: LedgerEntry[]): Severity {
+  return entries
+    .map(entrySeverity)
+    .reduce((worst, s) => (SEVERITY_RANK[s] > SEVERITY_RANK[worst] ? s : worst), "info" as Severity);
+}
+
+/**
+ * The findings earlier reviews raised that are still open.
+ *
+ * Rendered as a list and never as inline comments, on purpose. Their line
+ * numbers belong to the head they were raised against; anchoring them to the
+ * current one would put a comment on whatever code has since moved into that
+ * position, which is worse than not anchoring it at all.
+ *
+ * Every row states something measured: which review raised it, how many reviews
+ * have raised it since, and the fact the file has not changed since. That last
+ * one is the answer to the question the reader is about to ask, which is "why is
+ * this still here when the model did not mention it".
+ */
+function renderCarried(carried: LedgerEntry[], ref?: ReviewLinkRef): string[] {
+  if (carried.length === 0) return [];
+
+  const sorted = [...carried].sort(
+    (a, b) => SEVERITY_RANK[entrySeverity(b)] - SEVERITY_RANK[entrySeverity(a)] || a.path.localeCompare(b.path),
+  );
+  const out = [
+    "### ▲ Still open from earlier reviews",
+    "",
+    "These were raised on this pull request and have not been dealt with. Cavix did not raise " +
+      "them again in this review, and it checked why: **the files they point at have not changed " +
+      "since.** They count towards the result above.",
+    "",
+    "| | Finding | Where | Raised |",
+    "| :--: | :--- | :--- | :--- |",
+  ];
+  for (const e of sorted.slice(0, MAX_CARRIED_ROWS)) {
+    const where = fileLink(e.path, ref) + (e.line > 0 ? ` line ${e.line}` : "");
+    const raised = e.timesReported > 1 ? `${e.timesReported} reviews ago` : "an earlier review";
+    out.push(`| ${SEVERITY_MARK[entrySeverity(e)]} | ${cell(e.title)} | ${where} | ${raised} |`);
+  }
+  if (sorted.length > MAX_CARRIED_ROWS) {
+    out.push("", `<sub>and ${sorted.length - MAX_CARRIED_ROWS} more still open.</sub>`);
+  }
+  out.push(
+    "",
+    "<sub>Fix one and push, and it clears itself on the next review. Disagree with one? " +
+      "`@cavixcode resolve` closes them all, and the dashboard can dismiss them one at a time.</sub>",
+  );
+  return out;
+}
+
+/**
+ * What this review CLEARED.
+ *
+ * As important as the list above and easy to leave out. Someone who pushed a fix
+ * and sees only what is still open cannot tell whether Cavix noticed, and a
+ * reviewer who appears not to notice fixes is one people stop reading.
+ */
+function renderResolved(resolved: LedgerEntry[]): string[] {
+  const fixed = resolved.filter((e) => e.resolution === "fixed");
+  if (fixed.length === 0) return [];
+  const out = [`### ✓ Cleared by this push`, ""];
+  for (const e of fixed.slice(0, MAX_CARRIED_ROWS)) {
+    out.push(`- ${cell(e.title)} <sub>${plain(e.path)}</sub>`);
+  }
+  if (fixed.length > MAX_CARRIED_ROWS) {
+    out.push("", `<sub>and ${fixed.length - MAX_CARRIED_ROWS} more.</sub>`);
+  }
+  return out;
+}
+
+/** Carried rows rendered before the list is summarised. */
+const MAX_CARRIED_ROWS = 15;
 
 /** How each host is named in prose. */
 const PLATFORM_LABEL: Record<PlatformName, string> = {
@@ -1066,9 +1279,21 @@ function renderPriority(all: Finding[], ref?: ReviewLinkRef): string[] {
  */
 function blockingReason(opts: PosterOptions): string {
   const failed = opts.preMerge?.failed ?? 0;
-  return failed > 0
-    ? `${plural(failed, "pre-merge check")} failed`
-    : "a finding at or above your blocking severity was posted";
+  if (failed > 0) return `${plural(failed, "pre-merge check")} failed`;
+  // Which findings are holding it. Someone who just pushed a fix and sees
+  // "a finding was posted" will go looking through THIS review for it, and on
+  // the run where the block comes entirely from earlier ones there is nothing
+  // there to find. Naming the source is the difference between a gate a person
+  // can act on and one that looks broken.
+  const carried = (opts.carried ?? []).filter(
+    (e) => SEVERITY_RANK[entrySeverity(e)] >= SEVERITY_RANK.high,
+  ).length;
+  const fresh = opts.blockingFindings ?? 0;
+  if (carried > 0 && fresh === 0) {
+    return `${plural(carried, "finding")} from earlier reviews ${carried === 1 ? "is" : "are"} still open`;
+  }
+  if (carried > 0) return "findings from this and earlier reviews are open";
+  return "a finding at or above your blocking severity was posted";
 }
 
 /** At most this many skipped files are named before the list is summarised. */

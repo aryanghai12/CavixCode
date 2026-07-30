@@ -621,6 +621,22 @@
     const rsToggle = (key, label, desc) => `
       <div class="settings-row"><div><div class="sr-label">${label}</div><div class="sr-desc">${desc}</div></div>
       <label class="switch"><input type="checkbox" data-rs="${key}"${rs[key] ? " checked" : ""}><span class="slider"></span></label></div>`;
+    // How many reviews one pull request may receive.
+    //
+    // Rendered from what the API says about THIS workspace rather than from a
+    // tier guessed on the page. On free the number is a fixed property of the
+    // tier and the input is locked with the reason, because a box you can type
+    // into that refuses to save is worse than one that is plainly not yours.
+    const prLimitRow = (b) => {
+      if (!b) return "";
+      const desc = b.raisable
+        ? "After this many reviews Cavix stops reviewing the pull request. The check keeps whatever the last review concluded, so nothing is cleared by running out."
+        : `Fixed at ${b.limit} on the free tier and not changeable here. Cavix stops reviewing a pull request after that; the check keeps whatever the last review concluded, so nothing is cleared by running out. Upgrade to set your own.`;
+      const control = b.raisable
+        ? `<input id="prLimit" type="number" min="1" max="1000" value="${b.limit}" style="width:110px">`
+        : `<span class="badge">${b.limit} per pull request</span>`;
+      return `<div class="settings-row" style="border-bottom:none"><div><div class="sr-label">Reviews per pull request${b.raisable ? "" : ` <span class="badge">free tier</span>`}</div><div class="sr-desc">${desc}</div></div><div>${control}</div></div>`;
+    };
     // Not built yet. Showing a live switch for these would promise something the
     // review does not do, so they are marked and disabled until they are real.
     const rsSoon = (label, desc) => `
@@ -652,6 +668,7 @@
           ${toggle("requestChangesOnFail", "Let Cavix request changes", "When something below fails, post the review as <b>Request changes</b> instead of a comment, which blocks merge on a protected branch. Off by default, Cavix never blocks your team unless you say so.", s.requestChangesOnFail)}
           <div class="settings-row"><div><div class="sr-label">Blocking severities</div><div class="sr-desc">Which severities count as a failure. Only applies while "request changes" is on.</div></div>
             <div>${sevChecks}</div></div>
+          ${prLimitRow(s.prBudget)}
         </div>
       </div>
       <div class="panel">
@@ -725,6 +742,10 @@
         reviewSections,
       };
       document.querySelectorAll("[data-key]").forEach((el) => { patch[el.dataset.key] = el.checked; });
+      // Only sent when the input exists, which is only on a workspace allowed to
+      // move it. Sending it from a free workspace would earn a 403 and fail the
+      // whole save, taking every other setting on the page down with it.
+      if ($("prLimit")) patch.reviewsPerPullRequest = Number($("prLimit").value);
       try { await api(`/api/orgs/${org}/settings`, { method: "PUT", body: JSON.stringify(patch) }); toast("Settings saved"); }
       catch (e) { toast(e.message); }
     });
@@ -1037,16 +1058,27 @@
     // If status itself fails, say "not connected" rather than claiming a demo
     // connection that does not exist.
     const gh = await api(`/api/github/status`).catch(() => ({ connected: false, demo: false }));
-    // Same posture: if the status call fails, say "not connected" rather than
-    // implying a connection that may not exist.
+    // Which token hosts this deployment currently INVITES people to connect, as
+    // against which ones it can review. Empty right now: GitHub only, on
+    // purpose, while the product is opened up with one host to support rather
+    // than five.
+    //
+    // Nothing is switched off to achieve that, and nothing here reaches the
+    // orchestrator. Every client, normalizer, differ and credential path for the
+    // other four is intact, tested and running; a workspace that has already
+    // connected one keeps working and still reads "connected" below, because it
+    // is. This set only decides who is invited to connect a NEW one.
+    //
+    // To open a host: add its key. That is the whole change — the row's wording,
+    // its badge and its Connect button all read from this.
+    //
+    // GitHub is not in here because it is not a token host: it connects through
+    // the App's OAuth flow below, on its own row.
+    const OFFERED_TOKEN_HOSTS = new Set([]);
+
     // Every host with no per-install credential connects the same way: a token
     // the owner pastes, held per workspace. One list rather than four blocks,
     // because they differ only in the words.
-    //
-    // These used to read "soon", which is what the panel said for months after
-    // Bitbucket Cloud went live. A dashboard that understates the product is the
-    // same failure as one that overstates it: in both cases the page and the
-    // pull requests disagree, and the customer believes the page.
     const TOKEN_HOSTS = [
       {
         key: "gitlab",
@@ -1054,6 +1086,7 @@
         name: "GitLab",
         connected: "Connected. Merge requests on gitlab.com and self-managed are reviewed.",
         idle: "Merge-request reviews, gitlab.com or self-managed. Needs an access token with api scope.",
+        soon: "Merge-request reviews on gitlab.com and self-managed. Built and working; opening after GitHub.",
         prompt:
           "Paste a GitLab access token with `api` scope.\n\nA project or group access token is best: it belongs to the project rather than to you, so reviews keep working after you leave.",
       },
@@ -1063,6 +1096,7 @@
         name: "Bitbucket Cloud",
         connected: "Connected. Pull request events are reviewed. Chat commands are off on Bitbucket.",
         idle: "Pull request reviews on bitbucket.org. Needs a workspace access token with pullrequest:write.",
+        soon: "Pull request reviews on bitbucket.org. Built and working; opening after GitHub.",
         prompt:
           "Paste a Bitbucket Cloud access token with `pullrequest:write` and `repository` scopes.\n\nA workspace access token is best: it outlives whoever set it up.",
       },
@@ -1072,6 +1106,7 @@
         name: "Bitbucket Data Center",
         connected: "Connected. Pull request events on your own server are reviewed.",
         idle: "Self-hosted Bitbucket Server / Data Center. Needs an HTTP access token with repository write.",
+        soon: "Self-hosted Bitbucket Server / Data Center. Built and working; opening after GitHub.",
         prompt:
           "Paste a Bitbucket Data Center HTTP access token with repository WRITE.\n\nA project token is best: it belongs to the project rather than to you.",
       },
@@ -1081,10 +1116,16 @@
         name: "Azure DevOps",
         connected: "Connected. Pull requests are reviewed; Cavix builds the diff itself and names anything it could not.",
         idle: "Pull request reviews on Azure DevOps. Needs a PAT with Code (read & write) and Build (read).",
+        soon: "Pull request reviews on Azure DevOps. Built and working; opening after GitHub.",
         prompt:
           "Paste an Azure DevOps personal access token with Code (read & write), Pull Request Threads (read & write) and Build (read).",
       },
     ];
+    // Still asked for EVERY host, including the ones not being offered. A
+    // workspace that connected GitLab before it was taken off the list is still
+    // having its merge requests reviewed, and the page has to say so: marking a
+    // live connection "soon" is the same failure as advertising a host that does
+    // not work, pointing the other way.
     const statuses = await Promise.all(
       TOKEN_HOSTS.map((h) =>
         api(`/api/orgs/${encodeURIComponent(org)}/${h.key}-token`).catch(() => ({ connected: false })),
@@ -1109,15 +1150,37 @@
             gh.demo ? `<span class="badge">demo data</span>` : gh.connected ? connected : soon,
             gh.connected && !gh.demo ? "" : `<a class="btn btn-soft btn-sm" href="/api/auth/github/start">Connect</a>`,
           )}
-          ${TOKEN_HOSTS.map((h, i) =>
-            row(
+          ${TOKEN_HOSTS.map((h, i) => {
+            // A host already connected is shown as connected even while it is
+            // not being offered, and it keeps its Replace button. It is
+            // genuinely reviewing their merge requests, and marking it "soon"
+            // would be the page contradicting the pull requests — the same
+            // failure as claiming a host that does not work, pointing the other
+            // way. Only a host nobody here has connected reads "soon".
+            if (statuses[i].connected) {
+              return row(
+                h.mono,
+                h.name,
+                h.connected,
+                connected,
+                `<button class="btn btn-soft btn-sm" data-connect="${h.key}">Replace</button>`,
+              );
+            }
+            if (!OFFERED_TOKEN_HOSTS.has(h.key)) {
+              // No Connect button, so the row has to say what "soon" means on
+              // its own. It is not a promise of unwritten work: the host is
+              // finished and running, and what is pending is the decision to
+              // open it.
+              return row(h.mono, h.name, h.soon, soon);
+            }
+            return row(
               h.mono,
               h.name,
-              statuses[i].connected ? h.connected : h.idle,
-              statuses[i].connected ? connected : `<span class="badge">not connected</span>`,
-              `<button class="btn btn-soft btn-sm" data-connect="${h.key}">${statuses[i].connected ? "Replace" : "Connect"}</button>`,
-            ),
-          ).join("")}
+              h.idle,
+              `<span class="badge">not connected</span>`,
+              `<button class="btn btn-soft btn-sm" data-connect="${h.key}">Connect</button>`,
+            );
+          }).join("")}
         </div>
       </div>
       <div class="panel">

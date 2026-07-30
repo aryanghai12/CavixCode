@@ -19,6 +19,7 @@ import type { OrgTier } from "./store.ts";
 import { isTokenPlatform } from "./store.ts";
 import * as gh from "./github.ts";
 import { compileEnglishRule } from "@cavix/policy";
+import { clampLimit, exhaustedMessage } from "@cavix/review-session";
 import { Registry } from "@cavix/metrics";
 import { explainAttestation, verdictOf, type PurgeCheck, type RetentionAttestation } from "@cavix/zero-retention";
 import {
@@ -574,7 +575,72 @@ async function apiRoute(
             : `This workspace has used its ${limit} reviews for today (${tier} tier). Reviews resume tomorrow, or upgrade for a higher limit.`,
       });
     }
+
+    // The PER-PULL-REQUEST allowance, checked on the same call rather than an
+    // endpoint of its own, for the same reason the calibration rides on the
+    // review-config fetch: this call already happens before every review.
+    //
+    // The daily limit above protects the workspace's budget. This one protects
+    // everybody ELSE's pull requests from one of them: a single pull request
+    // pushed to thirty times used to spend a free workspace's whole day, and the
+    // customer experienced that as Cavix going down on repositories that had
+    // nothing to do with it.
+    //
+    // `pr` is absent on an older orchestrator, and the check is then skipped
+    // rather than guessed at. A version skew must not start refusing reviews.
+    const prParam = url.searchParams.get("pr");
+    if (prParam && Number.isFinite(Number(prParam))) {
+      const budget = store.prBudget(found.org, fullName, Number(prParam));
+      if (budget.exhausted) {
+        return void sendJson(res, 200, {
+          enabled: false,
+          org: found.org,
+          // Named so the orchestrator can tell this refusal apart from every
+          // other one. It is the only case where the Cavix check must be left
+          // exactly as the last review set it: running out of reviews is not a
+          // reason to turn a red check green.
+          capReached: true,
+          budget,
+          reason: exhaustedMessage(budget),
+        });
+      }
+    }
     return void sendJson(res, 200, { enabled: true, org: found.org });
+  }
+
+  // Internal: the per-pull-request finding ledger.
+  //
+  // Stored here, DECIDED by the orchestrator. Only the orchestrator has the
+  // diff, and whether a finding still stands is a question about the code, not
+  // about a database row. Same split as Stage 5's contract graph.
+  const ledgerRoute = /^\/api\/internal\/orgs\/([^/]+)\/pr-ledger$/.exec(p);
+  if (ledgerRoute) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    const org = decodeURIComponent(ledgerRoute[1]);
+    const repo = url.searchParams.get("repo") ?? "";
+    const pr = Number(url.searchParams.get("pr") ?? "");
+    if (!repo || !Number.isFinite(pr)) return void sendJson(res, 400, { error: "repo and pr required" });
+
+    if (m === "GET") {
+      return void sendJson(res, 200, {
+        ledger: store.prLedger(org, repo, pr),
+        budget: store.prBudget(org, repo, pr),
+      });
+    }
+    if (m === "PUT") {
+      // Only for repositories this workspace actually connected. Without it,
+      // anything holding the internal token could write open findings against a
+      // repository the workspace has no relationship with, and those findings
+      // would then hold up merges on it.
+      if (!store.lookupRepo(repo)) return void sendJson(res, 403, { error: `${repo} is not connected to a workspace` });
+      const body = await readJson(req);
+      const saved = store.savePrLedger(org, repo, pr, body.ledger);
+      return void sendJson(res, 200, { ledger: saved, budget: store.prBudget(org, repo, pr) });
+    }
+    return void sendJson(res, 405, { error: "method not allowed" });
   }
 
   // ----- Stage 5: the cross-repo contract graph -----
@@ -696,9 +762,32 @@ async function apiRoute(
     const org = decodeURIComponent(mm[1]);
     const auth = requireOrg(req, res, org);
     if (!auth) return;
-    if (m === "GET") return void sendJson(res, 200, store.getSettings(org));
+    if (m === "GET") {
+      // The budget rides along so the dashboard can render the per-PR control
+      // with the tier's actual answer: the number, and whether this workspace
+      // may move it. Without `raisable` the page would have to infer the tier
+      // and guess, and a guess there is a control that lies about itself.
+      return void sendJson(res, 200, { ...store.getSettings(org), prBudget: store.prBudget(org, "", 0) });
+    }
     if (m === "PUT" || m === "PATCH") {
       const body = await readJson(req);
+      // The per-PR limit is the one paid boundary that reaches this endpoint, so
+      // it is refused HERE rather than quietly ignored downstream. A free
+      // workspace that PATCHes it gets a 403 saying why; it does not get a 200
+      // and a setting that never takes effect. A switch a customer can flip that
+      // changes nothing is the failure this codebase has shipped three times.
+      if (body.reviewsPerPullRequest !== undefined) {
+        const budget = store.prBudget(org, "", 0);
+        if (!budget.raisable) {
+          return void sendJson(res, 403, {
+            error:
+              `The reviews-per-pull-request limit is fixed at ${budget.limit} on the free tier and ` +
+              "cannot be changed. Upgrade to set your own.",
+          });
+        }
+        if (body.reviewsPerPullRequest === null) delete body.reviewsPerPullRequest;
+        else body.reviewsPerPullRequest = clampLimit(Number(body.reviewsPerPullRequest));
+      }
       return void sendJson(res, 200, store.updateSettings(org, body as Record<string, never>));
     }
   }

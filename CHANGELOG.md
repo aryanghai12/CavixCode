@@ -5,6 +5,110 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### GitHub only, on the dashboard
+
+A go-to-market decision, not a technical one. The Integrations panel now offers
+**GitHub alone** and shows GitLab, Bitbucket Cloud, Bitbucket Data Center and
+Azure DevOps as `soon`, so the product opens up with one host to support rather
+than five.
+
+Nothing is switched off to achieve it, and nothing here reaches the orchestrator.
+Every client, normalizer, differ, edge route and credential path for the other
+four is intact, tested and running; `services/edge` still accepts their webhooks
+and `main.ts` still builds their clients. One `Set` in `app.js` decides who is
+invited to connect a new one, and adding a key to it is the entire change when a
+host is opened.
+
+Two things it deliberately does not do:
+
+- **A workspace that has already connected one still reads "connected"**, and
+  keeps its Replace button. Its merge requests are genuinely being reviewed, and
+  marking a live connection `soon` is the same failure as advertising a host that
+  does not work, pointing the other way. Note this reverses only the PRESENTATION
+  of the fix below it, never the honesty rule behind it.
+- **The token API is unchanged**, so a host can still be connected directly for
+  testing. The panel decides what is offered, not what is possible.
+
+### The merge verdict now has a memory, and a pull request has a review budget
+
+Reported from real use: *"I push a fix for one of the suggestions Cavix made, it
+re-reviews, and it gives me a green pass for merging even though the other
+suggestions are still there."*
+
+The diagnosis in the report was that Cavix re-reviewed only the pushed commit. It
+did not: `fetchPullDiff` has always returned the whole `base...head` diff. The
+real cause was worse. **Every review computed its verdict from its own findings
+alone.** `shouldRequestChanges` saw one run of a model, `check.finish` closed the
+check on that, and nothing anywhere remembered that a finding had ever been
+raised. A model is not a function: the same diff reviewed twice does not reliably
+produce the same findings, and a merge gate built on one run of one is a coin
+toss. Push a fix for one of three findings, have the next pass go quiet about the
+other two, and the check went green with two criticals still on the page.
+
+`packages/review-session` had held the right idea since it was written and was
+**imported by nothing outside its own tests**.
+
+#### Added
+- **`packages/review-session/src/ledger.ts`** — the per-pull-request finding
+  ledger. Every finding raised on a pull request, tracked across every review it
+  receives, with one rule that makes the rest safe: **a finding is never cleared
+  by silence.** It clears when the code moved AND the reviewer then did not raise
+  it again. If the file is byte-identical to when the finding was raised, the
+  finding cannot have been fixed, and no amount of model silence says otherwise.
+- **"The code moved" is measured, not guessed:** a digest of that file's hunks in
+  the unified diff. No extra API call, no second diff, no line-shift arithmetic,
+  and identical on all five hosts because by that point every one of them has
+  produced a unified diff.
+- **Identity excludes the line number.** A fix earlier in a file shifts every
+  finding below it, and a line-sensitive identity reported that as a resolution
+  plus a brand-new finding on every push.
+- **`packages/review-session/src/budget.ts`** — reviews per pull request. Free is
+  a fixed 10 that a maintainer **cannot** raise; that is the tier boundary, and a
+  free limit somebody can raise is not a limit. Paid defaults to 50 and the
+  maintainer owns it, from **Review settings**. The old daily allowance protected
+  the workspace's budget; this protects everybody else's pull requests from one
+  of them, because a single pull request pushed to thirty times used to spend a
+  free workspace's entire day on repositories that had nothing to do with it.
+- **Reaching the cap never changes a verdict.** The check run is not touched: not
+  created, not closed, not turned neutral. Whatever the last review concluded
+  still stands. If running out of budget could turn a red check green, exhausting
+  the quota would be a way to merge past an open finding.
+- **"Still open from earlier reviews"** on the review comment, a Scope row, and
+  the check-run title, plus **"Cleared by this push"**. The second matters as
+  much as the first: a reviewer that lists only what is still wrong looks like one
+  that did not notice the fix.
+- Storage in the control-plane, not the orchestrator. The orchestrator is a
+  restartable, horizontally scaled worker; a ledger in its memory would be lost
+  on the next deploy and invisible to its siblings, so a redeploy mid-pull-request
+  would silently clear every open finding.
+
+#### Fixed
+- **"Clean pass" while findings were open.** It is a claim about the pull
+  request, not about one run, and it is the sentence a reader acts on.
+- **`@cavixcode resolve` half-worked.** It dismissed the review and deleted the
+  inline comments and left the ledger alone, so the next push carried every one
+  of those findings straight back. It now closes them, and reports how many.
+- **A blocking check that could not say what was blocking it.** On the run where
+  every blocking finding is a carried one, "a finding at or above your blocking
+  severity was posted" sent the reader hunting through a review containing no
+  findings at all.
+- **A failed ledger read would have wiped the ledger.** A failed read hands back
+  an empty ledger, because that is the only honest answer to "what came before";
+  folding a review into that and saving it would replace a ledger holding five
+  open findings with one holding this review's, and reset the counter with it.
+  One unreachable control-plane would have cleared every open finding on the pull
+  request. Caught by its own test before it shipped; the write is now gated on
+  the read having succeeded, so an outage costs one review's memory and nothing
+  permanent.
+- **A review that cannot ask no longer claims a clean pass.** A deployment with
+  no control-plane at all still says "clean pass", because it has no cross-review
+  memory by configuration and that is as complete a statement as it can make. One
+  that HAS a ledger and could not reach it says so instead.
+- **`updateSettings` has an allowlist**, so the new per-PR limit would have
+  silently dropped on the way in. A free workspace now gets a 403 with the reason
+  rather than a 200 and a setting that never applies, which is the failure this
+  codebase has already shipped three times.
+
 ### Azure DevOps and Bitbucket Data Center: all five hosts, and a real differ
 
 The last two platforms, and the one that was never mechanical. Every other host

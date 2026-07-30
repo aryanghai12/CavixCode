@@ -32,6 +32,8 @@ import {
 } from "./commands.ts";
 import { filterDiff } from "./pathFilter.ts";
 import { NOOP_RECORDER, type Recorder } from "@cavix/metrics";
+import { reconcile, openEntries, dismissAll, type LedgerEntry } from "@cavix/review-session";
+import type { LedgerClient } from "../report/ledger.ts";
 import { makeRetentionCollector } from "../verify/retention.ts";
 import type { DeepReviewResult, DeepReviewStep } from "../pipeline/deepReview.ts";
 import type { BlastRadiusStep } from "../orggraph/blastRadius.ts";
@@ -70,6 +72,16 @@ export interface GateDecision {
    * the repo was simply never turned on, which is a different message.
    */
   reason?: string;
+  /**
+   * This pull request specifically has spent its review allowance.
+   *
+   * Flagged separately from `reason` because it is the one refusal with a rule
+   * attached: the Cavix check must be left EXACTLY as the last review set it.
+   * Running out of reviews is not a reason to turn a red check green, or a red
+   * one greener. If it were, exhausting the quota would be a way to merge past
+   * an open finding, and the limit would be a bypass rather than a limit.
+   */
+  capReached?: boolean;
 }
 
 export interface ReviewWorkflowDeps {
@@ -94,7 +106,23 @@ export interface ReviewWorkflowDeps {
   reviewer: Reviewer;
   logger?: WorkflowLogger;
   /** Execution gatekeeper: return enabled=false to skip (repo not toggled on). */
-  gate?: (fullName: string) => Promise<GateDecision>;
+  gate?: (fullName: string, pr?: number) => Promise<GateDecision>;
+  /**
+   * The per-pull-request finding ledger: what has been raised on this pull
+   * request across every review it has had, and what is still open.
+   *
+   * This is what makes a re-review a continuation rather than a fresh opinion.
+   * Without it the merge verdict is computed from one review's findings alone,
+   * so a pull request with three open findings, one fixed and pushed, went green
+   * the moment the next pass did not happen to re-report the other two. A model
+   * is not a function; the same diff reviewed twice does not reliably produce
+   * the same findings, and a verdict built on that is a coin toss.
+   *
+   * Absent, or failing, degrades to exactly the old behaviour: this review's
+   * findings decide this review's verdict. Like every other stage here it must
+   * never cost a customer their review.
+   */
+  ledger?: LedgerClient;
   /**
    * Given an org, list the model ids its key can call. Used to enrich the failure
    * comment, and to self-heal when the saved model has been retired.
@@ -202,6 +230,16 @@ export interface ReviewOutcome {
   preMerge?: PreMergeResult;
   /** Was the review posted as REQUEST_CHANGES (the owner's blocking setting)? */
   blocked: boolean;
+  /**
+   * Findings still open from EARLIER reviews that this one did not re-report.
+   *
+   * They counted towards the verdict above. Reported here so the handler's log
+   * line, and anything reading it, can tell a genuinely clean review apart from
+   * one that found nothing new on a pull request that still has open findings.
+   */
+  carriedCount: number;
+  /** Findings from earlier reviews this one cleared: the code moved. */
+  resolvedCount: number;
   /** Did this review make it onto the dashboard? False when nothing recorded it. */
   recorded: boolean;
   /**
@@ -695,6 +733,87 @@ export async function runReview(
     }
   }
 
+  // Step 3d — fold this review into what the pull request already knew.
+  //
+  // The single most important step for anyone who pushes a fix and looks at the
+  // check. Everything above computed what THIS review found. This decides what
+  // is OPEN, which is a different question and the only one a merge gate should
+  // ever be asked.
+  //
+  // A finding raised two reviews ago is cleared here only if the file it lives
+  // in has actually changed since. If the code is byte-identical and the
+  // reviewer simply went quiet about it, it is carried forward and it keeps
+  // blocking, because nothing about the defect has changed. That is the bug this
+  // exists for: pushing a fix for one of three findings used to hand out a green
+  // check with the other two still on the page.
+  //
+  // It runs AFTER verification, so a finding the sandbox disproved never enters
+  // the ledger, and BEFORE the verdict, the poster and the check run, all three
+  // of which have to agree about what is open.
+  let carried: LedgerEntry[] = [];
+  let resolvedNow: LedgerEntry[] = [];
+  // Starts TRUE, and the distinction it draws is the point of the flag.
+  //
+  // A deployment with no control-plane has no cross-review memory by
+  // configuration, and a review there is as complete a statement as that
+  // deployment can make: it should say "clean pass" exactly as it always has.
+  // What must never say that is a deployment that HAS a ledger and could not
+  // reach it, because there the review genuinely does not know what earlier
+  // reviews left open. Only that case sets this false.
+  let ledgerKnown = true;
+  let nextLedger: ReturnType<typeof reconcile>["ledger"] | undefined;
+  if (deps.ledger) {
+    try {
+      const state = await deps.ledger.fetch({ org, repo: job.repo, pr: job.pr_number });
+      ledgerKnown = state.known;
+      const folded = reconcile({
+        prior: state.ledger,
+        findings: result.findings,
+        diff,
+        headSha: ref.headSha,
+      });
+      carried = folded.carried;
+      resolvedNow = folded.resolved;
+      // Written back ONLY when the read succeeded, and this is not a detail.
+      //
+      // A failed read hands back an EMPTY ledger, because that is the only
+      // honest answer to "what came before" when nobody could be asked. Folding
+      // this review into that empty prior and saving the result would overwrite
+      // a real ledger holding five open findings with one holding this review's,
+      // and reset the review counter with it. One unreachable control-plane
+      // would silently clear every open finding on the pull request and hand out
+      // the green pass this whole feature exists to prevent.
+      //
+      // So a read failure costs this review its carried findings and NOTHING
+      // else. The stored ledger is left exactly as it was, and the next review
+      // that can reach the control-plane picks it up intact.
+      if (state.known) nextLedger = folded.ledger;
+      if (carried.length > 0) {
+        log.info("carrying open findings forward from earlier reviews", {
+          ...base,
+          carried: carried.length,
+          resolved: folded.resolved.length,
+          repeated: folded.repeated.length,
+          fresh: folded.fresh.length,
+          reviews_on_this_pr: folded.ledger.reviewsUsed,
+          // The ones nobody has acted on for several pushes. Worth seeing in a
+          // log: it is the shape of a team that has started ignoring Cavix.
+          most_reported: Math.max(0, ...folded.repeated.map((e) => e.timesReported)),
+        });
+      }
+    } catch (err) {
+      // Fails soft like every other stage, and the direction matters: no ledger
+      // means this review's own findings decide its verdict, which is what every
+      // review did before this existed. It never means "green".
+      ledgerKnown = false;
+      metrics.stageFailed("pr_ledger");
+      log.error("could not reconcile the pull request ledger; this review stands alone", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
   // The host as well as the coordinates. Without it every permalink in the
   // review was built against a hardcoded github.com, so a GitLab or Bitbucket
   // reader clicking a finding's line number left for a repository that does not
@@ -738,7 +857,15 @@ export async function runReview(
   // nothing a bot can hold the merge button with), the review must not be
   // dressed up as one. `unavailable` carries that to the poster so the comment
   // says it out loud instead of the owner believing a gate is in place.
-  const wantsBlock = shouldRequestChanges(config, preMerge, result.findings.map((f) => f.severity));
+  //
+  // The severities are THIS review's plus everything still open from earlier
+  // ones. That union is the whole point: a finding raised three pushes ago, in
+  // a file nobody has touched since, holds the merge exactly as firmly as one
+  // raised a minute ago. Passing only `result.findings` here is the bug.
+  const wantsBlock = shouldRequestChanges(config, preMerge, [
+    ...result.findings.map((f) => f.severity),
+    ...carried.map((e) => toSeverity(e.severity)),
+  ]);
   const requestChanges = wantsBlock && deps.github.capabilities.blockingReview;
   const blockUnavailable = wantsBlock && !deps.github.capabilities.blockingReview;
   if (blockUnavailable) {
@@ -760,6 +887,22 @@ export async function runReview(
     // What the host could not give us. Never dropped quietly: a review that
     // skipped two files without saying so claims coverage it does not have.
     ...(diffLimitations.length > 0 ? { diffLimitations } : {}),
+    // Still open from earlier reviews, and what this one cleared. Both are
+    // rendered, and the second matters as much as the first: a reader who
+    // pushed a fix needs to see it land, or the only visible signal is the
+    // findings that did NOT clear and Cavix reads as if it never noticed.
+    ...(carried.length > 0 ? { carried } : {}),
+    ...(resolvedNow.length > 0 ? { resolved: resolvedNow } : {}),
+    // How many of THIS review's findings clear the owner's blocking bar. The
+    // poster cannot work it out: the bar is `failOn` and only this function
+    // reads the config. It uses the number to say where a block came from.
+    blockingFindings: countAtOrAbove(config, result.findings.map((f) => f.severity)),
+    // Did the ledger actually answer? A review that carried nothing because
+    // there was nothing to carry is not the same as one that carried nothing
+    // because the control-plane was down, and the second must never render as
+    // "nothing open from earlier reviews". The Scope module states measurements,
+    // and an unanswered question is not one.
+    ledgerKnown,
     // Only used when the description could not be written (a fork PR, a revoked
     // permission), in which case the whole narrative folds into the comment and
     // the diagram goes with it rather than being the one piece that vanishes.
@@ -817,6 +960,18 @@ export async function runReview(
     output.summary,
     posted.htmlUrl,
   );
+
+  // Step 5b2 — persist the ledger, now the review is actually on the page.
+  //
+  // Deliberately after the post and never before it. `reviewsUsed` is what the
+  // per-pull-request budget counts, and incrementing it for a review that then
+  // failed to post would charge somebody for a review they never received.
+  // Best-effort in the other direction too: if this does not land, the next
+  // review re-raises what this one raised, which is noise rather than a wrong
+  // verdict.
+  if (deps.ledger && nextLedger) {
+    await deps.ledger.save({ org, repo: job.repo, pr: job.pr_number }, nextLedger);
+  }
 
   // Step 5c — refresh this repository's slice of the org contract graph.
   //
@@ -927,11 +1082,35 @@ export async function runReview(
     descriptionUpdated,
     preMerge,
     blocked: requestChanges,
+    carriedCount: carried.length,
+    resolvedCount: resolvedNow.length,
     recorded,
     checkRunId: check.runId,
     costUsd: result.costUsd + verifyCost,
     model: result.model,
   };
+}
+
+/**
+ * Close every open finding on this pull request, for "@cavixcode resolve".
+ *
+ * The entries are marked dismissed rather than deleted, so the pull request
+ * keeps its history and `reconcile` never re-opens them. Returns how many were
+ * closed, so the reply states a number that was measured.
+ */
+async function clearLedger(
+  deps: ReviewWorkflowDeps,
+  ref: { org: string; repo: string; pr: number },
+): Promise<number> {
+  if (!deps.ledger) return 0;
+  const state = await deps.ledger.fetch(ref);
+  const open = openEntries(state.ledger);
+  if (open.length === 0) return 0;
+  const saved = await deps.ledger.save(ref, dismissAll(state.ledger));
+  // Reported as 0 when the write did not land. Telling somebody eight findings
+  // were closed when the store still has them open is worse than saying nothing:
+  // they will see all eight again on the next push and stop believing the reply.
+  return saved ? open.length : 0;
 }
 
 /**
@@ -984,6 +1163,8 @@ function emptyOutcome(checkRunId: number): ReviewOutcome {
     suppressedCount: 0,
     descriptionUpdated: false,
     blocked: false,
+    carriedCount: 0,
+    resolvedCount: 0,
     recorded: false,
     checkRunId,
     costUsd: 0,
@@ -1109,6 +1290,19 @@ async function clearPrevious(deps: ReviewWorkflowDeps, ref: PullRef, log: Workfl
  * Note that by this point the findings have already been through the sandbox —
  * so nothing that failed to reproduce can block anyone's merge.
  */
+/**
+ * A severity the gate knows how to rank, or the quietest one.
+ *
+ * Ledger entries carry their severity as a plain string, because they are
+ * restored from a stored payload rather than produced by this process. An
+ * unrecognised value must land on "info" and NOT on undefined: `SEVERITY_RANK`
+ * of undefined is NaN, every comparison against it is false, and a carried
+ * critical finding with a corrupted severity would silently stop blocking.
+ */
+function toSeverity(s: string): Severity {
+  return s === "critical" || s === "high" || s === "medium" || s === "low" || s === "info" ? s : "info";
+}
+
 export function shouldRequestChanges(
   config: OrgReviewConfig,
   preMerge: PreMergeResult | undefined,
@@ -1116,13 +1310,25 @@ export function shouldRequestChanges(
 ): boolean {
   if (!config.requestChangesOnFail) return false;
   if (preMerge && preMerge.failed > 0) return true;
+  return countAtOrAbove(config, severities) > 0;
+}
+
+/**
+ * How many of these severities reach the owner's blocking bar.
+ *
+ * Split out of `shouldRequestChanges` so the poster can be told where a block
+ * came from without re-deriving `failOn` in a second place. Returns 0 when the
+ * org nominated nothing recognisable, which is the same "nothing blocks"
+ * answer the gate has always given.
+ */
+export function countAtOrAbove(config: OrgReviewConfig, severities: Severity[]): number {
   const bar = Math.min(
     ...config.failOn
       .map((s) => SEVERITY_RANK[s as Severity])
       .filter((n): n is number => typeof n === "number"),
   );
-  if (!Number.isFinite(bar)) return false;
-  return severities.some((s) => SEVERITY_RANK[s] >= bar);
+  if (!Number.isFinite(bar)) return 0;
+  return severities.filter((s) => SEVERITY_RANK[s] >= bar).length;
 }
 
 /**
@@ -1208,7 +1414,12 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
 
     let org: string | undefined;
     if (deps.gate) {
-      const decision = await deps.gate(job.repo);
+      // The pull request number goes with it, so one call answers both the
+      // workspace's daily allowance and THIS pull request's own. A pull request
+      // pushed to thirty times used to spend a free workspace's entire day, and
+      // the customer experienced that as Cavix going down on repositories that
+      // had nothing to do with it.
+      const decision = await deps.gate(job.repo, job.pr_number);
       org = decision.org;
       if (!decision.enabled) {
         metrics.review("skipped");
@@ -1216,8 +1427,29 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
           repo: job.repo,
           pr: job.pr_number,
           reason: decision.reason ?? "repository not enabled in the dashboard",
+          ...(decision.capReached ? { cap_reached: true } : {}),
         });
         await react(deps, job, ref, "+1");
+        // The pull request has spent its reviews.
+        //
+        // Note what does NOT happen here: the check run is not touched. It is
+        // not created, not closed, not turned neutral. Whatever the last review
+        // concluded still stands, which is the only safe behaviour — if running
+        // out of budget could turn a red check green, exhausting the quota would
+        // be a way to merge past an open finding and the limit would be a
+        // bypass rather than a limit.
+        //
+        // Said on every trigger, not only a typed command: a push that silently
+        // does nothing is indistinguishable from Cavix being broken.
+        if (decision.capReached) {
+          await say(
+            deps,
+            job,
+            ref,
+            `**Cavix has stopped reviewing this pull request.**\n\n${decision.reason ?? ""}`.trim(),
+          );
+          return;
+        }
         if (isCommandJob(job)) {
           // Two different situations, two different messages. Telling someone
           // whose workspace is over quota to "turn the repo on" sends them to a
@@ -1280,6 +1512,12 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         say: (body) => say(deps, job, ref, body),
         logger: log,
         ...(deps.answer ? { ask: (q: string) => deps.answer!(job, ref, org ?? job.org, q) } : {}),
+        ...(deps.ledger
+          ? {
+              clearLedger: () =>
+                clearLedger(deps, { org: org ?? job.org, repo: job.repo, pr: job.pr_number }),
+            }
+          : {}),
       });
     } catch (err) {
       log.error("command failed", { repo: job.repo, pr: job.pr_number, command: job.command, err: (err as Error).message });
@@ -1366,6 +1604,12 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         repo: job.repo,
         pr: job.pr_number,
         findings: outcome.findingCount,
+        // Both reported, because "0 findings" on its own is the log line that
+        // used to hide the bug: a review that found nothing new on a pull
+        // request with two open findings looked identical to a clean one.
+        carried: outcome.carriedCount,
+        resolved: outcome.resolvedCount,
+        blocked: outcome.blocked,
         verified: outcome.verifiedCount,
         suppressed: outcome.suppressedCount,
         description_updated: outcome.descriptionUpdated,

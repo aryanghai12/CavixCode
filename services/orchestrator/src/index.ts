@@ -51,6 +51,16 @@ export {
 } from "./report/recorder.ts";
 
 export {
+  makeLedgerClient,
+  type LedgerClient,
+  type LedgerClientOptions,
+  type LedgerFetcher,
+  type LedgerRef,
+  type LedgerSaver,
+  type LedgerState,
+} from "./report/ledger.ts";
+
+export {
   makeVerifyStep,
   type VerifyStep,
   type VerifyStepOptions,

@@ -13,6 +13,7 @@
     "@cavix/gateway": "*",
     "@cavix/learning": "*",
     "@cavix/metrics": "*",
+    "@cavix/review-session": "*",
     "@cavix/zero-retention": "*",
     "@cavix/policy": "*",
     "pg": "^8.13.1"

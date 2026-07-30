@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Finding, Severity } from "@cavix/core";
 import { computeOrgRollup, InMemoryAnalyticsStore, type ReviewEvent } from "@cavix/analytics";
 import { calibrate, type DecisionRecord, type OrgCalibration } from "@cavix/learning";
+import { coerceLedger, reviewBudget, type Budget, type PrLedger } from "@cavix/review-session";
 import type { RetentionAttestation } from "@cavix/zero-retention";
 import { hashPassword, verifyPassword, encryptSecret, decryptSecret, fingerprint } from "./auth.ts";
 
@@ -68,6 +69,18 @@ export interface OrgSettings {
   pathFilters: { include: string[]; exclude: string[] };
   /** Optional pre-merge gate (OFF by default). Owner writes plain-English rules. */
   preMergeChecks: { enabled: boolean; rules: string[] };
+  /**
+   * How many reviews one pull request may receive before Cavix stops.
+   *
+   * A PAID setting, and the store enforces that rather than trusting the caller:
+   * on the free tier the limit is a fixed property of the tier, and one a
+   * maintainer could raise would not be a limit. `effectiveReviewsPerPr` ignores
+   * this field entirely for a free workspace, so a value left behind by a
+   * downgrade cannot keep working.
+   *
+   * Absent means the tier default.
+   */
+  reviewsPerPullRequest?: number;
   /** Which sections the posted PR review comment includes (structure control). */
   reviewSections: {
     summary: boolean;
@@ -388,6 +401,16 @@ export interface Store {
   listReviews(org?: string, limit?: number): ReviewRecord[];
   getReview(id: string): ReviewRecord | undefined;
   reviewCountSince(org: string, sinceMs: number): number;
+  /**
+   * What Cavix remembers about one pull request: every finding raised on it and
+   * how many reviews it has spent. Empty for a pull request nobody has reviewed,
+   * which is an ordinary state and not an error.
+   */
+  prLedger(org: string, repo: string, pr: number): PrLedger;
+  /** Replace it. The ORCHESTRATOR decides what is open; this only stores it. */
+  savePrLedger(org: string, repo: string, pr: number, ledger: unknown): PrLedger;
+  /** This pull request's review allowance: used, limit, and whether it is raisable. */
+  prBudget(org: string, repo: string, pr: number): Budget;
   /** Record Cavix being switched off (or back on) somewhere. See MuteEvent. */
   recordMute(e: Omit<MuteEvent, "at">): void;
   listMutes(org: string, sinceMs?: number): MuteEvent[];
@@ -462,6 +485,8 @@ export interface Store {
   // --- founder / platform admin ---
   /** The effective reviews/day for an org (suspended→0, override, trial→paid, else tier). */
   effectiveReviewsPerDay(org: string): number;
+  /** The effective reviews-per-PULL-REQUEST for an org. Fixed on free. */
+  effectiveReviewsPerPr(org: string): number;
   setTier(org: string, tier: OrgTier): Org;
   startTrial(org: string, days: number): Org;
   endTrial(org: string): Org;
@@ -514,6 +539,16 @@ export interface StoreSnapshot {
   orgGraphs?: Array<[org: string, graph: StoredOrgGraph]>;
   /** Stage 6’s CI run history, per workspace. */
   ciRuns?: Array<[org: string, history: StoredCiHistory]>;
+  /**
+   * The per-pull-request finding ledgers, keyed "org repo pr".
+   *
+   * Optional so a snapshot written before this existed still restores. A
+   * deployment that restores one starts every open pull request from an empty
+   * ledger, which costs one review to rebuild and nothing else: the first review
+   * after the upgrade raises the open findings again and they are tracked from
+   * there.
+   */
+  prLedgers?: Array<[key: string, ledger: PrLedger]>;
 }
 
 /**
@@ -545,6 +580,15 @@ export interface StoredCiHistory {
 /** CI runs kept per repository. Roughly a month on a busy pipeline. */
 const MAX_CI_RUNS_PER_REPO = 400;
 
+/**
+ * Pull-request ledgers kept, across every workspace.
+ *
+ * Generous, because evicting one costs correctness on a live pull request: it
+ * forgets the open findings on it. Bounded all the same, because every merged
+ * pull request would otherwise leave one in the snapshot row forever.
+ */
+const MAX_PR_LEDGERS = 20_000;
+
 export class InMemoryStore implements Store {
   private orgs = new Map<string, Org>();
   private repos = new Map<string, Repo>();
@@ -554,6 +598,8 @@ export class InMemoryStore implements Store {
   private users = new Map<string, User>();      // by id
   private usersByEmail = new Map<string, User>();
   private settings = new Map<string, OrgSettings>();
+  /** "org repo pr" → what Cavix remembers about that pull request. See prLedger. */
+  private prLedgers = new Map<string, PrLedger>();
   private apiKeys = new Map<string, string>();  // org → encrypted key blob
   /** org → encrypted GitLab access token. See setGitLabToken. */
   private gitlabTokens = new Map<string, string>();
@@ -640,6 +686,89 @@ export class InMemoryStore implements Store {
   reviewCountSince(org: string, sinceMs: number): number {
     const cutoff = Date.now() - sinceMs;
     return this.reviews.filter((r) => r.org === org && Date.parse(r.createdAt) >= cutoff).length;
+  }
+
+  // ---------- the per-pull-request ledger ----------
+  //
+  // The control-plane STORES this and the orchestrator DECIDES it, the same
+  // split as Stage 5's contract graph and for the same reason: only the
+  // orchestrator holds the diff, and reconciling a finding against the code it
+  // pointed at is not something this service can do or should try to.
+  //
+  // It lives here rather than in the orchestrator's memory because the
+  // orchestrator is a restartable, horizontally scaled worker. A ledger held
+  // there would be lost on the next deploy and invisible to its siblings, which
+  // means a redeploy mid-pull-request would silently clear every open finding —
+  // the exact failure this whole feature exists to prevent.
+
+  /**
+   * The map key, and the separator is deliberate.
+   *
+   * A workspace name is free text a customer typed, spaces and slashes
+   * included, so joining on any character a name may legally contain lets two
+   * different pull requests collide on one key: workspace "acme eng" with repo
+   * "a/b" and workspace "acme" with repo "eng a/b" produce the same string, and
+   * one customer would then read the other's open findings. The ASCII unit
+   * separator cannot appear in an org name, a repository name or a number.
+   */
+  private prKey(org: string, repo: string, pr: number): string {
+    return [org, repo, String(pr)].join("\u001f");
+  }
+
+  prLedger(org: string, repo: string, pr: number): PrLedger {
+    return this.prLedgers.get(this.prKey(org, repo, pr)) ?? { entries: [], reviewsUsed: 0 };
+  }
+
+  savePrLedger(org: string, repo: string, pr: number, ledger: unknown): PrLedger {
+    // Narrowed on the way IN, not on the way out. This is the boundary an
+    // untrusted payload crosses, and a malformed entry stored now is one that
+    // every later review reads back and trusts.
+    const clean = coerceLedger(ledger);
+    this.prLedgers.set(this.prKey(org, repo, pr), clean);
+    this.trimLedgers();
+    return clean;
+  }
+
+  prBudget(org: string, repo: string, pr: number): Budget {
+    const o = this.orgs.get(org);
+    const onTrial = !!o?.trialEndsAt && Date.parse(o.trialEndsAt) > Date.now();
+    // A workspace nobody has heard of is treated as paid, matching
+    // `effectiveReviewsPerDay`: a deployment running without a control-plane
+    // record must not have its reviews silently rationed.
+    const tier = onTrial ? "paid" : (o?.tier ?? "paid");
+    const settings = this.settings.get(org);
+    return reviewBudget({
+      tier,
+      used: this.prLedger(org, repo, pr).reviewsUsed,
+      ...(typeof settings?.reviewsPerPullRequest === "number"
+        ? { override: settings.reviewsPerPullRequest }
+        : {}),
+      ...(process.env.CAVIX_FREE_REVIEWS_PER_PR
+        ? { freeDefault: Number(process.env.CAVIX_FREE_REVIEWS_PER_PR) }
+        : {}),
+      ...(process.env.CAVIX_PAID_REVIEWS_PER_PR
+        ? { paidDefault: Number(process.env.CAVIX_PAID_REVIEWS_PER_PR) }
+        : {}),
+    });
+  }
+
+  /**
+   * Hold the ledger map to a bounded size.
+   *
+   * Every merged pull request leaves one behind forever otherwise, and the whole
+   * map rides in a single snapshot row. Oldest-updated out first: a pull request
+   * nobody has touched in months is either merged or abandoned, and either way
+   * its ledger is history. If it comes back to life it starts from empty, which
+   * costs a re-review and no correctness.
+   */
+  private trimLedgers(): void {
+    if (this.prLedgers.size <= MAX_PR_LEDGERS) return;
+    const byAge = [...this.prLedgers.entries()].sort((a, b) =>
+      (a[1].updatedAt ?? "").localeCompare(b[1].updatedAt ?? ""),
+    );
+    for (const [key] of byAge.slice(0, this.prLedgers.size - MAX_PR_LEDGERS)) {
+      this.prLedgers.delete(key);
+    }
   }
 
   saveReview(input: SaveReviewInput): ReviewRecord {
@@ -948,7 +1077,11 @@ export class InMemoryStore implements Store {
     // Only allow known, safe fields to be patched (never the fingerprint directly).
     // `airgapped` is deliberately NOT patchable: see getSettings. A dashboard
     // that can set it can lie about it.
-    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "verifyFindings", "summaryInDescription", "requestChangesOnFail", "pathFilters", "preMergeChecks", "reviewSections"];
+    // `reviewsPerPullRequest` is patchable HERE and refused at the API for a
+    // free workspace. The tier check belongs at the edge, not in this list: the
+    // store is also how a founder tool or a migration sets it, and a field that
+    // silently drops on the way in is indistinguishable from one that saved.
+    const allowed: (keyof OrgSettings)[] = ["llmProvider", "llmModel", "autoReview", "reviewDraftPRs", "tone", "failOn", "policyEnabled", "verifyFindings", "summaryInDescription", "requestChangesOnFail", "pathFilters", "preMergeChecks", "reviewSections", "reviewsPerPullRequest"];
     for (const k of allowed) {
       if (patch[k] !== undefined) (s as unknown as Record<string, unknown>)[k] = patch[k];
     }
@@ -1214,6 +1347,19 @@ export class InMemoryStore implements Store {
       ? Number(process.env.CAVIX_FREE_REVIEWS_PER_DAY ?? "25")
       : Number(process.env.CAVIX_PAID_REVIEWS_PER_DAY ?? "1000000");
   }
+  /**
+   * The per-pull-request limit for this workspace.
+   *
+   * Free is a flat number with no override consulted at all, which is the tier
+   * boundary the product sells. The dashboard refuses to save the field for a
+   * free workspace, and this refuses to read it, so neither a stale value from
+   * before a downgrade nor a request that got past the API can raise it.
+   */
+  effectiveReviewsPerPr(org: string): number {
+    // Any repo/pr: the limit does not depend on which pull request it is, only
+    // on the tier and the setting. The ledger is only consulted for `used`.
+    return this.prBudget(org, "", 0).limit;
+  }
   private mustOrg(org: string): Org {
     const o = this.orgs.get(org);
     if (!o) throw new Error(`no such org: ${org}`);
@@ -1382,6 +1528,7 @@ export class InMemoryStore implements Store {
       mutes: this.mutes,
       orgGraphs: [...this.orgGraphs.entries()],
       ciRuns: [...this.ciRuns.entries()],
+      prLedgers: [...this.prLedgers.entries()],
     };
   }
 
@@ -1409,6 +1556,11 @@ export class InMemoryStore implements Store {
     this.mutes = s.mutes ?? [];
     this.orgGraphs = new Map(s.orgGraphs ?? []);
     this.ciRuns = new Map(s.ciRuns ?? []);
+    // Re-narrowed on the way back in. What is in the row was narrowed when it
+    // was written, but a row can also have been written by an older build, and
+    // an entry with a missing state would read as open-with-no-digest and carry
+    // a finding forever on a pull request that fixed it months ago.
+    this.prLedgers = new Map((s.prLedgers ?? []).map(([k, v]) => [k, coerceLedger(v)]));
     // Derived from the decisions that were just replaced, so anything cached
     // from the previous state now describes a workspace that is no longer here.
     this.calibrations.clear();

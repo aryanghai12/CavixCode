@@ -21,6 +21,7 @@
     "@cavix/pipeline": "*",
     "@cavix/policy": "*",
     "@cavix/repoconfig": "*",
+    "@cavix/review-session": "*",
     "@cavix/sandbox": "*",
     "@cavix/telemetry": "*",
     "@cavix/zero-retention": "*",

@@ -43,6 +43,15 @@ export interface FakeGitHubOptions {
    */
   noChecks?: boolean;
   /**
+   * Fail `postReview`, the way GitHub does on a 422 or a revoked permission.
+   *
+   * Exists so a test can prove what happens to the steps AFTER posting when the
+   * post itself does not land. The per-pull-request ledger is the one that
+   * matters: its review counter is what the budget spends, and incrementing it
+   * for a review nobody received would charge somebody for nothing.
+   */
+  failPostReview?: boolean;
+  /**
    * Pretend to be a platform other than GitHub, with its own capabilities.
    *
    * The workflow must behave the same everywhere except where a capability is
@@ -85,6 +94,8 @@ export class FakeGitHubClient implements ReviewPlatform {
   /** Inline review comments deleted, in order. */
   readonly deletedComments: number[] = [];
   private readonly noChecks: boolean;
+  /** Public so a test can switch it on partway through a sequence. */
+  failPostReview: boolean;
   private readonly draft: boolean;
   private readonly workflowRuns: WorkflowRun[];
   private readonly commentIds = new Map<number, number>();
@@ -99,6 +110,7 @@ export class FakeGitHubClient implements ReviewPlatform {
     this.pullBody = opts.body ?? "";
     this.files = { ...(opts.files ?? {}) };
     this.noChecks = opts.noChecks === true;
+    this.failPostReview = opts.failPostReview === true;
     this.draft = opts.draft === true;
     this.workflowRuns = opts.workflowRuns ?? [];
     this.platform = opts.platform ?? "github";
@@ -196,6 +208,7 @@ export class FakeGitHubClient implements ReviewPlatform {
   }
 
   async postReview(ref: PullRef, review: ReviewSubmission): Promise<PostedReview> {
+    if (this.failPostReview) throw new Error("github: post review HTTP 422 Unprocessable Entity");
     this.seq++;
     const id = 1000 + this.seq;
     this.submissions.push({ ref, review });

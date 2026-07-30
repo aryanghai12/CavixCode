@@ -23,7 +23,7 @@ export interface RepoGateOptions {
   sleepImpl?: (ms: number) => Promise<void>;
 }
 
-export type RepoGate = (fullName: string) => Promise<GateDecision>;
+export type RepoGate = (fullName: string, pr?: number) => Promise<GateDecision>;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -35,16 +35,26 @@ export function makeRepoGate(opts: RepoGateOptions): RepoGate {
   const doFetch = opts.fetchImpl ?? fetch;
   const doSleep = opts.sleepImpl ?? sleep;
 
-  return async (fullName: string): Promise<GateDecision> => {
+  return async (fullName: string, pr?: number): Promise<GateDecision> => {
+    // The pull request number is what lets the control-plane answer the
+    // PER-PULL-REQUEST allowance as well as the workspace's daily one, on the
+    // same call every review already makes. Omitted (an older caller) means the
+    // per-PR check is skipped there rather than guessed at.
+    const prQuery = typeof pr === "number" && Number.isFinite(pr) ? `&pr=${pr}` : "";
     let lastProblem = "";
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         const res = await doFetch(
-          `${base}/api/internal/repos/enabled?fullName=${encodeURIComponent(fullName)}`,
+          `${base}/api/internal/repos/enabled?fullName=${encodeURIComponent(fullName)}${prQuery}`,
           { headers: { authorization: `Bearer ${opts.token}` } },
         );
         if (res.ok) {
-          const data = (await res.json()) as { enabled?: boolean; org?: string; reason?: string };
+          const data = (await res.json()) as {
+            enabled?: boolean;
+            org?: string;
+            reason?: string;
+            capReached?: boolean;
+          };
           return {
             enabled: data.enabled === true,
             org: data.org,
@@ -53,6 +63,10 @@ export function makeRepoGate(opts: RepoGateOptions): RepoGate {
             // verbatim, so a human learns the real reason instead of being sent
             // to a toggle that is already on.
             ...(data.reason ? { reason: data.reason } : {}),
+            // This pull request specifically has spent its reviews. Flagged
+            // rather than folded into `reason`, because it is the one refusal
+            // that must leave the Cavix check exactly as the last review set it.
+            ...(data.capReached === true ? { capReached: true } : {}),
           };
         }
         lastProblem = `HTTP ${res.status}`;

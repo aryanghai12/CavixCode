@@ -1383,8 +1383,24 @@ control‑plane:
 ```powershell
 $env:CAVIX_FREE_REVIEWS_PER_DAY = "25"        # every free org: 25 reviews/day
 $env:CAVIX_PAID_REVIEWS_PER_DAY = "1000000"   # paid = effectively unlimited
+$env:CAVIX_FREE_REVIEWS_PER_PR  = "10"        # every free org: 10 reviews per PULL REQUEST
+$env:CAVIX_PAID_REVIEWS_PER_PR  = "50"        # paid default; the maintainer can change theirs
 ```
 Change these and restart to reprice every org on that tier at once.
+
+**Two different limits, protecting two different things.** The daily one protects
+the workspace's budget. The per‑pull‑request one protects everybody *else's* pull
+requests from one of them: a single PR pushed to thirty times is thirty reviews,
+and on a free workspace that one PR spends the whole day by lunchtime — which the
+customer experiences as Cavix going down on repositories that had nothing to do
+with it.
+
+The per‑PR limit is **fixed on free and cannot be raised**, by the workspace or by
+its owner; that is the tier boundary. On paid it is the maintainer's, under
+**Review settings → Reviews per pull request**. When a PR runs out, Cavix stops
+reviewing it and says so, and **the check keeps whatever the last review
+concluded** — running out of budget never turns a red check green, or the limit
+would be a way to merge past an open finding.
 
 **B) A per‑org override (for one specific customer)** — use **Set limit** in the Admin
 console, or the API. This beats the tier default. Great for "give this one pilot 200/day."
@@ -1464,6 +1480,8 @@ on the services (no code changes). The founder‑relevant ones:
 | Who is a platform admin | `CAVIX_ADMIN_EMAILS` | Comma‑separated core‑team emails |
 | Free‑tier review quota | `CAVIX_FREE_REVIEWS_PER_DAY` | Default reviews/day for free orgs |
 | Paid‑tier review quota | `CAVIX_PAID_REVIEWS_PER_DAY` | Default reviews/day for paid orgs |
+| Free‑tier per‑PR quota | `CAVIX_FREE_REVIEWS_PER_PR` | Reviews one pull request gets on free. Not raisable by the workspace |
+| Paid‑tier per‑PR quota | `CAVIX_PAID_REVIEWS_PER_PR` | Default reviews per pull request on paid. The maintainer can change theirs |
 | Login cookie security | `CAVIX_SESSION_SECRET` | Must be a long random string in prod |
 | BYOK key encryption | `CAVIX_SECRET_KEY` | Must be a long random string in prod |
 | Which AI + model (default) | `CAVIX_LLM_PROVIDER` / `CAVIX_LLM_MODEL` | Platform default; each org overrides via BYOK |
@@ -1558,6 +1576,8 @@ Key slots at a glance:
 | `CAVIX_CONTROL_PLANE_PORT` | control‑plane | Dashboard web port (default 8088) |
 | `CAVIX_FREE_REVIEWS_PER_DAY` | control‑plane | Daily review limit for the free tier |
 | `CAVIX_PAID_REVIEWS_PER_DAY` | control‑plane | Daily review limit for the paid tier |
+| `CAVIX_FREE_REVIEWS_PER_PR` | control‑plane | Reviews per pull request on free (default 10). Fixed: a maintainer cannot raise it |
+| `CAVIX_PAID_REVIEWS_PER_PR` | control‑plane | Default reviews per pull request on paid (default 50). Maintainer‑changeable under Review settings |
 | `CAVIX_ADMIN_EMAILS` | control‑plane | Comma‑separated founder/core‑team emails who get the Admin console (see §8E) |
 | `CAVIX_SESSION_SECRET` | control‑plane | Signs dashboard login cookies — **set in production** |
 | `CAVIX_SECRET_KEY` | control‑plane | Encrypts stored BYOK keys + OAuth tokens at rest — **set in production** |
