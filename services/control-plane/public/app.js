@@ -1291,7 +1291,7 @@
           </div></div>
         <div id="adminRows"></div>
       </div>
-      <div class="panel"><div class="panel-body"><div class="sr-desc">Only emails in <code>CAVIX_ADMIN_EMAILS</code> reach this console. Tier, trial, limit and suspend take effect on that org's very next review. MRR is an <b>estimate</b> (seats × <code>CAVIX_PRICE_PER_SEAT</code>), not billed revenue, connect Stripe for real numbers. See GUIDE.md §8E.</div></div></div>`;
+      <div class="panel"><div class="panel-body"><div class="sr-desc">Only accounts named in <code>CAVIX_ADMIN_EMAILS</code> reach this console, as an email or a GitHub login written <code>@login</code>. You are here as <code>${esc(me.email)}</code>${me.githubLogin ? ` / <code>@${esc(me.githubLogin)}</code>` : ""}. Tier, trial, limit and suspend take effect on that org's very next review. MRR is an <b>estimate</b> (seats × <code>CAVIX_PRICE_PER_SEAT</code>), not billed revenue, connect Stripe for real numbers. See GUIDE.md §8E.</div></div></div>`;
 
     $("adminSort").value = adminSort;
     $("adminSort").addEventListener("change", (e) => { adminSort = e.target.value; paintAdminRows($("adminSearch").value); });

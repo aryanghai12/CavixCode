@@ -5,6 +5,42 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Founder access: identity that does not silently drift, and a default that fails closed
+
+Reported: *"I set my email in `CAVIX_ADMIN_EMAILS` on Render, it is the same email
+I log in with via GitHub, and the Admin console still does not appear."*
+
+It was not the same email. GitHub returns no address for an account with **"Keep
+my email addresses private"** turned on, or for an OAuth authorization granted
+before the `user:email` scope existed, and the callback fell back to
+`<login>@users.noreply.github.com` **without a word anywhere**. That is the
+address the admin check matches, so the variable was comparing against something
+the founder had no way to know about.
+
+#### Fixed
+- **`CAVIX_ADMIN_EMAILS` now accepts a GitHub login**, written `@octocat`, next to
+  or instead of emails. A login is stable; an email is not, and an identifier
+  that can silently change is the wrong key for the permission that controls
+  every organization on the platform.
+- **The guard resolves the ACCOUNT, not the session cookie.** It read `s.email`
+  from the signed cookie, so a login in the variable could never have matched
+  even once logins were understood. It now looks the user up, which also means
+  granting or revoking admin takes effect on the next **request** rather than the
+  next sign-in.
+- **The noreply fallback is logged**, naming both the address that was stored and
+  the `@login` to use instead. The fallback itself is fine; being silent about it
+  is what cost an afternoon.
+- **Unset now means NOBODY in production.** It used to mean `demo@cavix.dev`
+  everywhere — a default admin address published in this repository, on a
+  deployment that starts with an empty store and open sign-up. Anyone who
+  registered it owned every org on the platform. Development is unchanged, so the
+  console still works out of the box on a local box with no database; `CAVIX_DEMO=true`
+  restores the old behaviour deliberately. Forgetting the variable now costs a
+  minute, and the failure is in the recoverable direction.
+- The Admin console footer now prints **the email and login you are actually
+  signed in as**, so the next person to hit this can compare it with the variable
+  without going near an API.
+
 ### GitHub only, on the dashboard
 
 A go-to-market decision, not a technical one. The Integrations panel now offers

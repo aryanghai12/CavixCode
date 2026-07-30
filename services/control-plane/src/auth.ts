@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual, createCipheriv, createDecipheriv, createHash } from "node:crypto";
 import type http from "node:http";
+import { demoEnabled } from "./github.ts";
 
 // Dependency-free auth primitives for the control plane. Everything here uses only
 // node:crypto so the site runs in air-gapped / minimal images with no extra packages.
@@ -100,16 +101,50 @@ export function sessionFromRequest(req: http.IncomingMessage): SessionPayload | 
 }
 
 /**
- * Whether an email is a platform admin (founder / core team). Controlled by the
- * CAVIX_ADMIN_EMAILS env var (comma-separated). If unset, defaults to the seeded
- * demo owner so the admin console is visible out of the box; in production, SET this
- * to your team's emails — anyone listed can manage every org's tier, trial, and limits.
+ * Whether this person is a platform admin (founder / core team). Anyone who is
+ * can manage every org on the deployment: tier, trial, review limits, suspend.
+ *
+ * Controlled by `CAVIX_ADMIN_EMAILS`, comma-separated. Two kinds of entry:
+ *
+ *   founder@you.com     an email, matched against the account's email
+ *   @octocat            a GitHub login, matched against the account's login
+ *
+ * The second exists because an email is NOT a stable identifier for a GitHub
+ * sign-in. A user with "Keep my email addresses private" turned on, or an OAuth
+ * authorization granted before the `user:email` scope was added, is stored under
+ * `<login>@users.noreply.github.com` rather than the address they think of as
+ * theirs (see the callback in server.ts). Listing the email then silently does
+ * nothing, and the symptom is an admin console that never appears with nothing
+ * anywhere explaining why. A login cannot drift like that.
+ *
+ * ### Unset
+ *
+ * In DEVELOPMENT this falls back to the seeded demo owner, so the console is
+ * there out of the box with no setup.
+ *
+ * In PRODUCTION, unset means NOBODY. It used to mean `demo@cavix.dev` there too,
+ * which was a hole rather than a convenience: production starts with an empty
+ * store and open sign-up, so anyone who registered that address — a published
+ * default, in this file, in a public repository — got founder control over every
+ * organisation on the platform. A deployment that forgets the variable now has
+ * no admin console until it is set, which is recoverable in a minute; the other
+ * way round is not recoverable at all.
  */
-export function isPlatformAdmin(email: string | undefined): boolean {
-  if (!email) return false;
-  const raw = process.env.CAVIX_ADMIN_EMAILS ?? "demo@cavix.dev";
-  const admins = raw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-  return admins.includes(email.trim().toLowerCase());
+export function isPlatformAdmin(email: string | undefined, githubLogin?: string): boolean {
+  const configured = process.env.CAVIX_ADMIN_EMAILS?.trim();
+  // `demoEnabled()` is the deployment's own definition of "this is a dev box",
+  // imported rather than re-derived: two definitions of production that drift
+  // means either a locked-out founder or an open admin console.
+  const raw = configured && configured !== "" ? configured : demoEnabled() ? "demo@cavix.dev" : "";
+  if (raw === "") return false;
+
+  const wanted = raw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const mine = new Set<string>();
+  if (email?.trim()) mine.add(email.trim().toLowerCase());
+  // Stored with the `@` so a login can never be confused with an email, and so
+  // the variable reads unambiguously to whoever sets it.
+  if (githubLogin?.trim()) mine.add(`@${githubLogin.trim().toLowerCase().replace(/^@/, "")}`);
+  return wanted.some((w) => mine.has(w));
 }
 
 /** Constant-time string equality (for comparing shared secrets / bearer tokens). */

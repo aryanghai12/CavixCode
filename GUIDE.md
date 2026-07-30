@@ -989,7 +989,9 @@ wired together automatically.
    secrets, and **auto‑wires** `DATABASE_URL`, the Redis URL, and the shared
    `CAVIX_INTERNAL_TOKEN` between services.
 4. Fill in the few values it can't generate (each service's **Environment** tab):
-   - **cavix:** `CAVIX_ADMIN_EMAILS` = your email (founder Admin console).
+   - **cavix:** `CAVIX_ADMIN_EMAILS` = your email, or your GitHub login as `@login`
+     (founder Admin console). Prefer the `@login` form: see §8E for why an email can
+     silently fail to match.
    - **cavix‑orchestrator:** `CAVIX_CONTROL_PLANE_URL` = the **cavix** service URL;
      `CAVIX_APP_ID` + `CAVIX_APP_PRIVATE_KEY` from your GitHub App ([§8B](#8b-go-live-on-github-production-github-app--cavix-commands)).
 5. In your **GitHub App** settings, set the **Webhook URL** to the **cavix‑edge** URL
@@ -1110,7 +1112,7 @@ These are the "named slots" from [section 10](#10-configuration--keys-byok):
 ```
 CAVIX_SESSION_SECRET     = <long random string>     # required: signs login cookies
 CAVIX_SECRET_KEY         = <another long random>     # required: encrypts stored BYOK keys
-CAVIX_ADMIN_EMAILS       = you@yourdomain.com         # so you get the Admin console
+CAVIX_ADMIN_EMAILS       = @your-github-login         # so you get the Admin console (email also works)
 CAVIX_LLM_PROVIDER       = anthropic                  # OPTIONAL: default shown to new orgs
 CAVIX_LLM_MODEL          = claude-sonnet-4-6          # OPTIONAL: default model for new orgs
 ```
@@ -1288,7 +1290,7 @@ important not to confuse them:
 
 | Layer | Who it's for | What it controls | How you grant it |
 |-------|-------------|------------------|------------------|
-| **Platform admin** (you / core team) | The founder & trusted core team | **Every** organization on your platform — tiers, trials, review limits, suspend | Add their email to `CAVIX_ADMIN_EMAILS` |
+| **Platform admin** (you / core team) | The founder & trusted core team | **Every** organization on your platform — tiers, trials, review limits, suspend | Add their email, or their GitHub login as `@login`, to `CAVIX_ADMIN_EMAILS` |
 | **Org role** (your customers) | People inside a customer's workspace | Only **their own** org — repos, BYOK, settings, their teammates | Set on the Team page (owner/admin/reviewer/member) |
 
 **In one sentence:** *platform admins run the whole company; org roles run one customer's
@@ -1300,25 +1302,56 @@ workspace.* A customer's "owner" has zero power over other customers or over you
 
 #### The founder & core team = "platform admins"
 A platform admin can open the **Admin console** in the dashboard and change any org's
-plan. You decide who's a platform admin with **one environment variable** — a
-comma‑separated list of emails:
+plan. You decide who's a platform admin with **one environment variable** on the
+**control‑plane** service — a comma‑separated list. Each entry is either an **email** or
+a **GitHub login prefixed with `@`**:
 
 ```powershell
-$env:CAVIX_ADMIN_EMAILS = "you@cavix.dev,cofounder@cavix.dev,ops@cavix.dev"
+$env:CAVIX_ADMIN_EMAILS = "you@cavix.dev,@your-github-login,cofounder@cavix.dev"
 ```
 
-- **To give a core‑team member control:** add their email to that list and restart the
-  control‑plane. Next time they log in, an **🛡️ Admin console** appears in their sidebar.
-- **To remove someone's control:** delete their email from the list and restart. The
-  Admin console disappears for them instantly — no code change, no database edit.
-- **Security:** the check happens on the **server** for every admin request (not just
-  hidden in the UI), so someone who isn't listed **cannot** call the admin API even if
+- **To give a core‑team member control:** add their email or `@login` to that list. Next
+  time they load the dashboard, an **🛡️ Admin console** appears in their sidebar.
+- **To remove someone's control:** delete their entry. It takes effect on their **next
+  request** — no restart, no code change, no database edit.
+- **Security:** the check happens on the **server** for every admin request, not just
+  hidden in the UI, so someone who isn't listed **cannot** call the admin API even if
   they try. Non‑admins get a `403 forbidden` (verified by tests).
 
-> **Default for the demo:** if you never set `CAVIX_ADMIN_EMAILS`, only the seeded
-> `demo@cavix.dev` is treated as admin (so the console is visible out of the box). **In
-> production, always set `CAVIX_ADMIN_EMAILS` to your real team** — otherwise no live
-> user is an admin, which is the safe default.
+> ### If you set your email and the console still doesn't appear
+>
+> **It is almost always because Cavix stored a different email than you expect.** If your
+> GitHub account has *"Keep my email addresses private"* turned on, GitHub returns no
+> address at sign‑in and Cavix stores you as **`<your-login>@users.noreply.github.com`**.
+> That is the address `CAVIX_ADMIN_EMAILS` matches — not the one you think of as yours.
+>
+> **Check what was actually stored.** Logged in, open this in the same browser:
+>
+> ```
+> https://your-site.onrender.com/api/auth/me
+> ```
+>
+> It returns your `email`, your `githubLogin`, and `platformAdmin: true|false`.
+>
+> **The fix that cannot drift:** list your **GitHub login** instead, with an `@`:
+>
+> ```
+> CAVIX_ADMIN_EMAILS = @your-github-login
+> ```
+>
+> A login is stable; an email is not. Do **not** try to fix it by re‑authorizing to get
+> your real address — accounts are keyed by email, so a changed email creates a **second
+> account with a fresh workspace** rather than updating the one you have been using.
+>
+> The control‑plane also logs a warning at sign‑in whenever it falls back to the noreply
+> address, naming both the stored email and the `@login` to use instead.
+
+> **Default when unset:** on a **local dev box** (no `DATABASE_URL`, no `RENDER`) the
+> seeded `demo@cavix.dev` is admin, so the console works out of the box. **In production,
+> unset means nobody.** That is deliberate: production starts with an empty store and open
+> sign‑up, so a default admin address published in this repository would let anyone who
+> registers it take control of every organization on your platform. Forgetting the
+> variable costs you a minute; the other way round is not recoverable.
 
 #### Your customers = "org roles"
 Inside each customer workspace, people have one of four roles (managed on the **Team**
@@ -1477,7 +1510,7 @@ on the services (no code changes). The founder‑relevant ones:
 
 | Lever | Variable | Effect |
 |-------|----------|--------|
-| Who is a platform admin | `CAVIX_ADMIN_EMAILS` | Comma‑separated core‑team emails |
+| Who is a platform admin | `CAVIX_ADMIN_EMAILS` | Comma‑separated emails and/or GitHub logins (`@login`). Unset in production = nobody |
 | Free‑tier review quota | `CAVIX_FREE_REVIEWS_PER_DAY` | Default reviews/day for free orgs |
 | Paid‑tier review quota | `CAVIX_PAID_REVIEWS_PER_DAY` | Default reviews/day for paid orgs |
 | Free‑tier per‑PR quota | `CAVIX_FREE_REVIEWS_PER_PR` | Reviews one pull request gets on free. Not raisable by the workspace |
@@ -1578,7 +1611,7 @@ Key slots at a glance:
 | `CAVIX_PAID_REVIEWS_PER_DAY` | control‑plane | Daily review limit for the paid tier |
 | `CAVIX_FREE_REVIEWS_PER_PR` | control‑plane | Reviews per pull request on free (default 10). Fixed: a maintainer cannot raise it |
 | `CAVIX_PAID_REVIEWS_PER_PR` | control‑plane | Default reviews per pull request on paid (default 50). Maintainer‑changeable under Review settings |
-| `CAVIX_ADMIN_EMAILS` | control‑plane | Comma‑separated founder/core‑team emails who get the Admin console (see §8E) |
+| `CAVIX_ADMIN_EMAILS` | control‑plane | Who gets the founder Admin console: comma‑separated emails and/or GitHub logins written `@login`. **Unset in production means nobody** (see §8E) |
 | `CAVIX_SESSION_SECRET` | control‑plane | Signs dashboard login cookies — **set in production** |
 | `CAVIX_SECRET_KEY` | control‑plane | Encrypts stored BYOK keys + OAuth tokens at rest — **set in production** |
 | `DATABASE_URL` (or `CAVIX_DATABASE_URL`) | control‑plane | Postgres connection string — set it and data **survives restarts** (Render/Neon/Supabase). Omit = in‑memory. |

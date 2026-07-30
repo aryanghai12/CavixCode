@@ -11,7 +11,7 @@
 #   1. Push this repo to GitHub.
 #   2. Render → New + → Blueprint → pick this repo → Apply.
 #   3. Fill in the few `sync: false` values (they can't be auto-generated):
-#        - cavix:              CAVIX_ADMIN_EMAILS   = your email
+#        - cavix:              CAVIX_ADMIN_EMAILS   = your email, or @your-github-login
 #        - cavix-orchestrator: CAVIX_CONTROL_PLANE_URL = the cavix web service URL
 #                              CAVIX_APP_ID, CAVIX_APP_PRIVATE_KEY  (GitHub App, §8B)
 #   4. In your GitHub App (GUIDE §8B): set the Webhook URL to the cavix-edge URL
@@ -71,7 +71,12 @@ services:
         generateValue: true
       - key: CAVIX_INTERNAL_TOKEN      # lets the orchestrator read org keys (auto-generated)
         generateValue: true
-      - key: CAVIX_ADMIN_EMAILS        # YOUR email → founder Admin console
+      # YOUR email, or your GitHub login written @login, → founder Admin console.
+      # Prefer @login: if your GitHub email is private, GitHub returns no address
+      # at sign-in and Cavix stores you under <login>@users.noreply.github.com,
+      # so an email here would match nothing and the console never appears.
+      # REQUIRED: left unset, nobody on this deployment is an admin.
+      - key: CAVIX_ADMIN_EMAILS
         sync: false
       # ONE GitHub App powers sign-in AND bot installs. From your GitHub App:
       #   • Client ID + a generated client secret  → the two vars below (sign-in)

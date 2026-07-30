@@ -127,6 +127,18 @@ function recordApi(status: number): void {
   }
 }
 
+/**
+ * Structured log, in the same shape `main.ts` writes.
+ *
+ * Deliberately sparse: this file is a request router and most of what happens in
+ * it is already visible in the response. It is here for the events that are
+ * INVISIBLE to the person they affect, of which sign-in identity is the one that
+ * has actually cost somebody an afternoon.
+ */
+function log(level: string, msg: string, meta?: Record<string, unknown>): void {
+  console.log(JSON.stringify({ level, service: "control-plane", msg, ...meta }));
+}
+
 export function createControlPlane(store: Store): http.Server {
   return http.createServer(async (req, res) => {
     try {
@@ -141,6 +153,7 @@ async function route(store: Store, req: http.IncomingMessage, res: http.ServerRe
   const url = new URL(req.url ?? "/", "http://localhost");
   const p = url.pathname;
   const m = req.method ?? "GET";
+
 
   if (m === "GET" && p === "/healthz") return void sendJson(res, 200, { status: "ok" });
 
@@ -239,7 +252,29 @@ async function apiRoute(
         const redirectUri = `${baseUrl(req)}/api/auth/github/callback`;
         tokens = await gh.exchangeCode(url.searchParams.get("code")!, redirectUri);
         const ghUser = await gh.getUser(tokens.accessToken);
-        const email = (await gh.getPrimaryEmail(tokens.accessToken)) ?? `${ghUser.login}@users.noreply.github.com`;
+        const primary = await gh.getPrimaryEmail(tokens.accessToken);
+        // The fallback is fine; being SILENT about it was not.
+        //
+        // GitHub returns no email when the account has "Keep my email addresses
+        // private" on, or when this authorization predates the `user:email`
+        // scope. The account is then stored under the noreply address, which is
+        // a perfectly good identifier and completely unlike the address the
+        // person believes they signed up with. That mismatch is invisible: it
+        // surfaces weeks later as `CAVIX_ADMIN_EMAILS` not working, or an invite
+        // to an address that matches nothing, with nothing anywhere to explain
+        // it. One line here is the difference between a five-minute fix and an
+        // afternoon.
+        const email = primary ?? `${ghUser.login}@users.noreply.github.com`;
+        if (!primary) {
+          log("warn", "GitHub did not return an email for this sign-in; using the noreply address", {
+            login: ghUser.login,
+            stored_email: email,
+            why: "the account keeps its email private, or this authorization predates the user:email scope",
+            effect:
+              "this is the address CAVIX_ADMIN_EMAILS, team invites and org lookups match on. " +
+              `Use it, or list "@${ghUser.login}" instead, which does not drift.`,
+          });
+        }
         profile = { email, name: ghUser.name ?? ghUser.login, login: ghUser.login };
       } else if (!gh.githubConfigured() && !gh.demoEnabled()) {
         res.writeHead(302, { location: "/login?error=github_unconfigured" });
@@ -272,7 +307,7 @@ async function apiRoute(
     if (!s) return void sendJson(res, 401, { error: "not authenticated" });
     const u = store.getUser(s.uid);
     if (!u) return void sendJson(res, 401, { error: "not authenticated" });
-    return void sendJson(res, 200, { user: { id: u.id, email: u.email, name: u.name, org: u.org, role: u.role, createdAt: u.createdAt, provider: u.provider, githubLogin: u.githubLogin, platformAdmin: isPlatformAdmin(u.email) } });
+    return void sendJson(res, 200, { user: { id: u.id, email: u.email, name: u.name, org: u.org, role: u.role, createdAt: u.createdAt, provider: u.provider, githubLogin: u.githubLogin, platformAdmin: isPlatformAdmin(u.email, u.githubLogin) } });
   }
 
   // ----- GitHub connect (list orgs/repos & enable from the site) -----
@@ -392,7 +427,7 @@ async function apiRoute(
   if (p.startsWith("/api/admin/")) {
     const s = sessionFromRequest(req);
     if (!s) return void sendJson(res, 401, { error: "authentication required" });
-    if (!isPlatformAdmin(s.email)) return void sendJson(res, 403, { error: "forbidden: platform admin only" });
+    if (!admin(store, s)) return void sendJson(res, 403, { error: "forbidden: platform admin only" });
 
     if (m === "GET" && p === "/api/admin/orgs") return void sendJson(res, 200, store.listOrgsAdmin());
     if (m === "GET" && p === "/api/admin/stats") return void sendJson(res, 200, store.platformStats());
@@ -716,7 +751,7 @@ async function apiRoute(
   if (m === "GET" && p === "/api/orgs") {
     const s = sessionFromRequest(req);
     if (!s) return void sendJson(res, 401, { error: "authentication required" });
-    if (isPlatformAdmin(s.email)) return void sendJson(res, 200, store.listOrgs());
+    if (admin(store, s)) return void sendJson(res, 200, store.listOrgs());
     const own = store.getOrg(s.org);
     return void sendJson(res, 200, own ? [own] : []);
   }
@@ -943,7 +978,7 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/analytics$/.exec(p);
   if (m === "GET" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrgMember(req, res, org);
+    const auth = requireOrgMember(store, req, res, org);
     if (!auth) return;
     const raw = Number(url.searchParams.get("days") ?? "30");
     // Clamp: an unbounded `days` lets any member walk the store for as long as
@@ -1004,7 +1039,7 @@ async function apiRoute(
   // could read every finding Cavix has ever raised on a private repo by guessing
   // an org name.
   if (m === "GET" && p === "/api/reviews") {
-    const scope = reviewScope(req, url.searchParams.get("org"));
+    const scope = reviewScope(store, req, url.searchParams.get("org"));
     if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
     return void sendJson(res, 200, store.listReviews(scope.org).map(withRetentionExplain));
   }
@@ -1018,7 +1053,7 @@ async function apiRoute(
   if (m === "GET" && mm) {
     const r = store.getReview(mm[1]);
     if (!r) return void sendJson(res, 404, { error: "not found" });
-    const scope = reviewScope(req, r.org);
+    const scope = reviewScope(store, req, r.org);
     if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
     if (!r.retention) {
       // An honest 404. A review from before this shipped has no proof, and
@@ -1035,7 +1070,7 @@ async function apiRoute(
   if (m === "GET" && mm) {
     const r = store.getReview(mm[1]);
     if (!r) return void sendJson(res, 404, { error: "not found" });
-    const scope = reviewScope(req, r.org);
+    const scope = reviewScope(store, req, r.org);
     if ("error" in scope) return void sendJson(res, scope.status, { error: scope.error });
     return void sendJson(res, 200, withRetentionExplain(r));
   }
@@ -1063,7 +1098,7 @@ async function apiRoute(
     const review = store.getReview(finding.reviewId);
     const s = sessionFromRequest(req);
     if (!s) return void sendJson(res, 401, { error: "authentication required" });
-    if (review && review.org !== s.org && !isPlatformAdmin(s.email)) {
+    if (review && review.org !== s.org && !admin(store, s)) {
       return void sendJson(res, 403, { error: "forbidden: not a member of this organization" });
     }
     return void sendJson(res, 200, store.recordDecision(mm[1], state, s.email));
@@ -1079,7 +1114,7 @@ async function apiRoute(
       if (!internalAuthorized(req)) return void sendJson(res, 401, { error: "authentication required" });
       return void sendJson(res, 200, store.listDecisions());
     }
-    if (isPlatformAdmin(s.email)) return void sendJson(res, 200, store.listDecisions());
+    if (admin(store, s)) return void sendJson(res, 200, store.listDecisions());
     const mine = new Set(store.listReviews(s.org, Number.MAX_SAFE_INTEGER).map((r) => r.id));
     return void sendJson(res, 200, store.listDecisions().filter((d) => mine.has(d.reviewId)));
   }
@@ -1093,7 +1128,7 @@ async function apiRoute(
   mm = /^\/api\/orgs\/([^/]+)\/calibration$/.exec(p);
   if (m === "GET" && mm) {
     const org = decodeURIComponent(mm[1]);
-    const auth = requireOrgMember(req, res, org);
+    const auth = requireOrgMember(store, req, res, org);
     if (!auth) return;
     return void sendJson(res, 200, store.calibration(org));
   }
@@ -1229,14 +1264,32 @@ type ReviewScope = { org: string | undefined } | { error: string; status: number
  * the caller's own workspace. Platform admins (and the service token) may name
  * another org; nobody else can.
  */
-function reviewScope(req: http.IncomingMessage, requested: string | null): ReviewScope {
+/**
+ * Is this session a platform admin?
+ *
+ * Resolves the ACCOUNT before asking, rather than trusting the session cookie
+ * alone. The cookie carries an email; `CAVIX_ADMIN_EMAILS` may name a GitHub
+ * login instead, and an email is not a stable identifier for a GitHub sign-in
+ * (see `isPlatformAdmin`). Reading `s.email` alone is why listing a login in
+ * that variable used to do nothing at all.
+ *
+ * Taking the store rather than the session's own copy also means a change of
+ * identity takes effect on the next REQUEST rather than the next sign-in.
+ *
+ * The lookup is a Map hit, and every caller reads the store straight after.
+ */
+function admin(store: Store, s: { uid: string; email: string } | null): boolean {
+  if (!s) return false;
+  return isPlatformAdmin(s.email, store.getUser(s.uid)?.githubLogin);
+}
+function reviewScope(store: Store, req: http.IncomingMessage, requested: string | null): ReviewScope {
   const s = sessionFromRequest(req);
   if (!s) {
     return internalAuthorized(req)
       ? { org: requested ?? undefined }
       : { error: "authentication required", status: 401 };
   }
-  if (isPlatformAdmin(s.email)) return { org: requested ?? undefined };
+  if (admin(store, s)) return { org: requested ?? undefined };
   if (requested && requested !== s.org) {
     return { error: "forbidden: not a member of this organization", status: 403 };
   }
@@ -1321,6 +1374,7 @@ function coerceRetention(value: unknown): RetentionAttestation | null {
  * so `npx tsc --noEmit` never looked at this file. Both halves are fixed.
  */
 function requireOrgMember(
+  store: Store,
   req: http.IncomingMessage,
   res: http.ServerResponse,
   org: string,
@@ -1330,7 +1384,7 @@ function requireOrgMember(
     sendJson(res, 401, { error: "authentication required" });
     return null;
   }
-  if (s.org !== org && !isPlatformAdmin(s.email)) {
+  if (s.org !== org && !admin(store, s)) {
     sendJson(res, 403, { error: "forbidden: not a member of this organization" });
     return null;
   }
