@@ -32,6 +32,21 @@ export {
 } from "./ledger.ts";
 
 export {
+  decideClaim,
+  mayPost,
+  beginPosting,
+  finishRun,
+  coerceRun,
+  isActive,
+  ACTIVE_STATUSES,
+  STALE_AFTER_MS,
+  type RunStatus,
+  type ReviewRun,
+  type ClaimRequest,
+  type ClaimOutcome,
+} from "./run.ts";
+
+export {
   reviewBudget,
   clampLimit,
   exhaustedMessage,

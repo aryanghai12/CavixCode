@@ -498,8 +498,9 @@ packages/
   deterministic/   Stage 3. Secret scanning, SAST, and a 24-linter registry
   policy/          Stage 3c. The optional, off-by-default org policy gate
   analyzer/        Stage 4. Code graph, blast radius, incremental index
-  context/         Stage 7. RAG context assembly and cheap-model compression
-  agents/          Stage 8. The 7-agent ensemble and model routing
+  context/         Stage 7. Context assembly, repository rules, cheap-model compression
+  agents/          Stage 8. The 7-agent ensemble and signal-based model routing
+  critic/          Stage 8b. Deterministic hallucination checks before adjudication
   adjudicator/     Stage 9. Dedupe, vote, threshold, policy immunity
   verifier/        Stage 10. Execution-grounded verification
   orggraph/        Stage 5. Cross-repo impact, contracts to consumer call sites
@@ -515,7 +516,8 @@ packages/
   batch/           Modernization at scale, verification-gated per change
   lenses/          The review-lens marketplace and per-org confidence models
   analytics/       ROI: action rate, defects caught, reviewer-hours saved
-  review-session/  Fresh vs incremental reviews, and stale-review removal
+  review-session/  Fresh vs incremental reviews, the PR finding ledger, and the
+                   single in-flight review slot per pull request
   repoconfig/      The .cavix.yaml and .cavix.json parser
   pipeline/        Composes stages 3, 3c, 4, 7, 8 and 9 into runPhase1Review
 eval/              Gold-labelled PRs, competitor comparison, external benchmarks

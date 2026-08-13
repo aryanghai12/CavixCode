@@ -25,6 +25,7 @@
   fetch("/api/auth/providers").then((r) => r.json()).then((p) => {
     if (p.github || p.demo) {
       $("githubBtn").classList.remove("hidden");
+      $("githubNote").classList.remove("hidden");
       $("orDivider").classList.remove("hidden");
       if (p.demo && !p.github) $("githubBtn").lastChild.textContent = " Continue with GitHub (demo)";
     }

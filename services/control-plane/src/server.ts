@@ -973,6 +973,77 @@ async function apiRoute(
     return void sendJson(res, 405, { error: `no telemetry route for ${m}` });
   }
 
+  // ----- internal: the single in-flight review slot per pull request -----
+  //
+  // A push while a review is running used to produce TWO reviews, seconds apart.
+  // The older one was computed against a commit that no longer exists, so its
+  // line numbers point at whatever has since moved into those positions, and the
+  // two raced to write the ledger. Whichever landed last won.
+  //
+  // The edge already collapses a REDELIVERY of one webhook. That is a different
+  // question: it stops one event producing two jobs, and says nothing about a
+  // second, genuinely new event arriving mid-review.
+  const runRoute = /^\/api\/internal\/reviews\/([^/]+)\/([^/]+\/[^/]+)\/(\d+)\/(claim|touch|posting|finish|fail-head)$/.exec(p);
+  if (runRoute) {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+    if (m !== "POST") return void sendJson(res, 405, { error: `no review-run route for ${m}` });
+
+    const org = decodeURIComponent(runRoute[1]);
+    const repo = decodeURIComponent(runRoute[2]);
+    const pr = Number(runRoute[3]);
+    const action = runRoute[4];
+    const body = await readJson(req);
+
+    // Keyed on the commit, not the run id: the failure path has lost the run id
+    // by the time it runs, and a head SHA is the one thing it always still has.
+    if (action === "fail-head") {
+      const headSha = String(body.headSha ?? "");
+      if (!headSha) return void sendJson(res, 400, { error: "headSha required" });
+      const failed = store.failReviewRunForHead(
+        org,
+        repo,
+        pr,
+        headSha,
+        body.reason ? String(body.reason) : undefined,
+      );
+      return void sendJson(res, 200, { run: failed ?? null });
+    }
+
+    const runId = String(body.runId ?? "");
+    if (!runId) return void sendJson(res, 400, { error: "runId required" });
+
+    if (action === "claim") {
+      const headSha = String(body.headSha ?? "");
+      if (!headSha) return void sendJson(res, 400, { error: "headSha required" });
+      const outcome = store.claimReviewRun(org, repo, pr, {
+        runId,
+        headSha,
+        ...(body.baseSha ? { baseSha: String(body.baseSha) } : {}),
+        ...(body.worker ? { worker: String(body.worker) } : {}),
+      });
+      if (outcome.decision === "claimed" && outcome.superseded) {
+        log("info", "an earlier review of this pull request lost its slot", {
+          repo,
+          pr,
+          previous: outcome.superseded.runId,
+          previous_head: outcome.superseded.headSha,
+          status: outcome.superseded.status,
+          reason: outcome.superseded.reason,
+        });
+      }
+      return void sendJson(res, 200, outcome);
+    }
+    if (action === "touch") return void sendJson(res, 200, { run: store.touchReviewRun(org, repo, pr, runId) ?? null });
+    if (action === "posting") return void sendJson(res, 200, { run: store.beginPostingRun(org, repo, pr, runId) ?? null });
+
+    const status = body.status === "failed" || body.status === "cancelled" ? body.status : "completed";
+    const finished = store.finishReviewRun(org, repo, pr, runId, status, body.reason ? String(body.reason) : undefined);
+    return void sendJson(res, 200, { run: finished ?? null });
+  }
+
   // ----- internal: GitHub App installation lifecycle, forwarded by the edge -----
   //
   // The webhook that tells Cavix what it may READ. It arrives at the edge, which

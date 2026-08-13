@@ -1,6 +1,7 @@
 import { parseUnifiedDiff } from "@cavix/core";
 import type { CodeIndex, SymbolNode, Embedder } from "@cavix/analyzer";
 import { cosine } from "@cavix/analyzer";
+import { ruleItems, type RepoRule } from "./rules.ts";
 import {
   estimateTokens,
   type Compressor,
@@ -14,6 +15,14 @@ import {
 export interface AssembleInput {
   org: string;
   diff: string;
+  /**
+   * The team's own rules, already collected from the repository.
+   *
+   * Passed in rather than read here because reading files is the caller's job
+   * and because the same rules are also needed by the pre-merge gate: parsing
+   * them twice is how the two end up disagreeing about what the rules say.
+   */
+  rules?: readonly RepoRule[];
 }
 
 export interface ContextAssemblerOptions {
@@ -60,6 +69,22 @@ export class ContextAssembler {
 
     // 1. The diff itself — always the top priority.
     items.push(this.item("diff", "Change under review (diff)", input.diff, 100));
+
+    // 1b. The team's own rules, selected by a glob match against the changed
+    // paths and by nothing else.
+    //
+    // Priority 95: above every piece of code context, below only the change
+    // itself. Law outranks evidence about the code, because a change that is
+    // correct and against the house standard is still against the house
+    // standard, and a reviewer forced to choose between mentioning a caller and
+    // mentioning the standard should mention the standard.
+    //
+    // Deliberately NOT retrieved by similarity. Retrieve law that way and a
+    // team's own rule applies on Tuesday and not on Wednesday, with nothing in
+    // the trace to explain why.
+    if (input.rules && input.rules.length > 0) {
+      items.push(...ruleItems(input.rules, blast.files.length > 0 ? blast.files : parseUnifiedDiff(input.diff).map((f) => f.path)));
+    }
 
     // 2. Cross-file callers — the recall win: code the diff can break, in OTHER
     //    files, that a diff-only reviewer never sees.
@@ -139,7 +164,10 @@ export class ContextAssembler {
   private async compressOversized(items: ContextItem[]): Promise<void> {
     if (!this.opts.compressor) return;
     for (const it of items) {
-      if (it.kind === "diff") continue; // never compress the actual change
+      // Never compressed. The diff is the thing under review, and a rule is the
+      // team's own words: paraphrasing somebody's standard through a cheap model
+      // and then enforcing the paraphrase is indefensible.
+      if (it.kind === "diff" || it.kind === "rule") continue;
       if (it.content.length <= this.opts.compressOverChars) continue;
       const brief = await this.opts.compressor.compress(it.content, `Summarize this ${it.kind} for a code reviewer; keep signatures, control flow, and anything safety-relevant.`);
       it.content = brief;

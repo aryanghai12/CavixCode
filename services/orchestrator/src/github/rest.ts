@@ -1,11 +1,13 @@
 import {
   CHECK_NAME,
   FULL_CAPABILITIES,
+  INLINE_MARKER,
   REVIEW_MARKER,
   type AuthIdentity,
   type CheckRunInput,
   type DiffLimitation,
   type ReviewPlatform,
+  type OwnInlineComment,
   type OwnReview,
   type PullRef,
   type PostedReview,
@@ -14,6 +16,15 @@ import {
   type ReviewSubmission,
   type WorkflowRun,
 } from "./client.ts";
+
+/**
+ * How many pages of inline comments to read before giving up.
+ *
+ * A pull request with more than a thousand inline comments has bigger problems
+ * than comment reconciliation, and reading forever would hold a review behind a
+ * pathological page count.
+ */
+const MAX_COMMENT_PAGES = 10;
 
 // RestGitHubClient is the production GitHub transport. It uses fetch (no SDK) and
 // obtains a token per call from a TokenProvider. Two providers ship:
@@ -344,6 +355,42 @@ export class RestGitHubClient implements ReviewPlatform {
     if (!res.ok) return [];
     const data = (await res.json()) as Array<{ id: number; pull_request_review_id?: number }>;
     return data.filter((c) => c.pull_request_review_id !== undefined && mine.has(c.pull_request_review_id)).map((c) => c.id);
+  }
+
+  /**
+   * Cavix's own inline comments, with their bodies, so a re-review can tell what
+   * is already on the page from what is new.
+   *
+   * Filtered by the hidden marker rather than by author, deliberately. A
+   * deployment can run under a GitHub App, a bot account or somebody's personal
+   * token, and matching on any of those means Cavix eventually deletes a human's
+   * comment. The marker is written by exactly one thing.
+   *
+   * Returns an empty list on any failure, which degrades to the old behaviour:
+   * post a fresh set. A duplicate comment is a far smaller failure than deleting
+   * a conversation.
+   */
+  async listOwnInlineComments(ref: PullRef): Promise<OwnInlineComment[]> {
+    const out: OwnInlineComment[] = [];
+    for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
+      const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments?per_page=100&page=${page}`;
+      const res = await this.fetchImpl(url, {
+        headers: await this.headers(ref, "application/vnd.github+json"),
+      });
+      if (!res.ok) return out;
+      const data = (await res.json()) as Array<{ id: number; body?: string; path?: string; line?: number }>;
+      for (const c of data) {
+        if (!c.body || !c.body.includes(INLINE_MARKER)) continue;
+        out.push({
+          id: c.id,
+          body: c.body,
+          ...(c.path ? { path: c.path } : {}),
+          ...(typeof c.line === "number" ? { line: c.line } : {}),
+        });
+      }
+      if (data.length < 100) break;
+    }
+    return out;
   }
 
   async deleteReviewComment(ref: PullRef, commentId: number): Promise<void> {

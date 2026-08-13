@@ -46,6 +46,12 @@ export {
   type ImpactScope,
   type ImpactSite,
 } from "./poster/poster.ts";
+export {
+  reconcileInlineComments,
+  type ExistingInlineComment,
+  type ReconcileCommentsInput,
+  type ReconcileCommentsResult,
+} from "./poster/comments.ts";
 
 export {
   makeReviewRecorder,
@@ -54,6 +60,13 @@ export {
   type ReviewRecorder,
   type RecorderOptions,
 } from "./report/recorder.ts";
+
+export {
+  makeRunClient,
+  type RunClient,
+  type RunRef,
+  type RunClientOptions,
+} from "./report/runs.ts";
 
 export {
   makeLedgerClient,

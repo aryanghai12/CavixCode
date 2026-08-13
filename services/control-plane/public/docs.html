@@ -32,6 +32,8 @@
     <a href="#signin">Sign in &amp; connect GitHub</a>
     <a href="#firstreview">Your first review</a>
     <div class="grp">Using Cavix</div>
+    <a href="#rereviews">When you push again</a>
+    <a href="#rules">Your team's rules</a>
     <a href="#commands">@cavixcode commands</a>
     <a href="#summary">PR summaries</a>
     <a href="#tone">Review tone</a>
@@ -48,11 +50,18 @@
     <p>Cavix is the AI code reviewer that <b>proves its findings before it speaks</b>. It reproduces a suspected bug in an isolated sandbox, applies the fix, and re-runs your tests, so its comments are verified facts, not guesses. This guide covers everything you can do from the dashboard.</p>
 
     <h2 id="signin">Sign in &amp; connect GitHub</h2>
-    <p>Click <b>Continue with GitHub</b> on the login page. Cavix asks GitHub to authorize it (the standard <code>read:org</code> + <code>user:email</code> consent), then brings you back. On the <b>Repositories</b> page you'll see every organization you belong to; pick one, and toggle Cavix on for any repo, all without leaving the site.</p>
+    <p>These are <b>two separate steps</b>, and GitHub keeps them separate on purpose. Knowing that up front saves a lot of confusion.</p>
+    <ol>
+      <li><b>Sign in.</b> Click <b>Continue with GitHub</b> on the login page. This tells Cavix who you are, nothing more. It does not give Cavix access to a single line of your code, and there is no repository picker on that screen because GitHub does not put one there.</li>
+      <li><b>Choose repositories.</b> On the <b>Repositories</b> page, click <b>Add repositories</b>. GitHub shows you a proper consent screen: pick the account or organization, choose <b>All repositories</b> or <b>Only select repositories</b>, and review what Cavix is asking for. That screen is where access is actually granted.</li>
+    </ol>
+    <p>Back in Cavix, toggle the switch next to any repository you want reviewed. Cavix only reviews the ones you turn on, even if GitHub granted it more.</p>
     <ul>
       <li>The first person to sign up for an organization becomes its <b>owner</b>.</li>
       <li>New GitHub sign-ups start a <b>14-day trial</b> so private repos work immediately.</li>
-      <li>The one-time GitHub App install is a single click via <b>Install GitHub App</b> (GitHub requires that consent screen).</li>
+      <li>Changed your mind? <b>Change repositories</b> on any organization row takes you straight back to GitHub's picker. Adding or removing a repository there shows up in Cavix immediately.</li>
+      <li>Installing into an organization you do not own sends a <b>request to an owner</b>. Cavix says so rather than showing you an empty list, so you know it is waiting on somebody rather than broken.</li>
+      <li><b>Disconnect</b> revokes Cavix's authorization and deletes its stored credential. It does not uninstall the app from your account, because only an account owner can do that from GitHub.</li>
     </ul>
 
     <h2 id="firstreview">Your first review</h2>
@@ -61,6 +70,37 @@
       <li>A <b>PR summary</b> comment (walkthrough, changed-files table, sequence diagram, review-effort estimate).</li>
       <li><b>Inline findings</b> with severity and, for verified bugs, the failing test that proves them.</li>
       <li>A ✓/✗ <b>status check</b> that can gate merges.</li>
+    </ul>
+
+    <h2 id="rereviews">What happens when you push again</h2>
+    <p>Cavix treats every review of a pull request as a <b>continuation</b> of the last one, not a fresh opinion. That matters more than it sounds, because a language model is not a function: ask it twice about the same code and it will not reliably say the same thing.</p>
+    <ul>
+      <li><b>A finding is never cleared by silence.</b> It clears when the code it points at actually changed and Cavix then did not raise it again. If nobody touched that code, the finding stays open and keeps counting, whatever the model said this time.</li>
+      <li><b>An edit somewhere else in the file does not count.</b> Fixing line 900 says nothing about a problem on line 40.</li>
+      <li><b>Rebased or force-pushed?</b> Cavix carries everything forward and clears nothing, and it tells you why: the evidence it would need was measured against a history that no longer exists.</li>
+      <li><b>Renamed a file?</b> Its findings follow it, rather than reading as four things fixed and four new problems.</li>
+      <li><b>One comment per finding.</b> Push six times and you get one inline comment per problem, not six. A comment disappears when Cavix confirms the problem is fixed.</li>
+      <li><b>Push while a review is running</b> and the older one is thrown away instead of posted. Its line numbers belong to a commit that no longer exists.</li>
+      <li>The review opens with <b>Since your last push</b>: what cleared, what is new, what is still open, and how many files were not re-read.</li>
+    </ul>
+
+    <h2 id="rules">Teaching Cavix your team's rules</h2>
+    <p>Cavix can see that a handler builds a SQL string. It cannot guess that <i>your team decided handlers never touch SQL</i>. Write it down once and every review applies it.</p>
+    <p>Put Markdown files in <code>.cavix/rules/</code> in your repository:</p>
+    <pre><code>---
+name: no-raw-sql-in-handlers
+description: HTTP handlers must not build SQL strings; use the query layer.
+applies_to: ["services/**/handler/**/*.ts"]
+severity: high
+---
+
+Handlers own transport concerns only. Any SQL belongs in packages/db/queries.
+A handler that builds SQL cannot be unit-tested without a database.</code></pre>
+    <ul>
+      <li><b>Already have this written down?</b> Cavix also reads <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>CONVENTIONS.md</code>, <code>CONTRIBUTING.md</code> and <code>.cursorrules</code>. No need to write your standards twice.</li>
+      <li>A rule applies when its <code>applies_to</code> patterns match a changed file. No <code>applies_to</code> means it applies everywhere.</li>
+      <li>Rules are <b>advisory by default</b>. Adding one cannot start blocking merges on its own; that is switched on under <b>Review settings</b>.</li>
+      <li>Matching is exact and repeatable: the same change loads the same rules, every time.</li>
     </ul>
 
     <h2 id="commands">@cavixcode commands</h2>

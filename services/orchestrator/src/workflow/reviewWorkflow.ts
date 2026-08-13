@@ -16,6 +16,7 @@ import {
   buildReviewSubmission,
   type ReviewDelta,
 } from "../poster/poster.ts";
+import { reconcileInlineComments } from "../poster/comments.ts";
 import type { VerifyStep } from "../verify/verify.ts";
 import { preMergeUnavailable, runPreMergeChecks, type PreMergeResult } from "../policy/preMerge.ts";
 import { changedPaths, fetchSources, MAX_SOURCE_FILES } from "../sources.ts";
@@ -39,6 +40,7 @@ import { filterDiff } from "./pathFilter.ts";
 import { NOOP_RECORDER, type Recorder } from "@cavix/metrics";
 import { reconcile, openEntries, dismissAll, type LedgerEntry } from "@cavix/review-session";
 import type { LedgerClient } from "../report/ledger.ts";
+import type { RunClient } from "../report/runs.ts";
 import { makeRetentionCollector } from "../verify/retention.ts";
 import type { DeepReviewResult, DeepReviewStep } from "../pipeline/deepReview.ts";
 import type { BlastRadiusStep } from "../orggraph/blastRadius.ts";
@@ -128,6 +130,14 @@ export interface ReviewWorkflowDeps {
    * never cost a customer their review.
    */
   ledger?: LedgerClient;
+  /**
+   * The single in-flight review slot for a pull request.
+   *
+   * Absent degrades to exactly the old behaviour: every job runs, and a push
+   * during a review produces two reviews. Present, it stops the older one before
+   * it posts a verdict computed against a commit that no longer exists.
+   */
+  runs?: RunClient;
   /**
    * Given an org, list the model ids its key can call. Used to enrich the failure
    * comment, and to self-heal when the saved model has been retired.
@@ -449,6 +459,49 @@ export async function runReview(
     log.info("resolved head commit for command job", { repo: job.repo, pr: job.pr_number, head: ref.headSha });
   }
   const base = { repo: job.repo, pr: job.pr_number, head: ref.headSha };
+
+  // Step 0a — take the single in-flight review slot for this pull request.
+  //
+  // A push while a review is running used to produce TWO reviews, seconds apart.
+  // The older one was computed against a commit that no longer exists, so every
+  // line number in it points at whatever has since moved into that position, and
+  // the two raced to write the ledger: whichever landed last won.
+  //
+  // The edge already collapses a REDELIVERY of one webhook, and that is a
+  // different question. It stops one event producing two jobs; it says nothing
+  // about a second, genuinely new event arriving mid-review.
+  const runRef = { org: overrides.org || job.org, repo: job.repo, pr: job.pr_number };
+  const runId = `${job.idempotency_key || ref.headSha}-${startedAt}`;
+  if (deps.runs) {
+    const outcome = await deps.runs.claim(runRef, {
+      runId,
+      headSha: ref.headSha,
+      ...(job.base_sha ? { baseSha: job.base_sha } : {}),
+    });
+    if (outcome.decision === "duplicate") {
+      log.info("a review of this commit is already running; not starting a second", {
+        ...base,
+        holder: outcome.active.runId,
+      });
+      return emptyOutcome(0);
+    }
+    if (outcome.decision === "wait") {
+      // Mid-post, and a half-written review is worse than a late one. The queue
+      // brings this back; the next attempt finds the slot free.
+      log.info("an earlier review of this pull request is still posting; deferring", {
+        ...base,
+        holder: outcome.active.runId,
+      });
+      return emptyOutcome(0);
+    }
+    if (outcome.superseded) {
+      log.info("this push replaced an earlier review that was still running", {
+        ...base,
+        replaced: outcome.superseded.runId,
+        replaced_head: outcome.superseded.headSha,
+      });
+    }
+  }
 
   // Step 0b — put Cavix in the Checks box before any slow work, so the pull
   // request shows a running check rather than nothing at all while the model and
@@ -859,6 +912,28 @@ export async function runReview(
   // Step 4 — the summary goes in the PR DESCRIPTION, where a reviewer reads it
   // first and where it cannot scroll away. Attempted BEFORE the review is posted
   // so that if it fails (fork PRs, revoked permission) the summary can fall back
+  // Step 3z — the last chance to stop.
+  //
+  // Everything above is computation and costs the customer tokens; everything
+  // below writes to their pull request. If a newer commit arrived while this was
+  // running, this review's findings are anchored to a commit that no longer
+  // exists, so posting them would put comments on whatever code has since moved
+  // into those line numbers. Throwing the work away is the cheap option.
+  if (deps.runs) {
+    const mine = await deps.runs.stillMine(runRef, runId);
+    if (!mine) {
+      log.info("a newer commit replaced this review before it posted; discarding it", {
+        ...base,
+        run: runId,
+      });
+      metrics.review("superseded");
+      return emptyOutcome(check.runId);
+    }
+    // From here the run is uninterruptible. A pull request carrying three inline
+    // comments and no review body is worse than a late review.
+    await deps.runs.beginPosting(runRef, runId);
+  }
+
   // into the review comment instead of being lost.
   let descriptionUpdated = false;
   // With both the summary and the walkthrough switched off there is nothing to
@@ -973,7 +1048,54 @@ export async function runReview(
   // never sees two Cavix reviews at once.
   if (overrides.fresh) await clearPrevious(deps, ref, log);
 
-  const posted = await deps.github.postReview(ref, built.submission);
+  // Reconcile this review's inline comments against what is already on the page.
+  //
+  // Without this, six pushes on a three-finding pull request leave eighteen
+  // inline comments, all saying the same three things, and the only way to tell
+  // which are current is to read the timestamps. The ledger can be perfectly
+  // correct while the page is nonsense, and the reader believes the page.
+  //
+  // Skipped entirely on a fresh review, which has just deleted everything, and
+  // on any platform that cannot read its own comments back.
+  let submission = built.submission;
+  if (!overrides.fresh && deps.github.listOwnInlineComments && submission.comments.length >= 0) {
+    try {
+      const existing = await deps.github.listOwnInlineComments(ref);
+      if (existing.length > 0) {
+        const plan = reconcileInlineComments({
+          existing,
+          incoming: submission.comments,
+          // Only a finding the ledger CLEARED has its comment removed. Silence
+          // is not resolution: deleting on that basis would hide an open finding
+          // from the one place a developer actually reads.
+          resolved: resolvedNow.map((e) => e.fingerprint),
+        });
+        submission = { ...submission, comments: plan.post };
+        for (const id of plan.remove) {
+          try {
+            await deps.github.deleteReviewComment(ref, id);
+          } catch {
+            // A comment we could not remove is clutter, not a wrong verdict.
+          }
+        }
+        log.info("reconciled inline comments with what was already on the pull request", {
+          ...base,
+          posted_new: plan.post.length,
+          left_in_place: plan.keep.length,
+          removed: plan.remove.length,
+        });
+      }
+    } catch (err) {
+      // Degrade to the old behaviour: post the full set. A duplicate comment is
+      // a far smaller failure than a review that did not land.
+      log.info("could not reconcile inline comments; posting the full set", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
+  const posted = await deps.github.postReview(ref, submission);
   log.info("review posted", {
     ...base,
     review_id: posted.id,
@@ -1100,6 +1222,10 @@ export async function runReview(
       });
     }
   }
+
+  // The review is on the pull request. Release the slot so the next push can be
+  // reviewed straight away rather than waiting for this claim to age out.
+  if (deps.runs) await deps.runs.finish(runRef, runId, "completed");
 
   // The review-level numbers, recorded once at the end so a review that threw
   // partway is counted as failed by the handler rather than as posted here.
@@ -1659,6 +1785,18 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       const message = (err as Error).message;
       const permanent = isPermanentFailure(message);
       metrics.review("failed");
+      // Give the slot back. Without this a failed review holds this pull request
+      // for the whole stale window, so the retry that would have fixed it is
+      // turned away as a duplicate and the pull request silently stops being
+      // reviewed. Keyed on the commit, so a newer review that superseded this
+      // one keeps its claim.
+      if (deps.runs && ref.headSha) {
+        await deps.runs.failForHead(
+          { org: org ?? job.org, repo: job.repo, pr: job.pr_number },
+          ref.headSha,
+          message,
+        );
+      }
       log.error("review failed", {
         repo: job.repo,
         pr: job.pr_number,

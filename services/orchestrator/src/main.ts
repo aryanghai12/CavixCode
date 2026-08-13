@@ -47,6 +47,7 @@ import { makeModelSuggester, makeModelSaver } from "./byok/models.ts";
 import { makeReviewConfigFetcher } from "./byok/reviewConfig.ts";
 import { makeReviewRecorder } from "./report/recorder.ts";
 import { makeLedgerClient } from "./report/ledger.ts";
+import { makeRunClient } from "./report/runs.ts";
 import { preflight, formatPreflight } from "./preflight.ts";
 import { createMetrics, makeRecorder, NOOP_RECORDER, type Recorder } from "@cavix/metrics";
 
@@ -340,6 +341,26 @@ async function main() {
     fix: "set CAVIX_CONTROL_PLANE_URL and CAVIX_INTERNAL_TOKEN on the orchestrator",
   });
 
+  // At most one review of a pull request in flight.
+  //
+  // A push while a review is running used to produce TWO reviews, seconds apart.
+  // The older one was computed against a commit that no longer exists, so its
+  // line numbers point at whatever has since moved into those positions, and the
+  // two raced to write the ledger.
+  const runs = cpUrl && internalToken
+    ? makeRunClient({
+        url: cpUrl,
+        token: internalToken,
+        worker: process.env.RENDER_INSTANCE_ID ?? process.env.HOSTNAME ?? "orchestrator",
+        logger: { info: (m, meta) => log("info", m, meta), warn: (m, meta) => log("warn", m, meta) },
+      })
+    : undefined;
+  if (runs) log("info", "a push during a review supersedes it instead of posting twice");
+  else log("warn", "no control-plane configured: reviews are not deduplicated per pull request", {
+    effect: "a push while a review is running will post two reviews, the older one against a commit that no longer exists",
+    fix: "set CAVIX_CONTROL_PLANE_URL and CAVIX_INTERNAL_TOKEN on the orchestrator",
+  });
+
   // Stage 11 — the second live platform.
   //
   // On unless it has nothing to authenticate with. GitLab holds no per-install
@@ -439,6 +460,7 @@ async function main() {
     reviewConfig,
     recordReview,
     ledger,
+    runs,
     metrics,
     // "@cavixcode <question>" answers in prose instead of running a review.
     answer: async (job, ref, orgId, question) => {

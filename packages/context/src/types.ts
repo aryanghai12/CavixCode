@@ -46,7 +46,15 @@ export interface Compressor {
   compress(text: string, instruction: string): Promise<string>;
 }
 
-export type ContextKind = "diff" | "caller" | "definition" | "discussion" | "related";
+/**
+ * What a piece of context IS, which decides both its priority and what the model
+ * is licensed to say on the strength of it.
+ *
+ * `rule` is the team's own law and outranks everything but the diff. `related`
+ * is an embedding neighbour: useful for orientation, and never sufficient on its
+ * own to support a posted finding, which is what the critic enforces.
+ */
+export type ContextKind = "rule" | "diff" | "caller" | "definition" | "discussion" | "related";
 
 export interface ContextItem {
   kind: ContextKind;

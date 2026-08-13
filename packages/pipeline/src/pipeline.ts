@@ -3,6 +3,7 @@ import type { CodeIndex, Embedder } from "@cavix/analyzer";
 import { runDeterministic } from "@cavix/deterministic";
 import { PolicyEngine, type OrgPolicyConfig } from "@cavix/policy";
 import {
+  collectRules,
   ContextAssembler,
   MapFileReader,
   renderContextPrompt,
@@ -70,6 +71,8 @@ export interface Phase1Result {
   toolsSkipped: string[];
   policyCount: number;
   ensembleAbstained: string[];
+  /** Repository rules that matched the changed paths and were put in front of the model. */
+  rulesApplied: number;
   /**
    * Findings the critic could not support against the material the reviewer was
    * shown: a phantom file, a line past the end of one, a symbol that exists
@@ -96,9 +99,18 @@ export async function runPhase1Review(input: Phase1Input, deps: Phase1Deps): Pro
     budgetTokens: deps.budgetTokens,
   });
 
+  // The team's own rules, read out of the repository snapshot Stage 2 already
+  // fetched. No extra call, no extra clone: they are files like any other.
+  //
+  // Cavix knew a great deal about the CODE and nothing about the TEAM. It could
+  // see that a handler builds a SQL string; it could not know this repository
+  // decided that handlers never touch SQL, wrote it down, and has been enforcing
+  // it by hand in every review since.
+  const rules = collectRules(deps.sourceFiles);
+
   const [deterministic, context] = await Promise.all([
     runDeterministic({ files: deps.sourceFiles }),
-    assembler.assemble({ org: input.org, diff: input.diff }),
+    assembler.assemble({ org: input.org, diff: input.diff, rules }),
   ]);
 
   // Stage 3c policy gate (OFF by default → []).
@@ -174,6 +186,7 @@ export async function runPhase1Review(input: Phase1Input, deps: Phase1Deps): Pro
     toolsSkipped: deterministic.toolsSkipped,
     policyCount: policyFindings.length,
     ensembleAbstained: ensembleResult.abstainedAgents,
+    rulesApplied: context.items.filter((i) => i.kind === "rule").length,
     droppedCount: adjudicated.dropped.length,
     clusters: adjudicated.clusters,
     immutableKept: adjudicated.immutableKept,

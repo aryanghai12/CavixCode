@@ -146,3 +146,28 @@ test("signalsFor carries through what other stages measured", () => {
   assert.equal(s.callerCount, 12);
   assert.equal(s.toolHits, 3);
 });
+
+test("a ** glob matches zero directories as well as several", () => {
+  // The subtle one. `src/**/auth/*.ts` has to match `src/auth/token.ts`; if it
+  // does not, a workspace's own sensitive-path glob silently matches nothing and
+  // the change routes to the cheapest model on the shelf.
+  const shallow = signalsFor({
+    diff: diff("src/auth/token.ts", "const t = 1;"),
+    sensitiveGlobs: ["src/**/auth/*.ts"],
+  });
+  assert.equal(shallow.sensitivePath, true);
+
+  const deep = signalsFor({
+    diff: diff("src/a/b/auth/token.ts", "const t = 1;"),
+    sensitiveGlobs: ["src/**/auth/*.ts"],
+  });
+  assert.equal(deep.sensitivePath, true);
+});
+
+test("a glob still refuses a path it does not describe", () => {
+  const s = signalsFor({
+    diff: diff("src/ui/button.tsx", "const t = 1;"),
+    sensitiveGlobs: ["src/**/ledger/*.ts"],
+  });
+  assert.equal(s.sensitivePath, false);
+});

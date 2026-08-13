@@ -854,21 +854,56 @@ drop. A failure only blocks the merge if "let Cavix request changes" is also on.
 
 ### Connect GitHub from the site (like CodeRabbit)
 
-Org owners never have to fiddle on the GitHub website. From the **Repositories** page:
+**Read this bit carefully — it is the single most misunderstood thing about GitHub,
+and getting it wrong is what makes the whole product look broken.**
 
-1. Click **Continue with GitHub** → GitHub asks them to authorize Cavix (the same
-   `read:org` + `user:email` consent screen CodeRabbit uses) → they're back on your site.
-2. Cavix lists **every organization they belong to** (plus their personal account) as
-   selectable chips.
-3. Pick an org → Cavix lists **all its repositories** with language, description, and
-   public/private. A search box filters them.
-4. Flip the **toggle** on any repo to enable Cavix reviews on it (or off to disable).
-   That's the whole setup — done from your site.
+GitHub has **two completely separate permissions**. Not one. Two. In GitHub's own
+words:
 
-> **The one unavoidable GitHub step:** installing the **GitHub App** itself shows a
-> one‑time GitHub consent screen (GitHub *requires* this — no tool, including
-> CodeRabbit, can bypass it). The dashboard gives owners an **"Install GitHub App ↗"**
-> button that deep‑links straight to it, so it's still one click from your site.
+> "You can install a GitHub App without authorizing the app. Similarly, you can
+> authorize the app without installing the app."
+
+|  | What it actually grants | Does GitHub show a repository picker? |
+|---|---|---|
+| **Authorize** (sign in) | Who you are: your name, your email | **No. There is no picker on that screen, and there never has been.** |
+| **Install** | Which **repositories** Cavix may read | **Yes.** Choose the account, then "All repositories" or "Only select repositories" |
+
+So: **"Continue with GitHub" does not connect any repositories.** It identifies the
+person. And because they already said yes to that once, GitHub says yes again
+instantly and sends them straight back — which *feels* like nothing happened, and is
+actually OAuth working exactly as designed.
+
+The flow from the **Repositories** page:
+
+1. Click **Add repositories** → GitHub shows the real consent screen: pick the
+   account or org, choose **All repositories** or **Only select repositories**,
+   review the permissions, click Install.
+2. They land back on your site with those repositories listed.
+3. Flip the **toggle** on any repo to enable Cavix reviews on it (or off to disable).
+   Cavix only reviews what you toggle on, even if GitHub granted it more.
+
+> **Changed their mind later?** Each org row has **Change repositories ↗**, which
+> goes to GitHub's configure page for that installation. That is the *only* place an
+> existing installation's repository list can be changed, and having no link to it is
+> most of why people said "GitHub never asks me anything".
+
+**Things the dashboard now says out loud, because guessing them is worse:**
+
+- Signed in but installed nowhere is shown as its own state, with an explanation.
+  It is **not** shown as "connected".
+- "Cavix can read **all repositories**, including ones added later" versus
+  "**3 repositories selected**" — these are different promises and the difference
+  decides whether a repo created tomorrow gets reviewed.
+- Installing into an org you do not own sends a **request to an owner**. Cavix says
+  so, rather than showing an empty list.
+- **Disconnect** revokes Cavix's authorization and deletes the stored credential. It
+  does **not** uninstall the app; only an account owner can do that from GitHub. The
+  message says so, because somebody who believes otherwise thinks Cavix has lost
+  access it still has.
+
+> ⚠️ **This needs four settings on the GitHub App itself, or none of it works.** See
+> **SETUP_KEYS.md § 4b**: Callback URL, Setup URL, "Request user authorization (OAuth)
+> during installation", and "Redirect on update".
 
 **Two modes, automatic:**
 - **Demo mode (zero setup):** if you haven't configured OAuth, "Continue with GitHub"
@@ -1052,11 +1087,15 @@ like CodeRabbit. Create it (~5 min):
    the OAuth callback just works; elsewhere set `CAVIX_PUBLIC_URL`.
 
 **The end‑user flow (all in the UI, no config):**
-1. **Log in** with GitHub (or email).
-2. On **Repositories**, each of their orgs shows either an **Install Cavix** button (if
-   the app isn't installed) or its repos. Install sends them to GitHub's one consent
-   screen and returns them to the dashboard automatically (the Setup URL).
+1. **Log in** with GitHub (or email). This identifies them and grants access to **no
+   code at all** — see the two-permissions table above.
+2. On **Repositories**, each org shows **Choose repositories** (not installed yet) or
+   **Change repositories ↗** (already installed). Either way GitHub renders the
+   account chooser and the "All repositories / Only select repositories" picker, then
+   returns them to the dashboard automatically via the Setup URL.
 3. They flip the **toggle** on each repo they want reviewed. That's saved to Postgres.
+   Turning a repo off in Cavix does not remove GitHub's grant, and vice versa: one is
+   "may Cavix read this", the other is "should Cavix review this".
 4. Open a PR on an **enabled** repo → Cavix reviews it. Disabled repos are **skipped by
    the execution gatekeeper** (the orchestrator checks the dashboard state before running
    a review). Fail‑closed by default; set `CAVIX_GATE_FAIL_OPEN=true` to review on a

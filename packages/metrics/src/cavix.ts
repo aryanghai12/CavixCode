@@ -138,7 +138,15 @@ export function createMetrics(version = "dev"): CavixMetrics {
  * dozen call sites means there is no call site that can forget.
  */
 export interface Recorder {
-  review(outcome: "posted" | "failed" | "skipped", seconds?: number): void;
+  /**
+   * `superseded` is its own outcome, not a kind of `skipped`.
+   *
+   * Skipped means Cavix chose not to review. Superseded means it reviewed, spent
+   * the tokens, and threw the result away because a newer commit arrived first.
+   * Collapsing the two hides the only signal that would show a team pushing
+   * faster than reviews complete.
+   */
+  review(outcome: "posted" | "failed" | "skipped" | "superseded", seconds?: number): void;
   stage(stage: StageName, seconds: number): void;
   stageFailed(stage: StageName): void;
   cost(usd: number): void;

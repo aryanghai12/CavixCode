@@ -2173,19 +2173,34 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 | §3.3.6 | Rename migration, with exact fingerprint recomputation or none at all | [ledger.ts](packages/review-session/src/ledger.ts), [diff.ts](packages/core/src/diff.ts) |
 | §3.3.7 | `<!-- cavix:inline:fp=… -->` on every inline comment, and a reader for it | [poster.ts](services/orchestrator/src/poster/poster.ts) |
 
+### Shipped in the second pass
+
+| Spec | What landed | Where |
+| :--- | :--- | :--- |
+| §3.3.5 | Single in-flight review slot per pull request: claim, supersede, uninterruptible posting, stale takeover, head-scoped failure release | [run.ts](packages/review-session/src/run.ts), [store.ts](services/control-plane/src/store.ts), [runs.ts](services/orchestrator/src/report/runs.ts) |
+| §3.3.7 | Inline comments reconciled by fingerprint: post only what is new, leave what is current, remove what the ledger cleared | [comments.ts](services/orchestrator/src/poster/comments.ts), [rest.ts](services/orchestrator/src/github/rest.ts) |
+| §2.10.1 | Repository rules from `.cavix/rules/*.md` and the convention files teams already write; glob selection, priority 95, never compressed | [rules.ts](packages/context/src/rules.ts) |
+
 ### Deliberately not built yet
 
 | Spec | Why not |
 | :--- | :--- |
-| §3.3.5 supersede + `review_run` table | Needs a schema migration and a change to how the orchestrator claims work. Highest-value remaining item: today a push during a review still posts two reviews |
-| §3.3.3 hot/warm/cold scoping | The ledger changes it depends on are in; the attention-narrowing itself is a separate change to the workflow |
-| §3.3.7 comment reconciliation | The fingerprint is now written and readable, but nothing yet lists existing comments and updates them in place |
-| §2.10.1 rules in the context block | Needs a `.cavix/rules` reader and the banded budget; the trust-level discipline it depends on is specified but not coded |
-| §3.2 graph persistence, new edge kinds, tree-sitter | Largest effort in the document and it changes no user-visible behaviour on its own |
+| §3.3.3 hot/warm/cold scoping | Everything it depends on is in: the ledger carries what earlier reviews left open, so narrowing attention is now *sound* rather than lossy. The narrowing itself is the next thing worth doing |
+| §3.2 graph persistence, new edge kinds, tree-sitter | Largest effort in the document. `allSymbolNames()` landed because the critic needs it; the rest changes no user-visible behaviour on its own |
 
-### One correction to §3.3.2 as specified
+### Corrections to the spec, made while building it
 
-The spec proposed a hunk-index fallback beneath the symbol region. That was dropped: hunk indices shift between reviews as lines move, so a hunk-keyed digest would carry findings on evidence about position rather than content. Regions are keyed by the enclosing symbol git names in the hunk header, and anything git could not name falls back to the whole-file digest, which is exactly the behaviour that shipped before. The result is strictly safer and never worse.
+**§3.3.2, region digests.** The spec proposed a hunk-index fallback beneath the symbol region. Dropped: hunk indices shift between reviews as lines move, so a hunk-keyed digest would carry findings on evidence about *position* rather than content. Regions are keyed by the enclosing symbol git names in the hunk header, and anything git could not name falls back to the whole-file digest, which is exactly the behaviour that shipped. Strictly safer, never worse.
 
-A consequence worth stating plainly: a finding in a hunk git labels with an import line still clears on a file-level change. The fix is real but it is bounded by what a hunk header can resolve, and §3.2's tree-sitter work is what widens it.
+A consequence worth stating plainly: a finding in a hunk git labels with an import line still clears on a file-level change. The fix is real but bounded by what a hunk header can resolve, and §3.2's tree-sitter work is what widens it.
+
+**§3.3.5, the claim state machine.** The spec's ordering checked "same commit" before "stale worker". That is wrong, and the bug it produces is nasty: a dead run holding the slot for its own commit makes every retry of that commit a duplicate *forever*, so the pull request silently stops being reviewed with nothing in any log to explain it. Stale takeover is checked first.
+
+The spec also did not say what happens when a review *fails*. Without an answer, a failed review holds the slot for the whole stale window and the retry that would have fixed it is turned away as a duplicate. There is now a release keyed on the commit, so a newer review that superseded the failed one keeps its claim.
+
+**§3.3.7, comment reconciliation.** The spec said "update the existing comment body" when a repeated finding's line moves. Not done, deliberately: rewriting a comment bumps its timestamp, re-notifies everyone subscribed, and moves it in the conversation as though something happened. Nothing happened. An unchanged finding is left exactly where it is.
+
+**§2.10.1, the banded context budget.** Not built. Rules carry priority 95 and are exempt from compression, which solves the case the bands existed for: a large diff evicting the team's own law, or a cheap model paraphrasing it. Reserved bands with borrowing are a real design with no demonstrated failure behind them yet.
+
+**Two bugs found while building, not in the spec at all.** `**` in a glob matched one-or-more directories rather than zero-or-more, so `src/**/auth/*.ts` did not match `src/auth/token.ts`; a glob that matches nothing is indistinguishable from one nobody configured. And the diff parser did not understand `rename from` / `rename to`, so a pure rename with no content change produced no `---`/`+++` lines and was dropped entirely, which is precisely the input §3.3.6 was written to handle.
 

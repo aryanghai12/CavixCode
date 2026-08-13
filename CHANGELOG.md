@@ -5,6 +5,196 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### GitHub asks people which repositories it may read, instead of silently signing them in
+
+Reported: *"I click Connect GitHub and nothing happens. CodeRabbit shows me a
+proper screen where I pick my repositories. Cavix just logs me in."*
+
+Nothing was broken. Cavix was walking through the wrong door.
+
+GitHub has two independent permissions, and it says so in as many words:
+*"You can install a GitHub App without authorizing the app. Similarly, you can
+authorize the app without installing the app."*
+
+- **Authorize** grants access to the signed-in *person*: their name, their email.
+  There is no repository picker on that screen and there never has been. Once
+  granted, GitHub honours it and redirects straight back, which is OAuth working
+  exactly as designed.
+- **Install** grants access to *repositories*, and always renders the account
+  chooser, the "All repositories / Only select repositories" control and the
+  permission list. It re-renders every time, because an installation is a
+  configuration rather than a one-time exchange.
+
+"Continue with GitHub" only ever ran the first one.
+
+- The primary action is now `GET /api/github/connect`, which sends people to the
+  install screen. `?target_id=` skips the account chooser when they already chose
+  an organisation inside Cavix.
+- `GET /api/github/setup` catches the return trip, which previously landed
+  nowhere at all. It **never trusts** `installation_id` from the query string:
+  GitHub's own documentation warns that bad actors can hit that URL with a
+  spoofed id, so the installation is verified by enumerating what the user can
+  actually see.
+- Signing in with zero installations now routes to the install flow rather than
+  dropping somebody on a dashboard with an empty Repositories page.
+- Every organisation row has a "Change repositories" link to GitHub's configure
+  page, which is the only place an existing installation's selection can be
+  changed. Without it there was no way back to the picker after the first
+  install, which is most of what "it never asks me anything" actually was.
+- `installation`, `installation_repositories` and `installation_target` webhooks
+  are consumed. Repository access used to be discovered only by polling the next
+  time somebody opened the dashboard, so between two page loads Cavix's idea of
+  its own reach and GitHub's could disagree with nothing anywhere noticing.
+- The dead `scope=repo` parameter is gone. A GitHub App's user token does not use
+  scopes, so GitHub discarded it on arrival: it read like an access control and
+  was not one. `prompt=select_account` and PKCE were added.
+- Disconnect revokes the grant properly, and says plainly that this does **not**
+  uninstall the app, because only an account owner can do that.
+
+**This needs four settings on the GitHub App itself**, or the code is inert. See
+SETUP_KEYS.md section 4b: Callback URL, Setup URL, "Request user authorization
+(OAuth) during installation", and "Redirect on update".
+
+### A push during a review no longer posts two reviews
+
+A second push while a review was running produced two reviews seconds apart. The
+older one was computed against a commit that no longer exists, so every line
+number in it pointed at whatever had since moved into that position, and the two
+raced to write the finding ledger; whichever landed last won.
+
+There is now at most one review of a pull request in flight, held in the
+control-plane. A newer commit supersedes the older run, which discards its work
+rather than posting it. Three rules keep it honest:
+
+- A run that has begun **posting** is never interrupted. A pull request carrying
+  three inline comments and no review body is worse than a late review.
+- A run whose worker stopped reporting is taken over after twenty minutes and
+  recorded as *failed*, not superseded: nothing newer replaced it, it died, and
+  those read very differently when working out why a review never appeared.
+- A failed review releases its slot immediately, keyed on its commit so it cannot
+  free a newer review's claim. Without that, one failure wedged the pull request
+  for the whole stale window and the retry that would have fixed it was turned
+  away as a duplicate.
+
+A control-plane that cannot be reached never blocks a review. The cost of that
+choice is the old behaviour, which is far better than reviewing nothing.
+
+### Findings are no longer cleared by an edit somewhere else in the file
+
+A finding at line 40 was marked "fixed" when somebody edited line 900 of the same
+file and the reviewer happened not to mention it again. The file moved. The
+finding's code did not, and that was always the question being asked.
+
+Digests are now taken per region, keyed by the enclosing symbol git writes into
+the hunk header. A hunk git could not name falls back to the whole-file digest,
+which is exactly the behaviour that shipped, so this is strictly safer and never
+worse.
+
+Two more paths that silently emptied the ledger are closed:
+
+- **Rebase and force-push.** Every hunk differs after a rebase because the base
+  moved, so every open finding used to clear at once without a line of anybody's
+  code being fixed. Detected now, and the review says so out loud rather than
+  leaving the author to wonder why their fix went unacknowledged.
+- **Renames.** A renamed file made every finding in it simultaneously "fixed" and
+  "newly raised", so a review claimed credit for four fixes on a push that
+  renamed a file. Findings now follow their file, with the identity recomputed
+  exactly or not at all.
+
+### One inline comment per finding, not one per push
+
+Six pushes on a three-finding pull request left eighteen inline comments, all
+saying the same three things, and the only way to tell which were current was to
+read the timestamps. The ledger could be perfectly correct while the page was
+nonsense, and the reader believes the page.
+
+Every inline comment now carries a hidden fingerprint of the finding it was
+written for. A later review leaves an existing comment exactly where it is, posts
+only what is new, and removes a comment whose finding the ledger **cleared**.
+Silence is still not resolution: a finding nobody mentioned keeps its comment,
+for the same reason the ledger keeps the finding.
+
+Comments Cavix did not write, and comments from before fingerprints existed, are
+never touched.
+
+### A reviewer that cannot cite a line it invented
+
+Three hallucination classes are now caught by a program rather than by a model,
+so they cost nothing and never vary: a finding in a file the change does not
+touch, a line past the end of a file, and a symbol that exists nowhere in the
+code the review actually read.
+
+The screen runs **before** clustering, and that ordering is the point.
+Adjudication treats independent agreement as confirmation and raises confidence
+for it; for models of one family reading one context that independence is largely
+fictional. They agree on the same hallucination and the bonus used to push it
+past the threshold. Agreement is evidence about the models, not about the code.
+
+A cited symbol that resolves nowhere is treated as *repairable*, not
+*unsupported*: the claim may well be true and the corpus simply incomplete, so it
+is trusted less and still posted. Deterministic findings and policy findings are
+never touched by the critic. A linter does not hallucinate.
+
+### Reviews know the team's own rules
+
+Cavix knew a great deal about the code and nothing about the team. It could see
+that a handler builds a SQL string; it could not know this repository decided
+handlers never touch SQL, wrote it down, and has been enforcing it by hand in
+every review since.
+
+`.cavix/rules/*.md` are read, and so are `CLAUDE.md`, `AGENTS.md`,
+`CONVENTIONS.md`, `CONTRIBUTING.md` and `.cursorrules`, because teams have been
+writing those for years and asking for a second copy means the second copy
+drifts. Selection is a glob match against the changed paths and nothing else: the
+same change loads the same rules, every time.
+
+Rules sit above every piece of code context and below only the diff, and they are
+never compressed. Paraphrasing somebody's standard through a cheap model and then
+enforcing the paraphrase is indefensible.
+
+Enforcement defaults to advisory, so a rule file landing in a repository cannot
+start holding merges the moment it arrives.
+
+### Model routing follows the work, not the worker
+
+The tier map routed on who was asking: a security agent was always frontier, a
+standards agent always cheap, whatever they were looking at. Most diffs are
+boring in every category, and a few are dangerous in categories nobody marked as
+expensive.
+
+Routing now escalates a cheap agent on measured signals: blast radius, a
+security-sensitive path, concurrency, an exported signature change. It is
+one-directional by design. Nothing demotes a frontier agent, because quietly
+demoting a security review on a quiet diff to save a fraction of a cent is how a
+security review comes back clean with nobody good having read it.
+
+### The review comment answers four more questions
+
+- **Since your last push** sits under the verdict: what cleared, what is new,
+  what is still open, and how many files were *not* re-read. That last row is
+  what earns trust in incremental review.
+- **Impact Scope** states what the change reaches, and always discloses how the
+  edges were resolved. It never prints a zero: "0 call sites" reads as "nothing
+  calls this", which is exactly the wrong thing to say when the truth is that the
+  indexer did not run.
+- **Security Risks** is separated out for a different reader with different
+  urgency, and restates rather than relocates.
+- **Architectural Feedback** is last, capped at three, and never blocking.
+  Design opinions above defects train people to skim past the defects.
+
+The footer now names the tier mix, so cost is legible without printing token
+counts nobody can act on.
+
+### Fixed
+
+- `**` in a glob now matches zero directories as well as several, so
+  `src/**/auth/*.ts` matches `src/auth/token.ts`. A glob that matches nothing was
+  indistinguishable from one nobody configured.
+- The diff parser understands `rename from` / `rename to` and git's similarity
+  index, including a pure rename with no content change, which produces no
+  `---`/`+++` lines at all and was previously dropped entirely.
+
+
 ### Founder access: identity that does not silently drift, and a default that fails closed
 
 Reported: *"I set my email in `CAVIX_ADMIN_EMAILS` on Render, it is the same email

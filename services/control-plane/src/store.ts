@@ -2,7 +2,19 @@ import { randomUUID } from "node:crypto";
 import type { Finding, Severity } from "@cavix/core";
 import { computeOrgRollup, InMemoryAnalyticsStore, type ReviewEvent } from "@cavix/analytics";
 import { calibrate, type DecisionRecord, type OrgCalibration } from "@cavix/learning";
-import { coerceLedger, reviewBudget, type Budget, type PrLedger } from "@cavix/review-session";
+import {
+  beginPosting,
+  coerceLedger,
+  decideClaim,
+  finishRun,
+  isActive,
+  reviewBudget,
+  type Budget,
+  type ClaimOutcome,
+  type ClaimRequest,
+  type PrLedger,
+  type ReviewRun,
+} from "@cavix/review-session";
 import type { RetentionAttestation } from "@cavix/zero-retention";
 import { hashPassword, verifyPassword, encryptSecret, decryptSecret, fingerprint } from "./auth.ts";
 
@@ -456,6 +468,39 @@ export interface Store {
   getInstallation(id: number): Installation | undefined;
   /** Forget one, on `installation.deleted`. */
   removeInstallation(id: number): void;
+  // --- review runs: at most one review of a pull request in flight ---
+  /**
+   * Ask to run a review. Returns what the caller should do.
+   *
+   * The single-in-flight rule lives here rather than in whoever happens to call,
+   * so there is one place to be right about it.
+   */
+  claimReviewRun(org: string, repo: string, pr: number, req: ClaimRequest): ClaimOutcome;
+  /** What holds the slot right now, if anything. */
+  getReviewRun(org: string, repo: string, pr: number): ReviewRun | undefined;
+  /** Keep a long review's claim alive, and learn whether it still holds it. */
+  touchReviewRun(org: string, repo: string, pr: number, runId: string): ReviewRun | undefined;
+  /** Move into the state nothing may interrupt. */
+  beginPostingRun(org: string, repo: string, pr: number, runId: string): ReviewRun | undefined;
+  /** Release the slot. */
+  finishReviewRun(
+    org: string,
+    repo: string,
+    pr: number,
+    runId: string,
+    status: "completed" | "failed" | "cancelled",
+    reason?: string,
+  ): ReviewRun | undefined;
+  /**
+   * Release the slot for a given COMMIT rather than a given run id.
+   *
+   * For the failure path, which has lost the run id by the time it runs. Keyed
+   * on the head SHA so it cannot release a NEWER review that superseded this
+   * one: that run holds a different commit, and freeing its slot would let a
+   * third push start a second concurrent review of the same pull request.
+   */
+  failReviewRunForHead(org: string, repo: string, pr: number, headSha: string, reason?: string): ReviewRun | undefined;
+
   /** Apply an `installation_repositories` delta. */
   updateInstallationRepos(
     id: number,
@@ -670,6 +715,15 @@ const MAX_CI_RUNS_PER_REPO = 400;
  */
 const MAX_PR_LEDGERS = 20_000;
 
+/**
+ * Cap on remembered review runs.
+ *
+ * Only FINISHED rows are ever dropped. An active row is what stops a second
+ * review of that pull request, and evicting one would produce exactly the
+ * duplicate the whole mechanism exists to prevent.
+ */
+const MAX_REVIEW_RUNS = 20_000;
+
 export class InMemoryStore implements Store {
   private orgs = new Map<string, Org>();
   private repos = new Map<string, Repo>();
@@ -696,6 +750,8 @@ export class InMemoryStore implements Store {
   private platformTokens = new Map<string, string>();
   private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
   private installations = new Map<number, Installation>();
+  /** "org repo pr" -> whichever review holds the single in-flight slot. */
+  private reviewRuns = new Map<string, ReviewRun>();
   /**
    * Pending round trips. Deliberately NOT in the snapshot: they live ten
    * minutes, and a restart losing one costs somebody a second click, while
@@ -1180,6 +1236,96 @@ export class InMemoryStore implements Store {
 
   removeInstallation(id: number): void {
     this.installations.delete(id);
+  }
+
+  // ---------- review runs ----------
+
+  claimReviewRun(org: string, repo: string, pr: number, req: ClaimRequest): ClaimOutcome {
+    const key = this.prKey(org, repo, pr);
+    const outcome = decideClaim(this.reviewRuns.get(key), req);
+    if (outcome.decision === "claimed") {
+      this.reviewRuns.set(key, outcome.run);
+      this.trimReviewRuns();
+    }
+    return outcome;
+  }
+
+  getReviewRun(org: string, repo: string, pr: number): ReviewRun | undefined {
+    return this.reviewRuns.get(this.prKey(org, repo, pr));
+  }
+
+  touchReviewRun(org: string, repo: string, pr: number, runId: string): ReviewRun | undefined {
+    const key = this.prKey(org, repo, pr);
+    const run = this.reviewRuns.get(key);
+    // Only the holder may keep it alive. A run that has already lost the slot
+    // must not be able to take it back by reporting in.
+    if (!run || run.runId !== runId || !isActive(run.status)) return run;
+    const next = { ...run, updatedAt: new Date().toISOString() };
+    this.reviewRuns.set(key, next);
+    return next;
+  }
+
+  beginPostingRun(org: string, repo: string, pr: number, runId: string): ReviewRun | undefined {
+    const key = this.prKey(org, repo, pr);
+    const run = this.reviewRuns.get(key);
+    if (!run || run.runId !== runId || !isActive(run.status)) return run;
+    const next = beginPosting(run);
+    this.reviewRuns.set(key, next);
+    return next;
+  }
+
+  finishReviewRun(
+    org: string,
+    repo: string,
+    pr: number,
+    runId: string,
+    status: "completed" | "failed" | "cancelled",
+    reason?: string,
+  ): ReviewRun | undefined {
+    const key = this.prKey(org, repo, pr);
+    const run = this.reviewRuns.get(key);
+    // A superseded run reporting completion must NOT overwrite the newer run
+    // that took its slot, or the newer review's claim disappears and a third
+    // push would see a free slot beside a review that is still running.
+    if (!run || run.runId !== runId) return run;
+    const next = finishRun(run, status, reason);
+    this.reviewRuns.set(key, next);
+    return next;
+  }
+
+  failReviewRunForHead(
+    org: string,
+    repo: string,
+    pr: number,
+    headSha: string,
+    reason?: string,
+  ): ReviewRun | undefined {
+    const key = this.prKey(org, repo, pr);
+    const run = this.reviewRuns.get(key);
+    // Only if this commit still holds the slot. A newer review that superseded
+    // this one owns a different commit, and releasing it would let a third push
+    // start a second concurrent review of the same pull request.
+    if (!run || run.headSha !== headSha || !isActive(run.status)) return run;
+    const next = finishRun(run, "failed", reason);
+    this.reviewRuns.set(key, next);
+    return next;
+  }
+
+  /**
+   * Hold the run table to a bounded size, dropping finished rows first.
+   *
+   * An active row is never dropped: it is the thing stopping a second review of
+   * that pull request, and evicting one to save space would produce exactly the
+   * duplicate this whole mechanism exists to prevent.
+   */
+  private trimReviewRuns(): void {
+    if (this.reviewRuns.size <= MAX_REVIEW_RUNS) return;
+    const finished = [...this.reviewRuns.entries()]
+      .filter(([, r]) => !isActive(r.status))
+      .sort((a, b) => a[1].updatedAt.localeCompare(b[1].updatedAt));
+    for (const [key] of finished.slice(0, this.reviewRuns.size - MAX_REVIEW_RUNS)) {
+      this.reviewRuns.delete(key);
+    }
   }
 
   updateInstallationRepos(

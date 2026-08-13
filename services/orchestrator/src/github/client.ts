@@ -167,6 +167,14 @@ export const REVIEW_MARKER = "<!-- cavix:review -->";
  */
 export const INLINE_MARKER = "<!-- cavix:inline -->";
 
+/** One of Cavix's own inline comments, as read back off the pull request. */
+export interface OwnInlineComment {
+  id: number;
+  body: string;
+  path?: string;
+  line?: number;
+}
+
 /** One of Cavix's own past reviews on a pull request. */
 export interface OwnReview {
   id: number;
@@ -336,6 +344,16 @@ export interface ReviewPlatform {
   dismissReview(ref: PullRef, reviewId: number, message: string): Promise<void>;
   /** Inline comment ids belonging to the given reviews of ours. */
   listReviewCommentIds(ref: PullRef, reviewIds: number[]): Promise<number[]>;
+  /**
+   * Cavix's own inline comments on this pull request, WITH their bodies.
+   *
+   * Optional, so a platform client that has no way to read them is simply a
+   * client that does not reconcile comments; it posts a fresh set as it always
+   * did. The bodies are the point: each one carries the hidden fingerprint of
+   * the finding it was written for, which is the only way to tell "this comment
+   * is already on the page" from "this is a new problem".
+   */
+  listOwnInlineComments?(ref: PullRef): Promise<OwnInlineComment[]>;
   /** Delete one inline review comment. Idempotent: a missing one is a success. */
   deleteReviewComment(ref: PullRef, commentId: number): Promise<void>;
   /**
