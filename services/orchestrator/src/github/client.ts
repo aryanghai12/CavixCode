@@ -354,6 +354,21 @@ export interface ReviewPlatform {
    * is already on the page" from "this is a new problem".
    */
   listOwnInlineComments?(ref: PullRef): Promise<OwnInlineComment[]>;
+  /**
+   * The diff between two commits on this pull request.
+   *
+   * Optional, so a platform that cannot answer simply never narrows a re-review
+   * and reads the whole pull request as it always did.
+   *
+   * This is what a re-review needs in order to know which files THIS push
+   * changed. The ordinary diff is `base...head`, which is the right thing to
+   * form a verdict over and the wrong thing to decide what to read again: on the
+   * tenth push of a forty-file pull request it says all forty changed.
+   *
+   * Returns an empty string rather than throwing when the comparison cannot be
+   * made, because the caller's fallback (read everything) is always correct.
+   */
+  fetchCompareDiff?(ref: PullRef, fromSha: string, toSha: string): Promise<string>;
   /** Delete one inline review comment. Idempotent: a missing one is a success. */
   deleteReviewComment(ref: PullRef, commentId: number): Promise<void>;
   /**

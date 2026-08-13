@@ -2181,12 +2181,31 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 | §3.3.7 | Inline comments reconciled by fingerprint: post only what is new, leave what is current, remove what the ledger cleared | [comments.ts](services/orchestrator/src/poster/comments.ts), [rest.ts](services/orchestrator/src/github/rest.ts) |
 | §2.10.1 | Repository rules from `.cavix/rules/*.md` and the convention files teams already write; glob selection, priority 95, never compressed | [rules.ts](packages/context/src/rules.ts) |
 
+### Shipped in the third pass
+
+| Spec | What landed | Where |
+| :--- | :--- | :--- |
+| §3.3.3 | `scopeFor`: hot / warm / cold classification, with every unsafe case falling back to reading the whole pull request | [scope.ts](packages/review-session/src/scope.ts) |
+| §3.3.3 | `fetchCompareDiff`, so "what did this push change" is a measured fact rather than the whole diff restated | [rest.ts](services/orchestrator/src/github/rest.ts) |
+
 ### Deliberately not built yet
 
 | Spec | Why not |
 | :--- | :--- |
-| §3.3.3 hot/warm/cold scoping | Everything it depends on is in: the ledger carries what earlier reviews left open, so narrowing attention is now *sound* rather than lossy. The narrowing itself is the next thing worth doing |
+| §3.3.3, the second half: actually narrowing what the MODEL reads | The classification is built, tested and reporting accurately. Feeding only the hot files to the model needs the ledger fetched *before* the review runs rather than after it, which is a real restructure of the workflow's step order. Doing that blind, at the end of a long session, straight after two production incidents, is how a third one happens |
 | §3.2 graph persistence, new edge kinds, tree-sitter | Largest effort in the document. `allSymbolNames()` landed because the critic needs it; the rest changes no user-visible behaviour on its own |
+
+### Bugs found by auditing the work above
+
+Four, all introduced by the earlier passes, all found by re-reading rather than by a test failing.
+
+**The heartbeat could keep a dead claim alive.** A review that throws never reaches the clear on the success path. The failure path releases the claim, but if *that* was the call that could not reach the control-plane, the timer kept beating and kept refreshing a dead run's claim, for up to two hours. That is a worse version of the exact wedge the heartbeat was added to prevent. It now stops the moment the control-plane says the claim is no longer ours, and `stillMine` answers true when it cannot reach the control-plane, so a network blip never kills a live review.
+
+**The critic downgraded legitimate off-diff findings.** It reasoned "the diff only reaches line 40, so line 400 is suspicious" whenever the file's real length was unknown. That punishes exactly the findings worth keeping: a change that breaks a caller further down the file anchors outside the diff, and in a 500-line file whose diff touches lines 1 to 8, every one of those correct findings looked suspicious. The range check now runs only where the length is a fact.
+
+**The deferral message promised a retry nothing performed.** It said a queued review "runs on its own in a moment". Returning normally takes the job off the queue, so nothing brought it back. It now asks the person to comment again, which is true.
+
+**The delta section reported a meaningless number.** `filesReread` was derived from the whole `base...head` diff, so on the tenth push of a forty-file pull request the review claimed it re-read forty files. Technically true and useless: it says the same thing on every push whatever anybody did. It now reports what the push actually touched.
 
 ### Corrections to the spec, made while building it
 

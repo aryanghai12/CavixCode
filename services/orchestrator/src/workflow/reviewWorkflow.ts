@@ -42,6 +42,8 @@ import {
   reconcile,
   openEntries,
   dismissAll,
+  scopeFor,
+  openInSkippedFiles,
   HEARTBEAT_EVERY_MS,
   type LedgerEntry,
 } from "@cavix/review-session";
@@ -510,8 +512,12 @@ export async function runReview(
       return emptyOutcome(0, "a review of this commit was already running");
     }
     if (outcome.decision === "wait") {
-      // Mid-post, and a half-written review is worse than a late one. The queue
-      // brings this back; the next attempt finds the slot free.
+      // Mid-post, and a half-written review is worse than a late one.
+      //
+      // The job ENDS here rather than being retried. Returning normally is what
+      // takes it off the queue, so nothing brings it back on its own, and the
+      // message below has to say that honestly: telling somebody "it runs on its
+      // own in a moment" when nothing will is a worse failure than the delay.
       log.info("an earlier review of this pull request is still posting; deferring", {
         ...base,
         holder: outcome.active.runId,
@@ -541,16 +547,26 @@ export async function runReview(
     // window can be short: a holder whose process was restarted or redeployed
     // frees the pull request in a couple of minutes rather than twenty.
     //
-    // It stops itself. A review that throws never reaches the clear below, and a
-    // timer left running in a long-lived worker would keep a dead claim alive
-    // forever, which is the exact failure this is meant to end.
+    // It stops itself, two ways, and it has to.
+    //
+    // A review that THROWS never reaches the clear below. The failure path
+    // releases the claim, but if that call is the one that could not reach the
+    // control-plane, a timer still beating would keep a dead claim alive for as
+    // long as it ran, which is a worse version of the exact wedge this exists to
+    // prevent. So the heartbeat also stops the moment the control-plane says the
+    // claim is no longer ours: superseded, failed, or taken over. `stillMine`
+    // answers TRUE when it cannot reach the control-plane, so an ordinary
+    // network blip never kills a live review's claim.
     let beats = 0;
     heartbeat = setInterval(() => {
       if (++beats > MAX_HEARTBEATS) {
         if (heartbeat) clearInterval(heartbeat);
         return;
       }
-      void deps.runs?.touch(runRef, runId);
+      // One request, not two: `stillMine` IS the touch, and reads the answer.
+      void deps.runs?.stillMine(runRef, runId).then((mine) => {
+        if (!mine && heartbeat) clearInterval(heartbeat);
+      });
     }, HEARTBEAT_EVERY_MS);
     // Never hold the process open waiting for a heartbeat.
     heartbeat.unref?.();
@@ -899,16 +915,53 @@ export async function runReview(
       // pull request past its first review, and answering it used to mean
       // scrolling back and diffing two Cavix comments by eye.
       if (state.ledger.lastHeadSha && state.ledger.lastHeadSha !== ref.headSha) {
-        const touched = new Set(parseUnifiedDiff(diff).map((f) => f.path));
-        const openPaths = new Set(folded.ledger.entries.filter((e) => e.state === "open").map((e) => e.path));
+        // What THIS push changed, which is not what the pull request contains.
+        //
+        // The numbers here used to be derived from the whole `base...head` diff,
+        // so on the tenth push of a forty-file pull request the review claimed
+        // it had re-read forty files. It had, but "re-read" was then a
+        // meaningless word: it says the same thing on every push regardless of
+        // what anybody did, which is worse than saying nothing.
+        let deltaDiff = "";
+        if (deps.github.fetchCompareDiff) {
+          try {
+            deltaDiff = await deps.github.fetchCompareDiff(ref, state.ledger.lastHeadSha, ref.headSha);
+          } catch {
+            // Reading everything is always correct, so this costs nothing but a
+            // less precise sentence on the pull request.
+          }
+        }
+        const scope = scopeFor({
+          verdictDiff: diff,
+          deltaDiff,
+          ledger: folded.ledger,
+          priorHeadSha: state.ledger.lastHeadSha,
+          headSha: ref.headSha,
+          // A rewritten history means earlier reviews were formed against
+          // premises that no longer exist, so nothing about them can be relied
+          // on to decide what is safe to skip.
+          ...(folded.historyRewritten ? { forceFull: "the history was rewritten" } : {}),
+          ...(overrides.fresh ? { forceFull: "a fresh review was asked for" } : {}),
+        });
         reviewDelta = {
           fromSha: state.ledger.lastHeadSha,
           toSha: ref.headSha,
-          filesReread: touched.size,
-          // Files carrying an open finding that this push did not touch. Stated
-          // because a reviewer has to know what was NOT looked at again.
-          unchangedFiles: [...openPaths].filter((p) => !touched.has(p)).length,
+          filesReread: scope.hot.length,
+          // Files in the pull request this push did not touch. Stated because a
+          // reviewer has to know what was NOT looked at again, and because it is
+          // the row that makes an incremental review trustworthy rather than
+          // merely cheap.
+          unchangedFiles: scope.warm.length + scope.cold.length,
         };
+        if (scope.narrowed) {
+          log.info("this push changed part of the pull request", {
+            ...base,
+            hot: scope.hot.length,
+            warm: scope.warm.length,
+            cold: scope.cold.length,
+            open_in_files_not_re_read: openInSkippedFiles(folded.ledger, scope).length,
+          });
+        }
       }
       // Written back ONLY when the read succeeded, and this is not a detail.
       //
@@ -1111,7 +1164,7 @@ export async function runReview(
   // Skipped entirely on a fresh review, which has just deleted everything, and
   // on any platform that cannot read its own comments back.
   let submission = built.submission;
-  if (!overrides.fresh && deps.github.listOwnInlineComments && submission.comments.length >= 0) {
+  if (!overrides.fresh && deps.github.listOwnInlineComments) {
     try {
       const existing = await deps.github.listOwnInlineComments(ref);
       if (existing.length > 0) {
@@ -1484,8 +1537,8 @@ async function sayDeferred(deps: ReviewWorkflowDeps, job: ReviewJob, ref: PullRe
     deps,
     job,
     ref,
-    "**Queued.** Cavix is still posting an earlier review of this pull request, so this one is waiting " +
-      "for that to finish rather than cutting it in half. It runs on its own in a moment, and nothing was lost.",
+    "**Not started.** Cavix is still posting an earlier review of this pull request, and interrupting it " +
+      "would leave half a review on the page. Comment `@cavixcode review` again in a moment and it will run.",
   );
 }
 

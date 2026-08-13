@@ -393,6 +393,28 @@ export class RestGitHubClient implements ReviewPlatform {
     return out;
   }
 
+  /**
+   * The diff between two commits, for deciding what a re-review has to read
+   * again. Never throws: the caller's fallback is to read everything, which is
+   * always correct, so a failure here costs tokens rather than coverage.
+   */
+  async fetchCompareDiff(ref: PullRef, fromSha: string, toSha: string): Promise<string> {
+    if (!fromSha || !toSha || fromSha === toSha) return "";
+    try {
+      const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/compare/${encodeURIComponent(fromSha)}...${encodeURIComponent(toSha)}`;
+      const res = await this.fetchImpl(url, {
+        headers: await this.headers(ref, "application/vnd.github.diff"),
+      });
+      // 404 is ordinary rather than exceptional: after a force-push the old
+      // commit can be gone entirely, which is exactly a case where reading the
+      // whole pull request again is the right answer.
+      if (!res.ok) return "";
+      return await res.text();
+    } catch {
+      return "";
+    }
+  }
+
   async deleteReviewComment(ref: PullRef, commentId: number): Promise<void> {
     const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/pulls/comments/${commentId}`;
     const res = await this.fetchImpl(url, {

@@ -5,6 +5,50 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed: four bugs found by auditing the last two releases
+
+None of these were caught by a test. All four were found by re-reading the code
+that shipped, which is the point worth recording.
+
+- **The heartbeat could keep a dead claim alive for two hours.** A review that
+  throws never reaches the clear on the success path. The failure path releases
+  the claim, but if that was the call that could not reach the control-plane, the
+  timer kept beating and kept refreshing a dead run's claim. That is a worse
+  version of the exact wedge the heartbeat was added to prevent. It now stops the
+  moment the control-plane says the claim is no longer ours, and a network blip
+  still never kills a live review's claim.
+- **The critic downgraded legitimate off-diff findings.** It reasoned "the diff
+  only reaches line 40, so line 400 is suspicious" whenever the file's real
+  length was unknown. That punishes exactly the findings worth keeping: a change
+  that breaks a caller further down the file anchors outside the diff, and in a
+  500-line file whose diff touches lines 1 to 8, every correct finding looked
+  suspicious. The range check now runs only where the length is a fact.
+- **A deferred command promised a retry that nothing performed.** It said the
+  review "runs on its own in a moment". Returning normally takes the job off the
+  queue, so nothing brought it back. It now asks the person to comment again,
+  which is true.
+- **"Since your last push" reported a meaningless file count.** It was derived
+  from the whole `base...head` diff, so on the tenth push of a forty-file pull
+  request the review claimed it had re-read forty files. Technically true and
+  useless: it said the same thing on every push whatever anybody did.
+
+### Re-reviews know which files a push actually changed
+
+Cavix now fetches the diff between the previous review's commit and this one, and
+classifies every file in the pull request as hot (this push changed it), warm
+(untouched, but carrying an open finding) or cold (untouched, nothing open).
+
+The verdict domain is never narrowed. `hot + warm + cold` is always the complete
+pull request, because the merge introduces all of it, and the check run still
+gates on everything the ledger holds open. Only the *description* of what
+happened gets more precise: "4 files re-read, 6 unchanged since the last review"
+is now a measurement instead of a restatement of the pull request's size.
+
+Every case where narrowing would be unsound falls back to reading everything and
+says why: a rebase or force-push, an explicit `@cavixcode review`, a delta that
+could not be computed, or two diffs that disagree about which files changed.
+
+
 ### Fixed: a model refusal was being posted as a clean pass
 
 Seen on a live pull request. The model answered:

@@ -165,3 +165,23 @@ test("identifiersIn ignores paths, spaces and short names", () => {
   assert.deepEqual(identifiersIn("see `src/api/refund.ts` and `a b` and `id`"), []);
   assert.deepEqual(identifiersIn("call `loadOrder` then `issue_credit`"), ["loadOrder", "issue_credit"]);
 });
+
+test("a legitimate off-diff finding deep in a long file is not downgraded", () => {
+  // The heuristic this replaces said "the diff only reaches line 40, so line 400
+  // is suspicious". It punished exactly the findings worth keeping: a change
+  // that breaks a caller further down the file anchors outside the diff, and in
+  // a five-hundred-line file every one of those correct findings looked "well
+  // beyond anything the diff shows".
+  const f = finding({ title: "Caller breaks", line: 480 });
+  const [r] = screen([f], { diff: DIFF });
+  assert.equal(r.verdict, "SUPPORTED");
+  assert.equal(r.checks.lineInRange, true);
+});
+
+test("with the real file length known, past the end is still caught", () => {
+  const [r] = screen([finding({ title: "Ghost", line: 480 })], {
+    diff: DIFF,
+    fileLines: new Map([["src/api/refund.ts", 300]]),
+  });
+  assert.equal(r.verdict, "UNSUPPORTED");
+});

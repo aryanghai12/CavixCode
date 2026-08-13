@@ -59,3 +59,10 @@ export {
   type Budget,
   type BudgetInput,
 } from "./budget.ts";
+
+export {
+  scopeFor,
+  openInSkippedFiles,
+  type ReviewScope,
+  type ScopeInput,
+} from "./scope.ts";

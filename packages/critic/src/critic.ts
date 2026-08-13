@@ -61,19 +61,6 @@ function diffText(files: DiffFile[]): string {
 }
 
 /**
- * The largest new-file line number the diff proves exists in a file.
- *
- * A lower bound, never an upper one: a file certainly has at least this many
- * lines, and may have far more outside the diff. Used only to widen the range a
- * finding is allowed to point at.
- */
-function maxKnownLine(f: DiffFile): number {
-  let max = 0;
-  for (const h of f.hunks) max = Math.max(max, h.newStart + h.newLines);
-  return max;
-}
-
-/**
  * Screen a batch of draft findings against what the reviewer was actually shown.
  *
  * Pure and synchronous. Every verdict here is a computed fact, so it can run on
@@ -113,7 +100,6 @@ export function screen(
     // 2. Phantom line. Only decidable where the file's real length is known;
     //    a finding may legitimately point at a line outside the diff.
     const total = corpus.fileLines?.get(f.path);
-    const ceiling = total ?? (file ? Math.max(maxKnownLine(file), 0) : 0);
     if (f.line <= 0) {
       checks.lineInRange = false;
       verdict = "UNSUPPORTED";
@@ -122,14 +108,20 @@ export function screen(
       checks.lineInRange = false;
       verdict = "UNSUPPORTED";
       objections.push(`line ${f.line} is past the end of \`${f.path}\`, which has ${total} lines`);
-    } else if (total === undefined && file && ceiling > 0 && f.line > ceiling * LINE_SLACK) {
-      // The file's true length is unknown, so this is a suspicion rather than a
-      // fact: the line is far beyond anything the diff shows. It lowers
-      // confidence and never deletes the finding on its own.
-      checks.lineInRange = false;
-      if (verdict === "SUPPORTED") verdict = "REPAIRABLE";
-      objections.push(`line ${f.line} is well beyond anything the diff shows for \`${f.path}\``);
     }
+    // Nothing is inferred from the line number when the file's real length is
+    // unknown, and the reason is worth writing down.
+    //
+    // The obvious heuristic is "the diff only reaches line 8, so line 400 is
+    // suspicious". It is wrong, and it punishes exactly the findings worth
+    // keeping. A finding anchored OUTSIDE the diff is legitimate and common: the
+    // change breaks a caller further down the file, or a defect sits in code the
+    // diff merely touches the edge of. In a five-hundred-line file whose diff
+    // touches lines 1 to 8, every one of those correct findings looks "well
+    // beyond anything the diff shows".
+    //
+    // So the range check runs only where the length is a fact. No measurement,
+    // no claim, which is the same rule the rest of this pipeline follows.
 
     // 3. Phantom symbol. Resolved against the diff, the assembled context, and
     //    the AST index together, because a legitimate cross-file reference comes
@@ -159,15 +151,6 @@ export function screen(
     };
   });
 }
-
-/**
- * How far past the deepest line in the diff a finding may point before the
- * critic gets suspicious, when the file's real length is unknown.
- *
- * Generous on purpose. A finding legitimately anchored outside the diff is
- * common; one anchored at four times the deepest changed line is not.
- */
-const LINE_SLACK = 4;
 
 /** Whole-identifier match, so `refund` does not resolve against `refundTotal`. */
 function containsWord(haystack: string, word: string): boolean {
