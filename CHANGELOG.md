@@ -5,6 +5,50 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed: a routine Postgres restart killed the whole control plane
+
+From a live deploy:
+
+```
+error: terminating connection due to administrator command
+Emitted 'error' event on Client instance at:
+    at Client._handleErrorEvent (/node_modules/pg/lib/client.js:417:10)
+```
+
+Postgres error `57P01`. The database did nothing wrong: managed providers close
+connections routinely for maintenance, failover, idle timeouts and plan changes.
+
+Cavix held a single long-lived `pg.Client` with no `'error'` listener. An
+EventEmitter with no listener for `'error'` **throws**, and an unhandled throw at
+the top level takes the process with it. So an ordinary maintenance window did
+not degrade the dashboard, it killed it, and this process is the whole product's
+memory: every review's ledger lookup fails with it, and every orchestrator claim,
+so the next review posts a verdict with no idea what earlier reviews left open.
+
+Three changes, at three depths:
+
+- **A pool instead of one client.** A pool discards a broken connection and opens
+  a new one on the next query, so a dropped connection costs one query rather
+  than the process. Sized small (4) and with a 30 second idle timeout, so the
+  pool retires a connection before a managed provider does.
+- **An `on("error")` handler**, which is required even with a pool: idle clients
+  in the pool emit errors too, and an unhandled one is exactly as fatal.
+- **A process-level net**, logging unhandled rejections and uncaught exceptions
+  at error level with the stack, and continuing. The trade is deliberate:
+  continuing after an unexpected error risks acting on odd state, while exiting
+  guarantees downtime for everything. For a process whose durable state is a
+  snapshot it re-reads at boot, staying up is the better bet, and neither case
+  hides.
+
+Also silenced the `pg` deprecation warning properly rather than ignoring it.
+`pg` now warns that it will read `sslmode=require` as `verify-full`, a stricter
+mode that rejects the self-signed chains managed providers hand out. Cavix
+already passes an explicit TLS config, so the URL parameter and that object were
+making competing claims and a future `pg` release would have decided which one
+wins, probably by failing to connect. The parameter is now stripped when TLS is
+configured in code, leaving exactly one statement about TLS.
+
+
 ### Fixed: four bugs found by auditing the last two releases
 
 None of these were caught by a test. All four were found by re-reading the code

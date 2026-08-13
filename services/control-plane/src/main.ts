@@ -51,7 +51,18 @@ async function main(): Promise<void> {
   const dbUrl = process.env.DATABASE_URL ?? process.env.CAVIX_DATABASE_URL;
   if (dbUrl) {
     try {
-      const p = await PostgresPersistence.create(dbUrl);
+      const p = await PostgresPersistence.create(dbUrl, {
+        // A dropped connection is an event, not a catastrophe. Managed Postgres
+        // closes connections routinely (maintenance, failover, idle timeouts),
+        // and this used to take the whole process down with it: the site went
+        // dark, every ledger lookup failed, and every orchestrator claim with
+        // them. The pool reopens on the next query; this line is what keeps the
+        // report from being fatal.
+        onError: (e) =>
+          log("warn", "Postgres dropped a connection; the pool will reopen on the next write", {
+            err: e.message,
+          }),
+      });
       const snap = await p.load();
       if (snap) {
         store.restore(snap);
@@ -87,6 +98,28 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+
+  // Stay up.
+  //
+  // This process is the whole product's memory. When it dies, the site goes
+  // dark, every review's ledger lookup fails, and every orchestrator claim with
+  // it, so a review posts a verdict with no idea what earlier reviews left open.
+  // A dropped database socket already did exactly that once: `pg` emitted an
+  // unhandled `'error'` and Node took the process with it.
+  //
+  // The specific cause is fixed at its source (a pool, with a handler). This is
+  // the net under it, and the trade is deliberate: continuing after an unexpected
+  // error risks acting on odd state, while exiting guarantees downtime for
+  // everything. For a process whose durable state is a snapshot it re-reads at
+  // boot, staying up is the better bet. Both are logged at error level with the
+  // stack, so neither hides.
+  process.on("unhandledRejection", (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    log("error", "unhandled promise rejection (continuing)", { err: err.message, stack: err.stack });
+  });
+  process.on("uncaughtException", (err) => {
+    log("error", "uncaught exception (continuing)", { err: err.message, stack: err.stack });
+  });
 }
 
 main().catch((err) => {

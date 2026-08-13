@@ -10,13 +10,13 @@ import type { StoreSnapshot } from "./store.ts";
 
 const PG = "pg";
 
-interface PgClient {
-  connect(): Promise<void>;
+interface PgPool {
   query(text: string, params?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>;
+  on(event: "error", handler: (err: Error) => void): void;
   end(): Promise<void>;
 }
 interface PgModule {
-  Client: new (config: unknown) => PgClient;
+  Pool: new (config: unknown) => PgPool;
 }
 
 export interface Persistence {
@@ -25,13 +25,39 @@ export interface Persistence {
   close(): Promise<void>;
 }
 
+export interface PostgresOptions {
+  /** Where a dropped connection is reported. Never fatal. */
+  onError?: (err: Error) => void;
+}
+
+/**
+ * A POOL, not a single client, and an error handler that is not optional.
+ *
+ * This crashed the whole control plane in production, and the mechanism is worth
+ * writing down because it is easy to reintroduce.
+ *
+ * A long-lived `pg.Client` holds one TCP connection. Managed Postgres closes
+ * connections routinely: maintenance, failover, an idle timeout, a plan change.
+ * When that happens the server sends `57P01 terminating connection due to
+ * administrator command` and `pg` emits `'error'` on the client. An EventEmitter
+ * with no `'error'` listener THROWS, and an unhandled throw at the top level
+ * takes the process with it. So a perfectly ordinary database maintenance window
+ * did not degrade the site; it killed it, and with it every review's ledger
+ * lookup and every orchestrator claim.
+ *
+ * A pool fixes the recovery half: it discards a broken connection and opens a
+ * new one on the next query, so a dropped connection costs one query rather than
+ * the process. The `on("error")` handler fixes the fatal half, and it is
+ * required even with a pool: idle clients in the pool emit errors too, and an
+ * unhandled one is just as fatal as before.
+ */
 export class PostgresPersistence implements Persistence {
-  private readonly client: PgClient;
-  private constructor(client: PgClient) {
-    this.client = client;
+  private readonly pool: PgPool;
+  private constructor(pool: PgPool) {
+    this.pool = pool;
   }
 
-  static async create(url: string): Promise<PostgresPersistence> {
+  static async create(url: string, options: PostgresOptions = {}): Promise<PostgresPersistence> {
     let lib: PgModule;
     try {
       lib = (await import(PG)) as unknown as PgModule;
@@ -39,16 +65,33 @@ export class PostgresPersistence implements Persistence {
       throw new Error("Postgres persistence needs the 'pg' package (a dependency of @cavix/control-plane). Run `npm install`.");
     }
     const ssl = wantSsl(url);
-    const client = new lib.Client({ connectionString: url, ...(ssl ? { ssl: { rejectUnauthorized: false } } : {}) });
-    await client.connect();
-    await client.query(
+    const pool = new lib.Pool({
+      connectionString: connectionUrl(url, ssl),
+      ...(ssl ? { ssl: { rejectUnauthorized: false } } : {}),
+      // Small: this pool serves one snapshot row, read at boot and written every
+      // few seconds. A large pool would hold connections a managed free tier
+      // counts against a low limit, for no gain.
+      max: 4,
+      // Below the idle timeout of every managed provider, so the pool retires a
+      // connection before the server does. It is cheaper to reopen one than to
+      // discover a dead one mid-write.
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    });
+
+    // The line whose absence killed the process.
+    pool.on("error", (err) => {
+      options.onError?.(err);
+    });
+
+    await pool.query(
       "CREATE TABLE IF NOT EXISTS cavix_state (id int PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())",
     );
-    return new PostgresPersistence(client);
+    return new PostgresPersistence(pool);
   }
 
   async load(): Promise<StoreSnapshot | null> {
-    const res = await this.client.query("SELECT data FROM cavix_state WHERE id = 1");
+    const res = await this.pool.query("SELECT data FROM cavix_state WHERE id = 1");
     const row = res.rows[0];
     if (!row) return null;
     const data = row.data as unknown;
@@ -56,14 +99,39 @@ export class PostgresPersistence implements Persistence {
   }
 
   async save(snap: StoreSnapshot): Promise<void> {
-    await this.client.query(
+    await this.pool.query(
       "INSERT INTO cavix_state (id, data, updated_at) VALUES (1, $1, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()",
       [JSON.stringify(snap)],
     );
   }
 
   async close(): Promise<void> {
-    await this.client.end();
+    await this.pool.end();
+  }
+}
+
+/**
+ * The connection string, with `sslmode` removed when we supply TLS settings
+ * ourselves.
+ *
+ * `pg` now warns that it will start reading `sslmode=require` as `verify-full`,
+ * which is a stricter mode that rejects the self-signed chains managed providers
+ * hand out. Leaving both in place means the explicit `ssl` object and the URL
+ * parameter are making competing claims, and a future `pg` release decides which
+ * one wins. Stripping it leaves exactly one statement about TLS in the code, and
+ * it is the one written here.
+ */
+export function connectionUrl(url: string, ssl: boolean): string {
+  if (!ssl) return url;
+  try {
+    const u = new URL(url);
+    if (!u.searchParams.has("sslmode")) return url;
+    u.searchParams.delete("sslmode");
+    return u.toString();
+  } catch {
+    // Not a URL we can parse. Hand it over untouched: `pg` accepts several
+    // shapes, and mangling a connection string is worse than a warning.
+    return url;
   }
 }
 
