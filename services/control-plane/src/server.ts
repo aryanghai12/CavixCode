@@ -1023,6 +1023,9 @@ async function apiRoute(
         headSha,
         ...(body.baseSha ? { baseSha: String(body.baseSha) } : {}),
         ...(body.worker ? { worker: String(body.worker) } : {}),
+        // A human asked by name. Coalescing is for webhooks, never for somebody
+        // standing there waiting.
+        ...(body.force === true ? { force: true } : {}),
       });
       if (outcome.decision === "claimed" && outcome.superseded) {
         log("info", "an earlier review of this pull request lost its slot", {

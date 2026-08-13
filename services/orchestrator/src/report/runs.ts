@@ -26,7 +26,10 @@ export interface RunRef {
 
 export interface RunClient {
   /** Ask for the slot. Never throws. */
-  claim(ref: RunRef, req: { runId: string; headSha: string; baseSha?: string; worker?: string }): Promise<ClaimOutcome>;
+  claim(
+    ref: RunRef,
+    req: { runId: string; headSha: string; baseSha?: string; worker?: string; force?: boolean },
+  ): Promise<ClaimOutcome>;
   /** Keep a long review's claim alive. */
   touch(ref: RunRef, runId: string): Promise<void>;
   /** Enter the state nothing may interrupt. */

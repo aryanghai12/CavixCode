@@ -38,7 +38,13 @@ import {
 } from "./commands.ts";
 import { filterDiff } from "./pathFilter.ts";
 import { NOOP_RECORDER, type Recorder } from "@cavix/metrics";
-import { reconcile, openEntries, dismissAll, type LedgerEntry } from "@cavix/review-session";
+import {
+  reconcile,
+  openEntries,
+  dismissAll,
+  HEARTBEAT_EVERY_MS,
+  type LedgerEntry,
+} from "@cavix/review-session";
 import type { LedgerClient } from "../report/ledger.ts";
 import type { RunClient } from "../report/runs.ts";
 import { makeRetentionCollector } from "../verify/retention.ts";
@@ -258,6 +264,15 @@ export interface ReviewOutcome {
   /** Did this review make it onto the dashboard? False when nothing recorded it. */
   recorded: boolean;
   /**
+   * Why no review ran, when none did.
+   *
+   * Absent on a real review. Present, it is the difference between "Cavix looked
+   * and found nothing" and "Cavix never looked", and logging both as `job
+   * complete` with zero findings is how a wedged pull request went unnoticed:
+   * every line said the review had finished successfully.
+   */
+  skipped?: string;
+  /**
    * The Cavix check run this review completed, or 0 when the deployment could
    * not create one (a PAT, or an App install without `checks: write`).
    */
@@ -472,18 +487,23 @@ export async function runReview(
   // about a second, genuinely new event arriving mid-review.
   const runRef = { org: overrides.org || job.org, repo: job.repo, pr: job.pr_number };
   const runId = `${job.idempotency_key || ref.headSha}-${startedAt}`;
+  // A person typed "@cavixcode review". Coalescing is for webhooks that arrive
+  // twice; it must never turn away somebody who is standing there waiting.
+  const humanAsked = isCommandJob(job);
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   if (deps.runs) {
     const outcome = await deps.runs.claim(runRef, {
       runId,
       headSha: ref.headSha,
       ...(job.base_sha ? { baseSha: job.base_sha } : {}),
+      ...(humanAsked ? { force: true } : {}),
     });
     if (outcome.decision === "duplicate") {
       log.info("a review of this commit is already running; not starting a second", {
         ...base,
         holder: outcome.active.runId,
       });
-      return emptyOutcome(0);
+      return emptyOutcome(0, "a review of this commit was already running");
     }
     if (outcome.decision === "wait") {
       // Mid-post, and a half-written review is worse than a late one. The queue
@@ -492,15 +512,44 @@ export async function runReview(
         ...base,
         holder: outcome.active.runId,
       });
-      return emptyOutcome(0);
+      // Say so. A command that produces neither a review nor a word is
+      // indistinguishable from a broken product, and the person will just ask
+      // again, which is how somebody ends up typing the same command five times.
+      if (humanAsked) {
+        await sayDeferred(deps, ref, log);
+      }
+      return emptyOutcome(0, "an earlier review of this pull request was still posting");
     }
     if (outcome.superseded) {
-      log.info("this push replaced an earlier review that was still running", {
+      log.info("this review replaced an earlier one that was still running", {
         ...base,
         replaced: outcome.superseded.runId,
         replaced_head: outcome.superseded.headSha,
+        why: outcome.superseded.reason,
       });
     }
+
+    // Report in for as long as this review is working.
+    //
+    // Without it the claim's timestamp is frozen at the moment it was taken, so
+    // "has the holder gone quiet?" really asks "has it been running a while?",
+    // which is a different and much less useful question. With it the stale
+    // window can be short: a holder whose process was restarted or redeployed
+    // frees the pull request in a couple of minutes rather than twenty.
+    //
+    // It stops itself. A review that throws never reaches the clear below, and a
+    // timer left running in a long-lived worker would keep a dead claim alive
+    // forever, which is the exact failure this is meant to end.
+    let beats = 0;
+    heartbeat = setInterval(() => {
+      if (++beats > MAX_HEARTBEATS) {
+        if (heartbeat) clearInterval(heartbeat);
+        return;
+      }
+      void deps.runs?.touch(runRef, runId);
+    }, HEARTBEAT_EVERY_MS);
+    // Never hold the process open waiting for a heartbeat.
+    heartbeat.unref?.();
   }
 
   // Step 0b — put Cavix in the Checks box before any slow work, so the pull
@@ -1225,6 +1274,7 @@ export async function runReview(
 
   // The review is on the pull request. Release the slot so the next push can be
   // reviewed straight away rather than waiting for this claim to age out.
+  if (heartbeat) clearInterval(heartbeat);
   if (deps.runs) await deps.runs.finish(runRef, runId, "completed");
 
   // The review-level numbers, recorded once at the end so a review that threw
@@ -1315,8 +1365,9 @@ async function shouldSkipAutomatic(
  * The outcome shape for a run that decided there was nothing to do. Every count
  * is zero and `posted` carries no url, so a caller cannot mistake it for a review.
  */
-function emptyOutcome(checkRunId: number): ReviewOutcome {
+function emptyOutcome(checkRunId: number, skipped?: string): ReviewOutcome {
   return {
+    ...(skipped ? { skipped } : {}),
     posted: { id: 0, htmlUrl: "" },
     summary: "",
     findingCount: 0,
@@ -1399,6 +1450,37 @@ async function runSummaryOnly(
     costUsd: result.costUsd,
     model: result.model,
   };
+}
+
+/**
+ * How many heartbeats one review may send before the timer gives up on itself.
+ *
+ * A safety net, not a timeout: at thirty seconds a beat this is two hours, far
+ * longer than any real review. It exists because a review that THROWS never
+ * reaches the clear on the success path, and a timer left running in a
+ * long-lived worker would keep a dead claim alive forever, which is precisely
+ * the failure the heartbeat was added to end.
+ */
+const MAX_HEARTBEATS = 240;
+
+/**
+ * Tell somebody their command landed but has to wait.
+ *
+ * A command that produces neither a review nor a word is indistinguishable from
+ * a broken product. The person asks again, gets silence again, and concludes it
+ * does not work, which is exactly what happened. Best-effort: failing to explain
+ * a delay must not itself fail anything.
+ */
+async function sayDeferred(deps: ReviewWorkflowDeps, ref: PullRef, log: WorkflowLogger): Promise<void> {
+  try {
+    await deps.github.createComment(
+      ref,
+      "Cavix is still posting an earlier review of this pull request, so this one is queued behind it. " +
+        "It will run on its own in a moment. Nothing was lost.",
+    );
+  } catch (err) {
+    log.info("could not explain the deferral (continuing)", { err: (err as Error).message });
+  }
 }
 
 /**
@@ -1762,6 +1844,12 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
             `provider, so Cavix switched to \`${healedTo}\` and carried on. Change it any time under ` +
             `**AI & BYOK**.`,
         );
+      }
+      // "job complete" for a job that never ran is the log line that hides a
+      // wedged pull request: every field reads like a successful empty review.
+      if (outcome.skipped) {
+        log.info("job skipped", { repo: job.repo, pr: job.pr_number, why: outcome.skipped });
+        return;
       }
       log.info("job complete", {
         repo: job.repo,

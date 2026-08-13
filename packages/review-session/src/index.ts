@@ -40,6 +40,7 @@ export {
   isActive,
   ACTIVE_STATUSES,
   STALE_AFTER_MS,
+  HEARTBEAT_EVERY_MS,
   type RunStatus,
   type ReviewRun,
   type ClaimRequest,

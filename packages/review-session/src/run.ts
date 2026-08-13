@@ -55,6 +55,21 @@ export interface ClaimRequest {
   headSha: string;
   baseSha?: string;
   worker?: string;
+  /**
+   * A human asked for this review by name.
+   *
+   * Coalescing exists for WEBHOOKS: two deliveries of one push, a retry after a
+   * slow ACK. It must never apply to somebody typing "@cavixcode review", and
+   * the failure it caused was ugly. A run that died with its process kept the
+   * slot, so every retry of that commit was turned away as a duplicate, and the
+   * person kept asking and kept getting silence. The tool looked broken because
+   * from where they were standing it was.
+   *
+   * A forced claim takes the slot from a run on the same commit. It still will
+   * not interrupt a run that has started POSTING, because a half-written review
+   * is worse than a late one.
+   */
+  force?: boolean;
 }
 
 /**
@@ -72,11 +87,26 @@ export type ClaimOutcome =
 /**
  * How long a run may go without a heartbeat before another may take it.
  *
- * Generous. A review that runs a sandbox and a test suite can legitimately go
- * quiet for minutes, and taking a live run's slot is how a pull request gets two
- * reviews, which is the thing this module exists to prevent.
+ * This is short BECAUSE a live run heartbeats. The holder reports in every
+ * `HEARTBEAT_EVERY_MS` for as long as it is working, so silence for several
+ * multiples of that means the holder is gone: its process was restarted,
+ * redeployed, or killed.
+ *
+ * It was twenty minutes when there was no heartbeat, and that was the wrong
+ * number in both directions. A dead holder wedged the pull request for twenty
+ * minutes, during which every retry was refused; and a legitimately slow review
+ * that crossed twenty minutes had its slot taken while it was still running.
+ * With a heartbeat, both go away.
  */
-export const STALE_AFTER_MS = 20 * 60 * 1000;
+export const STALE_AFTER_MS = 3 * 60 * 1000;
+
+/**
+ * How often a working run should report that it is alive.
+ *
+ * Comfortably under `STALE_AFTER_MS`, so several heartbeats in a row have to be
+ * missed before anybody concludes the holder is gone.
+ */
+export const HEARTBEAT_EVERY_MS = 30 * 1000;
 
 export interface DecideOptions {
   now?: () => Date;
@@ -132,16 +162,22 @@ export function decideClaim(
     };
   }
 
-  // Same commit, still in flight. Two webhooks for one push, a manual re-request
-  // while a review is running, a retry after a slow ACK. Coalesce: running it
-  // again would post the same review twice.
-  if (active.headSha === req.headSha) return { decision: "duplicate", active };
-
-  // Mid-post. Never interrupted, whatever has happened upstream: a half-written
-  // review is worse than a late one. The caller retries after it finishes.
+  // Mid-post. Never interrupted, whatever has happened upstream, including a
+  // human asking by name: a half-written review is worse than a late one. The
+  // caller retries once it finishes.
   if (active.status === "posting") return { decision: "wait", active };
 
-  // A newer head. The older run is now reviewing a commit nobody will merge.
+  // Same commit, still in flight. Two webhooks for one push, a retry after a
+  // slow ACK. Coalesce: running it again would post the same review twice.
+  //
+  // Unless a human asked. `force` is the difference between "the same event
+  // arrived twice" and "somebody is standing there wondering why nothing
+  // happened", and treating those the same is what made a stuck run look like a
+  // dead product.
+  if (active.headSha === req.headSha && !req.force) return { decision: "duplicate", active };
+
+  // Either a newer head, in which case the older run is reviewing a commit
+  // nobody will merge, or a human asked again for the same one.
   return {
     decision: "claimed",
     run: fresh,
@@ -149,7 +185,10 @@ export function decideClaim(
       ...active,
       status: "superseded",
       updatedAt: at,
-      reason: `a newer commit (${req.headSha.slice(0, 7)}) was pushed while this review was running`,
+      reason:
+        active.headSha === req.headSha
+          ? "a person asked for this review again while it was running"
+          : `a newer commit (${req.headSha.slice(0, 7)}) was pushed while this review was running`,
     },
   };
 }

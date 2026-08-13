@@ -5,6 +5,32 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed: a stuck review made a pull request unreviewable, and nothing said so
+
+Reported from a live run: a review started, never finished, and every
+`@cavixcode review` after it did nothing at all. Three separate mistakes, all
+introduced together with the single-in-flight-review slot.
+
+- **A person asking is not a duplicate webhook.** Coalescing exists so two
+  deliveries of one push do not produce two reviews. It was also being applied to
+  somebody typing `@cavixcode review`, so once a run got stuck holding the slot
+  for a commit, every retry of that commit was refused as a duplicate. The person
+  kept asking and kept getting silence. An explicit command now takes the slot.
+  It still will not interrupt a review that has begun posting.
+- **Nothing reported that a review was still alive.** The claim's timestamp was
+  set once and never refreshed, so "has the holder gone quiet?" really asked "has
+  it been running a while?". A working review now reports in every thirty
+  seconds, which lets the stale window drop from twenty minutes to three: a
+  holder whose process was restarted or redeployed frees the pull request in
+  minutes instead of wedging it, and a legitimately slow review keeps its slot
+  instead of having it taken.
+- **The refusal was invisible.** A command that produces neither a review nor a
+  word is indistinguishable from a broken product. Cavix now says the review is
+  queued behind an earlier one, and a skipped job logs `job skipped` with a
+  reason instead of `job complete` with zero findings, which read exactly like a
+  successful empty review and is how the wedge went unnoticed.
+
+
 ### GitHub asks people which repositories it may read, instead of silently signing them in
 
 Reported: *"I click Connect GitHub and nothing happens. CodeRabbit shows me a

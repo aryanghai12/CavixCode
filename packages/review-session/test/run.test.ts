@@ -8,6 +8,7 @@ import {
   coerceRun,
   isActive,
   STALE_AFTER_MS,
+  HEARTBEAT_EVERY_MS,
   type ReviewRun,
 } from "@cavix/review-session";
 
@@ -138,4 +139,61 @@ test("push, push again mid-review: only the newer review posts", () => {
   // r1 reaches its post step and asks. It has lost the slot.
   assert.equal(mayPost(second.run, "r1"), false);
   assert.equal(mayPost(second.run, "r2"), true);
+});
+
+// ---------------------------------------------------------------------------
+// The failure this cost a real afternoon: a stuck run that nobody could clear.
+// ---------------------------------------------------------------------------
+
+test("a human asking again is never turned away as a duplicate", () => {
+  // Coalescing exists for webhooks that arrive twice. Applying it to somebody
+  // typing "@cavixcode review" meant a run that died with its process kept the
+  // slot, every retry was refused, and the person kept asking into silence.
+  const stuck = run({ runId: "dead", headSha: "aaa1111" });
+  const out = decideClaim(stuck, { runId: "r2", headSha: "aaa1111", force: true }, { now: clock(T0) });
+  assert.equal(out.decision, "claimed");
+  if (out.decision !== "claimed") return;
+  assert.equal(out.superseded?.status, "superseded");
+  // And the reason says what actually happened, not "a newer commit was pushed",
+  // because no newer commit was pushed.
+  assert.match(out.superseded?.reason ?? "", /a person asked/);
+});
+
+test("a forced claim still will not interrupt a review that is posting", () => {
+  const posting = run({ status: "posting" });
+  const out = decideClaim(posting, { runId: "r2", headSha: "aaa1111", force: true }, { now: clock(T0) });
+  assert.equal(out.decision, "wait", "a half-written review is worse than a late one");
+});
+
+test("a webhook redelivery is still coalesced", () => {
+  const out = decideClaim(run(), { runId: "r2", headSha: "aaa1111" }, { now: clock(T0) });
+  assert.equal(out.decision, "duplicate");
+});
+
+test("a dead holder frees the pull request in minutes, not twenty of them", () => {
+  // The window is short BECAUSE a live run heartbeats. A process that was
+  // restarted or redeployed stops reporting, and the next attempt takes over.
+  assert.ok(STALE_AFTER_MS <= 5 * 60 * 1000, "a dead holder must not wedge a PR for long");
+  assert.ok(
+    HEARTBEAT_EVERY_MS * 3 <= STALE_AFTER_MS,
+    "several beats must be missed before anyone concludes the holder is gone",
+  );
+
+  const killed = run({ updatedAt: T0 });
+  const later = new Date(Date.parse(T0) + STALE_AFTER_MS + 1000).toISOString();
+  const out = decideClaim(killed, { runId: "r2", headSha: "aaa1111" }, { now: clock(later) });
+  assert.equal(out.decision, "claimed");
+  if (out.decision !== "claimed") return;
+  assert.equal(out.superseded?.status, "failed");
+});
+
+test("a live run that keeps reporting in keeps its slot", () => {
+  // The other half. Before the heartbeat existed, the claim's timestamp was
+  // frozen at the moment it was taken, so a legitimately slow review had its
+  // slot taken while it was still working.
+  const start = Date.parse(T0);
+  const working = run({ updatedAt: new Date(start + 10 * 60 * 1000).toISOString() });
+  const now = new Date(start + 10 * 60 * 1000 + 30_000).toISOString();
+  const out = decideClaim(working, { runId: "r2", headSha: "aaa1111" }, { now: clock(now) });
+  assert.equal(out.decision, "duplicate", "still alive after ten minutes of work");
 });
