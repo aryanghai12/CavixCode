@@ -439,6 +439,10 @@ export function isPermanentFailure(message: string): boolean {
     /API_KEY_INVALID|api key not valid/i,
     /CAVIX_APP_ID|\.pem|installation token/i, // our own misconfiguration
     /HTTP 400/,                      // malformed request (wrong model id, etc.)
+    // The model declined. Asking the same model the same thing three more times
+    // gets the same answer, three times slower, and the retries are invisible to
+    // the person waiting.
+    /declined to review/i,
   ].some((re) => re.test(message));
 }
 
@@ -516,7 +520,7 @@ export async function runReview(
       // indistinguishable from a broken product, and the person will just ask
       // again, which is how somebody ends up typing the same command five times.
       if (humanAsked) {
-        await sayDeferred(deps, ref, log);
+        await sayDeferred(deps, job, ref);
       }
       return emptyOutcome(0, "an earlier review of this pull request was still posting");
     }
@@ -1468,19 +1472,21 @@ const MAX_HEARTBEATS = 240;
  *
  * A command that produces neither a review nor a word is indistinguishable from
  * a broken product. The person asks again, gets silence again, and concludes it
- * does not work, which is exactly what happened. Best-effort: failing to explain
- * a delay must not itself fail anything.
+ * does not work, which is exactly what happened.
+ *
+ * Goes through `say`, so it EDITS the single status comment rather than adding
+ * another one. Somebody who asks three times while a review is posting should
+ * see one current status line, not three identical complaints, which is the
+ * whole reason `say` exists.
  */
-async function sayDeferred(deps: ReviewWorkflowDeps, ref: PullRef, log: WorkflowLogger): Promise<void> {
-  try {
-    await deps.github.createComment(
-      ref,
-      "Cavix is still posting an earlier review of this pull request, so this one is queued behind it. " +
-        "It will run on its own in a moment. Nothing was lost.",
-    );
-  } catch (err) {
-    log.info("could not explain the deferral (continuing)", { err: (err as Error).message });
-  }
+async function sayDeferred(deps: ReviewWorkflowDeps, job: ReviewJob, ref: PullRef): Promise<void> {
+  await say(
+    deps,
+    job,
+    ref,
+    "**Queued.** Cavix is still posting an earlier review of this pull request, so this one is waiting " +
+      "for that to finish rather than cutting it in half. It runs on its own in a moment, and nothing was lost.",
+  );
 }
 
 /**
@@ -2037,6 +2043,19 @@ function explain(message: string): string {
   }
   if (/returned no content/i.test(message)) {
     return "The model returned nothing, usually a safety filter on the diff. Try `@cavixcode review` again, or switch model under **AI & BYOK**.";
+  }
+  if (/declined to review/i.test(message)) {
+    // Reported honestly instead of being dressed up as a clean pass. A refusal
+    // with a green check beside it is worse than no review at all, because the
+    // green check is what somebody merges on.
+    return (
+      "**The model refused to review this change**, so Cavix has not reported a result. " +
+      "It did not find zero problems; it did not look.\n\n" +
+      "This is almost always the model, not the code. Smaller or instruction-tuned models " +
+      "sometimes answer a review request with a question instead of following the output format. " +
+      "Switch to a stronger model under **AI & BYOK** in the dashboard, then comment " +
+      "`@cavixcode review` again."
+    );
   }
   if (isModelUnavailable(message)) {
     return (

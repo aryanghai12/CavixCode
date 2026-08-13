@@ -58,7 +58,55 @@ export function parseModelReview(text: string): ParsedReview {
     }
   }
 
+  // A refusal is not a clean review.
+  //
+  // This is the single most dangerous thing this parser can get wrong. A model
+  // that answers "I cannot review this pull request, please ask a specific
+  // question" inside a well-formed JSON object used to sail straight through:
+  // zero findings is a valid review, so Cavix posted "Clean pass. Nothing to
+  // raise", stamped a green check on the pull request, and spliced the refusal
+  // itself into the description as the executive summary. The reader sees a
+  // reviewed, passing pull request. Nothing read a line of it.
+  //
+  // Throwing puts it on the failure path instead, which posts a neutral check
+  // and a comment naming the cause, and the check stays neutral rather than
+  // green so nothing is gated on a review that never happened.
+  if (isRefusal(summary, findings.length, walkthrough.length)) {
+    throw new Error(`the model declined to review this change: ${summary.trim().slice(0, 300)}`);
+  }
+
   return { summary, walkthrough, effort: coerceEffort(obj.effort), findings };
+}
+
+/**
+ * Phrases a model uses when it is declining rather than reviewing.
+ *
+ * Anchored near the start, because a legitimate summary can easily contain
+ * "cannot" in the middle of a sentence ("Callers cannot retry safely").
+ */
+const REFUSAL_OPENERS =
+  /^\s*(?:sorry[,.]?\s*)?(?:but\s+)?(?:i|as an ai|unfortunately|it (?:is|'s) not possible)\b[^.!?]{0,80}?\b(?:cannot|can(?:'|’)?t|am unable|unable|won(?:'|’)?t be able|do not have|don(?:'|’)?t have)\b/i;
+
+/** A direct instruction back at the user, which a review never contains. */
+const ASKS_FOR_INPUT =
+  /\b(?:please (?:ask|provide|specify|clarify|share)|ask a specific question|provide (?:more|the) (?:context|information|details)|specify (?:a|the) question)\b/i;
+
+/**
+ * Does this reply decline to do the job?
+ *
+ * Deliberately conservative: it requires the model to have produced NOTHING
+ * usable, so a real review that happens to be phrased oddly is never discarded.
+ * The prompt demands a walkthrough entry for every file in the diff, so a reply
+ * with no findings AND no walkthrough has not reviewed anything, whatever it
+ * says. Both signals must line up before this fires.
+ */
+export function isRefusal(summary: string, findingCount: number, walkthroughCount: number): boolean {
+  if (findingCount > 0 || walkthroughCount > 0) return false;
+  const text = summary.trim();
+  // An empty summary with nothing else is a different failure (an empty diff, a
+  // model that returned a bare skeleton) and is not this one.
+  if (text === "") return false;
+  return REFUSAL_OPENERS.test(text) || ASKS_FOR_INPUT.test(text);
 }
 
 function coerceFileChange(value: unknown): FileChange | null {

@@ -5,6 +5,37 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed: a model refusal was being posted as a clean pass
+
+Seen on a live pull request. The model answered:
+
+> I cannot review this pull request as the prompt only asks for a general review
+> without a specific question. Please ask a specific question about the code.
+
+It said that inside a well-formed JSON object, with an empty `findings` array.
+Zero findings is a valid review, so Cavix took it at face value: it posted "Clean
+pass. Nothing to raise", put a green check on the pull request, and spliced the
+refusal itself into the description block as the executive summary. Because that
+block is rewritten in place, the visible effect was an old comment quietly
+changing rather than a new review appearing, which is why it looked like Cavix
+had edited its previous review instead of writing a new one.
+
+The reader sees a reviewed, passing pull request. Nothing read a line of it. That
+is the worst output this product can produce, because the green check is what
+somebody merges on.
+
+A reply that declines is now a failure, not a result. It posts a neutral check
+and a comment saying plainly that the model refused, that Cavix did not find zero
+problems but did not look, and that the fix is usually a stronger model under
+**AI & BYOK**. It is treated as permanent, because asking the same model the same
+thing three more times gets the same answer three times slower.
+
+The check is deliberately conservative and needs two signals before it fires: no
+findings AND no walkthrough, plus refusal phrasing anchored near the start of the
+summary. A review that found something looked, whatever its prose says, and
+"Callers cannot retry safely" is a finding, not a refusal.
+
+
 ### Fixed: a stuck review made a pull request unreviewable, and nothing said so
 
 Reported from a live run: a review started, never finished, and every
