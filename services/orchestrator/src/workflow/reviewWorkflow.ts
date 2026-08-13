@@ -44,6 +44,7 @@ import {
   dismissAll,
   scopeFor,
   openInSkippedFiles,
+  type ReviewScope,
   HEARTBEAT_EVERY_MS,
   type LedgerEntry,
 } from "@cavix/review-session";
@@ -146,6 +147,17 @@ export interface ReviewWorkflowDeps {
    * it posts a verdict computed against a commit that no longer exists.
    */
   runs?: RunClient;
+  /**
+   * Let a re-review read only what the push changed.
+   *
+   * OFF by default, and the default is the honest one. Narrowing is sound for
+   * findings already on the record, because the ledger carries them whether or
+   * not their file was re-read. What it gives up is the re-roll: a model asked a
+   * second time about untouched code might find something it missed the first
+   * time. That is a real trade between cost and recall, so it belongs to the
+   * workspace rather than to whoever deployed the service.
+   */
+  narrowRereviews?: boolean;
   /**
    * Given an org, list the model ids its key can call. Used to enrich the failure
    * comment, and to self-heal when the saved model has been retired.
@@ -648,6 +660,66 @@ export async function runReview(
   //
   // Summary mode never takes the deep path: nobody typing "@cavixcode summary"
   // wants seven agents billed to produce a paragraph.
+  // Step 2c — narrow what the MODEL reads, when the workspace asked for it.
+  //
+  // Every review reads the whole pull request, `base...head`. On the tenth push
+  // of a forty-file pull request that means paying to re-read thirty-nine files
+  // nobody has touched, and it gets worse the longer the pull request runs,
+  // which is backwards: the later pushes are usually the small ones.
+  //
+  // Narrowing is only SOUND because the ledger exists. A finding raised three
+  // pushes ago is still open, still counted and still holds the merge whether or
+  // not this review re-read its file. What is genuinely given up is the re-roll:
+  // a model asked a second time about untouched code might have found something
+  // it missed the first time. That is a real trade, so it is a SETTING and it is
+  // off unless a workspace turns it on.
+  //
+  // Only the findings pass is narrowed. The prose pass keeps the whole diff,
+  // because the description describes the whole change, and a summary written
+  // from one file of a forty-file pull request would be worse than none.
+  let attentionDiff = diff;
+  let narrowedScope: ReviewScope | undefined;
+  if (deps.narrowRereviews && deps.ledger && deps.github.fetchCompareDiff && !overrides.fresh) {
+    try {
+      const prior = await deps.ledger.fetch({ org, repo: job.repo, pr: job.pr_number });
+      const lastHead = prior.known ? prior.ledger.lastHeadSha : undefined;
+      if (lastHead && lastHead !== ref.headSha) {
+        const deltaDiff = await deps.github.fetchCompareDiff(ref, lastHead, ref.headSha);
+        const scope = scopeFor({
+          verdictDiff: diff,
+          deltaDiff,
+          ledger: prior.ledger,
+          priorHeadSha: lastHead,
+          headSha: ref.headSha,
+        });
+        if (scope.narrowed) {
+          const hot = filterDiff(diff, { include: scope.hot, exclude: [] });
+          // Only narrow when the filter kept EXACTLY the hot set. A path
+          // carrying a glob metacharacter would otherwise be dropped silently,
+          // and a file quietly missing from the review is the one outcome this
+          // whole feature is not allowed to produce.
+          const exact = hot.kept.length === scope.hot.length && scope.hot.every((p) => hot.kept.includes(p));
+          if (exact && hot.diff.trim() !== "") {
+            attentionDiff = hot.diff;
+            narrowedScope = scope;
+            log.info("narrowed this re-review to what the push changed", {
+              ...base,
+              read: scope.hot.length,
+              not_re_read: scope.warm.length + scope.cold.length,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      // Reading everything is always correct, so this costs tokens and nothing
+      // else. It must never cost coverage.
+      log.info("could not narrow this re-review; reading the whole pull request", {
+        ...base,
+        err: (err as Error).message,
+      });
+    }
+  }
+
   const modelOverride = overrides.model ? { model: overrides.model } : {};
   const proseInput = { org, title: job.title, diff, tone: config.tone, ...modelOverride };
 
@@ -671,7 +743,7 @@ export async function runReview(
         // Cavix came back on the review-config fetch above, which every review
         // already makes, so feeding them in costs nothing: no extra call, no
         // extra latency, and an empty object when there is nothing learned yet.
-        deep({ org, title: job.title, diff, ref, thresholdByCategory: config.thresholdByCategory }),
+        deep({ org, title: job.title, diff: attentionDiff, ref, thresholdByCategory: config.thresholdByCategory }),
         deps.reviewer.summarise(proseInput),
       ]);
       signals = pipeline;
@@ -931,7 +1003,11 @@ export async function runReview(
             // less precise sentence on the pull request.
           }
         }
-        const scope = scopeFor({
+        // Reuse the scope the narrowing step already computed, when there is
+        // one. Recomputing it risks the review SAYING it re-read a different set
+        // of files from the one it actually read, and a report that disagrees
+        // with the work is worse than no report.
+        const scope = narrowedScope ?? scopeFor({
           verdictDiff: diff,
           deltaDiff,
           ledger: folded.ledger,
@@ -1907,6 +1983,10 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
       // "job complete" for a job that never ran is the log line that hides a
       // wedged pull request: every field reads like a successful empty review.
       if (outcome.skipped) {
+        // Counted, not silent. Without this the throughput counter under-reports
+        // every coalesced duplicate and every deferral, so a pull request that
+        // stopped being reviewed looks identical to one nobody pushed to.
+        metrics.review("skipped");
         log.info("job skipped", { repo: job.repo, pr: job.pr_number, why: outcome.skipped });
         return;
       }

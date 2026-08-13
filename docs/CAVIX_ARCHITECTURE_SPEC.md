@@ -2192,8 +2192,22 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 
 | Spec | Why not |
 | :--- | :--- |
-| §3.3.3, the second half: actually narrowing what the MODEL reads | The classification is built, tested and reporting accurately. Feeding only the hot files to the model needs the ledger fetched *before* the review runs rather than after it, which is a real restructure of the workflow's step order. Doing that blind, at the end of a long session, straight after two production incidents, is how a third one happens |
-| §3.2 graph persistence, new edge kinds, tree-sitter | Largest effort in the document. `allSymbolNames()` landed because the critic needs it; the rest changes no user-visible behaviour on its own |
+| §3.2 graph persistence, new edge kinds, tree-sitter | Largest effort in the document. `allSymbolNames()` landed because the critic needs it; the rest changes no user-visible behaviour on its own, and it is the one remaining item |
+
+### Shipped in the fourth pass
+
+| Spec | What landed | Where |
+| :--- | :--- | :--- |
+| §3.3.3, second half | The findings pass reads only the hot files, behind `CAVIX_NARROW_REREVIEWS`. Default OFF | [reviewWorkflow.ts](services/orchestrator/src/workflow/reviewWorkflow.ts) |
+
+The restructure the previous pass balked at turned out to be unnecessary. Rather than reordering the workflow so the ledger is fetched before the review, the narrowing step makes its own cheap ledger read, which touches nothing else: with the flag off, not a single line of the existing path executes differently. That is a smaller blast radius than the reorder would have had, and it is why this shipped.
+
+Two things are deliberately not narrowed, and both would be bugs if they were:
+
+- **The prose pass** keeps the whole diff. The description describes the whole change, and a summary written from one file of a forty-file pull request is worse than none.
+- **The verdict** is unchanged: `hot + warm + cold` is always the complete pull request, because the merge introduces all of it.
+
+The flag is off by default because the trade is real. Narrowing is sound for findings already on the record, since the ledger carries them whether or not their file was re-read. What it gives up is the re-roll: a model asked a second time about untouched code might find something it missed the first time. That belongs to whoever runs the deployment, not to whoever wrote the service.
 
 ### Bugs found by auditing the work above
 

@@ -461,6 +461,12 @@ async function main() {
     recordReview,
     ledger,
     runs,
+    // Off unless a deployment asks for it. Narrowing a re-review to what the
+    // push changed is sound for findings already on the record, because the
+    // ledger carries those whether or not their file was re-read; what it gives
+    // up is the chance that a second look at untouched code finds something the
+    // first look missed. That trade belongs to whoever runs the deployment.
+    narrowRereviews: process.env.CAVIX_NARROW_REREVIEWS === "true",
     metrics,
     // "@cavixcode <question>" answers in prose instead of running a review.
     answer: async (job, ref, orgId, question) => {

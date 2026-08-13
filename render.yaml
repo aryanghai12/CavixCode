@@ -196,6 +196,13 @@ services:
         value: cavixcode,cavix
       - key: CAVIX_SANDBOX_BACKEND     # "local" runs fine on Render's free box
         value: local
+      # Let a re-review read only the files a push changed, instead of the whole
+      # pull request every time. Cheaper on long-running pull requests, and the
+      # trade is real: a model asked a second time about untouched code might
+      # find something it missed the first time. Findings already on the record
+      # are carried by the ledger either way. Off unless you set it to "true".
+      - key: CAVIX_NARROW_REREVIEWS
+        value: "false"
       # The other four hosts. Each needs no orchestrator secret: a workspace
       # pastes its access token in the dashboard under Integrations, and it is
       # held encrypted PER WORKSPACE rather than per deployment, because one

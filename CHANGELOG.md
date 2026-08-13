@@ -5,6 +5,47 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### A re-review can read only what the push changed
+
+Every review reads the whole pull request, `base...head`. On the tenth push of a
+forty-file pull request that means paying to re-read thirty-nine files nobody has
+touched, and it gets worse the longer the pull request runs, which is backwards:
+the later pushes are usually the small ones.
+
+Cavix can now hand the findings pass only the files this push actually changed.
+
+This is sound because of the ledger, not in spite of it. A finding raised three
+pushes ago is still open, still counted, and still holds the merge whether or not
+this review re-read its file. The verdict is still computed over the whole pull
+request; only the model's attention moves.
+
+**Off by default**, and the default is the honest one. What narrowing gives up is
+the re-roll: a model asked a second time about untouched code might find
+something it missed the first time. That is a real trade between cost and recall,
+so it belongs to whoever runs the deployment rather than to whoever wrote the
+service. Turn it on with `CAVIX_NARROW_REREVIEWS=true` on the orchestrator.
+
+What is never narrowed:
+
+- **The prose pass.** The description describes the whole change, and a summary
+  written from one file of a forty-file pull request is worse than none.
+- **The verdict.** `hot + warm + cold` is always the complete pull request,
+  because the merge introduces all of it.
+- **Anything after a rebase or a force-push**, after `@cavixcode review`, when
+  the delta cannot be computed, or when the two diffs disagree about which files
+  changed. Every one of those falls back to reading everything and says why.
+- **Any case where the file filter does not return exactly the expected set.** A
+  path carrying a glob metacharacter would otherwise be dropped silently, and a
+  file quietly missing from a review is the one outcome this must never produce.
+
+### Fixed
+
+- A skipped job now increments the review counter. Without it the throughput
+  metric under-reported every coalesced duplicate and every deferral, so a pull
+  request that had stopped being reviewed looked identical to one nobody had
+  pushed to.
+
+
 ### Fixed: a routine Postgres restart killed the whole control plane
 
 From a live deploy:

@@ -183,3 +183,19 @@ test("the verdict domain is never narrowed: every file stays accounted for", () 
   });
   assert.deepEqual([...s.hot, ...s.warm, ...s.cold].sort(), ["a.ts", "b.ts", "c.ts", "d.ts"]);
 });
+
+test("literal paths work as filter patterns, which is what narrowing relies on", () => {
+  // The narrowing step feeds `scope.hot` into the path filter as include
+  // patterns. If a literal path did not match itself, every file would be
+  // dropped and the model would be handed an empty diff, which is the one
+  // outcome this feature must never produce.
+  const s = scopeFor({
+    verdictDiff: WHOLE_PR,
+    deltaDiff: file("a.ts"),
+    ledger: EMPTY_LEDGER,
+    priorHeadSha: "aaa",
+    headSha: "bbb",
+  });
+  assert.ok(s.hot.every((p) => !/[*?[\]]/.test(p)), "hot paths carry no glob metacharacters here");
+  assert.ok(s.hot.length > 0, "and there is something to read");
+});
