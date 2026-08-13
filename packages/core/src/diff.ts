@@ -28,9 +28,33 @@ export interface DiffFile {
   /** True if the new side is /dev/null (file deleted). */
   deleted: boolean;
   hunks: DiffHunk[];
+  /**
+   * The path this file had before, when git detected a rename.
+   *
+   * Absent on every ordinary change, which is why it is optional: reading it
+   * costs nothing and every existing consumer is unaffected. It exists because
+   * a rename that is not recognised as one is a catastrophe for anything
+   * tracking findings across reviews. The old path vanishes from the diff and
+   * the new path has never been seen, so every finding in the file is
+   * simultaneously reported as fixed and re-raised as new, and the review
+   * claims credit for four fixes that did not happen.
+   */
+  renamedFrom?: string;
+  /**
+   * git's rename similarity, 0-100, when it reported one.
+   *
+   * Below git's own 50% threshold git does not call it a rename at all, so
+   * anything here is at least that. Consumers may set a higher bar: a file at
+   * 55% similarity was effectively rewritten, and carrying findings across a
+   * rewrite is worse than losing them.
+   */
+  similarity?: number;
 }
 
 const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$/;
+const RENAME_FROM_RE = /^rename from (.+)$/;
+const RENAME_TO_RE = /^rename to (.+)$/;
+const SIMILARITY_RE = /^similarity index (\d+)%$/;
 
 /** parseUnifiedDiff parses `git diff` unified output into structured files. */
 export function parseUnifiedDiff(diff: string): DiffFile[] {
@@ -60,6 +84,29 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
       hunk = null;
       oldPath = "";
       continue;
+    }
+    // Rename metadata sits between the `diff --git` line and the `---`/`+++`
+    // pair, and for a PURE rename (no content change) those two lines are the
+    // only record of the file: git emits no `---`, no `+++` and no hunks at all.
+    // Reading them here is what makes such a file visible downstream instead of
+    // being filtered out as a nameless entry.
+    if (current) {
+      const sim = SIMILARITY_RE.exec(raw);
+      if (sim) {
+        current.similarity = parseInt(sim[1], 10);
+        continue;
+      }
+      const from = RENAME_FROM_RE.exec(raw);
+      if (from) {
+        current.renamedFrom = from[1].trim();
+        oldPath = current.renamedFrom;
+        continue;
+      }
+      const to = RENAME_TO_RE.exec(raw);
+      if (to) {
+        current.path = to[1].trim();
+        continue;
+      }
     }
     if (raw.startsWith("--- ")) {
       if (!current) current = { path: "", deleted: false, hunks: [] };
@@ -115,6 +162,34 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
 function stripPrefix(p: string): string {
   if (p.startsWith("a/") || p.startsWith("b/")) return p.slice(2);
   return p;
+}
+
+/**
+ * git's own rename threshold is 50%. This one is higher on purpose.
+ *
+ * A file at 55% similarity was effectively rewritten, and carrying a finding
+ * across a rewrite anchors it to code that no longer exists. Below this bar a
+ * rename is treated as a delete plus an add, which is what it actually was.
+ */
+export const RENAME_SIMILARITY_FLOOR = 60;
+
+/**
+ * Old path → new path for every file git reported as a rename, above the
+ * similarity floor.
+ *
+ * Empty on the overwhelming majority of diffs, which is why every consumer can
+ * treat a non-empty map as the exceptional path and skip the work otherwise.
+ */
+export function renameMap(files: DiffFile[], minSimilarity = RENAME_SIMILARITY_FLOOR): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const f of files) {
+    if (!f.renamedFrom || f.renamedFrom === f.path) continue;
+    // No similarity reported means git called it a rename without printing a
+    // number (it does this for an exact rename, which is 100%).
+    if (f.similarity !== undefined && f.similarity < minSimilarity) continue;
+    out.set(f.renamedFrom, f.path);
+  }
+  return out;
 }
 
 /**

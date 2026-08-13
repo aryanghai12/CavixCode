@@ -12,6 +12,7 @@ import {
 } from "@cavix/context";
 import { AgentEnsemble, type ModelRouter, type ModelTierConfig } from "@cavix/agents";
 import { adjudicate } from "@cavix/adjudicator";
+import { screen } from "@cavix/critic";
 import type { Gateway } from "@cavix/gateway";
 
 // The Phase 1 review pipeline: deterministic + policy (Stage 3/3c) ∥ context
@@ -69,6 +70,12 @@ export interface Phase1Result {
   toolsSkipped: string[];
   policyCount: number;
   ensembleAbstained: string[];
+  /**
+   * Findings the critic could not support against the material the reviewer was
+   * shown: a phantom file, a line past the end of one, a symbol that exists
+   * nowhere. Dropped before clustering, so agreement could not rescue them.
+   */
+  unsupportedCount: number;
   droppedCount: number;
   clusters: number;
   immutableKept: number;
@@ -109,15 +116,58 @@ export async function runPhase1Review(input: Phase1Input, deps: Phase1Deps): Pro
     contextPrompt: renderContextPrompt(context),
   });
 
-  // Stage 9 adjudication over everything.
+  // Stage 8b — the critic's deterministic screen, before adjudication.
+  //
+  // It reads each draft finding against the material the reviewer was actually
+  // shown and answers one question: does that material support this claim? No
+  // model is called, so it runs on every finding of every review at no cost and
+  // with no variance.
+  //
+  // It has to run BEFORE clustering. Adjudication treats independent agreement
+  // as confirmation and raises confidence for it, and for models of one family
+  // reading one context that independence is largely fictional: they agree on
+  // the same hallucination and the bonus pushes it past the threshold. Agreement
+  // is evidence about the models, not about the code.
   const all = [...deterministic.findings, ...ensembleResult.findings, ...policyFindings];
-  const adjudicated = adjudicate(all, {
+  const reports = screen(all, {
+    diff: input.diff,
+    knownSymbols: deps.index.allSymbolNames?.() ?? [],
+    contextText: renderContextPrompt(context),
+  });
+  //
+  // Two outcomes, and they are not the same thing. UNSUPPORTED is a fact about
+  // the claim (no such file, no such line) and the finding is dropped.
+  // REPAIRABLE means the claim may well be true and the corpus simply does not
+  // carry it, so it is trusted LESS and still posted. Deleting somebody's bug
+  // report on a partial corpus would be worse than the hallucination this is
+  // trying to catch.
+  const objections = new Map<Finding, string>();
+  const screened = all.map((f, i) => {
+    const r = reports[i];
+    if (!r) return f;
+    const exempt = f.source !== "llm" || f.immutable === true;
+    if (r.verdict === "UNSUPPORTED" && !exempt) {
+      objections.set(f, r.objection);
+      return f;
+    }
+    if (r.confidenceFactor < 1 && !exempt) {
+      return { ...f, confidence: Math.round(f.confidence * r.confidenceFactor * 100) / 100 };
+    }
+    return f;
+  });
+
+  const adjudicated = adjudicate(screened, {
     confidenceThreshold: deps.confidenceThreshold,
     thresholdByCategory: deps.thresholdByCategory,
+    unsupported: (f) => {
+      const reason = objections.get(f);
+      return reason ? `critic: ${reason}` : undefined;
+    },
   });
 
   return {
     findings: adjudicated.findings,
+    unsupportedCount: objections.size,
     context,
     deterministicCount: deterministic.findings.length,
     toolsRun: deterministic.toolsRun,

@@ -129,6 +129,18 @@ services:
       # the username box.
       - key: CAVIX_AZURE_WEBHOOK_SECRET
         sync: false
+      # GitHub App installation lifecycle. These two let the edge forward
+      # "somebody changed which repositories Cavix can see" to the service that
+      # owns that record. Without them the edge accepts those events and drops
+      # them, and Cavix only notices a change the next time a person opens the
+      # Repositories page.
+      - key: CAVIX_CONTROL_PLANE_URL   # the cavix web service URL (paste after 1st deploy)
+        sync: false
+      - key: CAVIX_INTERNAL_TOKEN      # shared with the site (auto-copied)
+        fromService:
+          name: cavix
+          type: web
+          envVarKey: CAVIX_INTERNAL_TOKEN
 
   # ---------- orchestrator: runs the review, posts to GitHub ----------
   - type: web

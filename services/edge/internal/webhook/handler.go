@@ -35,6 +35,27 @@ type Handler struct {
 	log             *slog.Logger
 	botHandle       string          // comma-separated mention handles, e.g. "cavixcode,cavix"
 	allowedCmd      map[string]bool // author_associations allowed to run commands
+	installs        InstallationSink
+}
+
+// InstallationSink receives normalized installation lifecycle changes.
+//
+// A port rather than an HTTP call so the edge stays testable with no
+// infrastructure, and so a deployment with no control-plane simply has none of
+// this wired instead of failing on every delivery.
+type InstallationSink interface {
+	Apply(ctx context.Context, change InstallationChange) error
+}
+
+// WithInstallations enables installation lifecycle handling.
+//
+// Without it these deliveries are acknowledged and dropped, which is what
+// happened before and is still the right behaviour for a deployment that has no
+// control-plane to tell. What is NOT acceptable is rejecting them: GitHub would
+// retry a delivery Cavix has no intention of ever accepting.
+func (h *Handler) WithInstallations(sink InstallationSink) *Handler {
+	h.installs = sink
+	return h
 }
 
 // NewHandler wires the edge handler. botHandle is the GitHub App's mention handle,
@@ -177,8 +198,61 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.enqueue(w, r, start, delivery, job)
 
 	default:
+		// Installation lifecycle. This is how Cavix learns what it may READ, and
+		// nothing used to be listening: repository access was discovered only by
+		// polling the next time somebody opened the dashboard, so between two
+		// page loads Cavix and GitHub could disagree about the reach of an
+		// installation with nothing anywhere noticing.
+		if IsInstallationEvent(event) {
+			h.serveInstallation(w, r, delivery, event, body)
+			return
+		}
 		h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"unsupported_event"}`)
 	}
+}
+
+// serveInstallation normalizes and applies one lifecycle delivery.
+//
+// It ACKs on every path that is not a malformed body, including when there is no
+// sink and when applying fails. A webhook endpoint that returns an error makes
+// GitHub retry, and retrying a delivery Cavix cannot use turns one dropped
+// update into an indefinite loop. A failure here is logged and repaired by the
+// next reconciliation instead.
+func (h *Handler) serveInstallation(w http.ResponseWriter, r *http.Request, delivery, event string, body []byte) {
+	change, err := NormalizeInstallation(body, delivery, event)
+	if err != nil {
+		if errors.Is(err, ErrNotInstallationEvent) {
+			h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"non_trigger_action"}`)
+			return
+		}
+		h.log.Warn("installation normalize failed", "delivery", delivery, "event", event, "err", err.Error())
+		http.Error(w, "unprocessable payload", http.StatusBadRequest)
+		return
+	}
+
+	h.log.Info("installation change",
+		"delivery", delivery,
+		"event", event,
+		"action", change.Action,
+		"installation", change.InstallationID,
+		"account", change.AccountLogin,
+		"selection", change.RepositorySelection,
+		"added", len(change.Added),
+		"removed", len(change.Removed))
+
+	if h.installs == nil {
+		h.writeJSON(w, http.StatusAccepted, `{"status":"ignored","reason":"installations_not_wired"}`)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), enqueueTimeout)
+	defer cancel()
+	if err := h.installs.Apply(ctx, change); err != nil {
+		h.log.Error("could not apply installation change", "delivery", delivery, "err", err.Error())
+		h.writeJSON(w, http.StatusAccepted, `{"status":"deferred","reason":"sink_unavailable"}`)
+		return
+	}
+	h.writeJSON(w, http.StatusAccepted, `{"status":"applied"}`)
 }
 
 // serveGitLab handles a Merge Request or Note hook. Same shape as the GitHub

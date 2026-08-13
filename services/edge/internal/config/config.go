@@ -35,6 +35,13 @@ type Config struct {
 	// this is the only credential they can carry. Empty means Azure ingestion is
 	// off, which is the default.
 	AzureSecret string
+	// ControlPlaneURL and InternalToken let the edge forward GitHub App
+	// installation lifecycle events to the service that owns the installation
+	// record. Both empty means installation events are acknowledged and dropped,
+	// which is the right behaviour for a deployment with no control-plane and was
+	// the behaviour of every deployment before this existed.
+	ControlPlaneURL string
+	InternalToken   string
 }
 
 // Load reads config from env with safe defaults.
@@ -61,7 +68,9 @@ func Load() (Config, error) {
 		// Default answers to BOTH the GitHub App slug people actually type
 		// ("@cavixcode review") and the short alias ("@cavix review"). Override
 		// with CAVIX_BOT_HANDLE if your App slug differs.
-		BotHandle: getenv("CAVIX_BOT_HANDLE", "cavixcode,cavix"),
+		BotHandle:       getenv("CAVIX_BOT_HANDLE", "cavixcode,cavix"),
+		ControlPlaneURL: os.Getenv("CAVIX_CONTROL_PLANE_URL"),
+		InternalToken:   os.Getenv("CAVIX_INTERNAL_TOKEN"),
 	}
 
 	// Redis: prefer a full URL (managed Redis), else discrete host:port + auth vars.

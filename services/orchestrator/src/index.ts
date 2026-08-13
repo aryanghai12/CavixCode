@@ -33,6 +33,8 @@ export {
   buildPullDescription,
   buildCheckOutput,
   plain,
+  inlineFingerprint,
+  fingerprintFromComment,
   SUMMARY_START,
   SUMMARY_END,
   type BuiltReview,
@@ -40,6 +42,9 @@ export {
   type PosterOptions,
   type ReviewLinkRef,
   type ScopeSignals,
+  type ReviewDelta,
+  type ImpactScope,
+  type ImpactSite,
 } from "./poster/poster.ts";
 
 export {

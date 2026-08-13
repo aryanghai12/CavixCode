@@ -68,6 +68,17 @@ func main() {
 			"header", webhook.AzurePlatformHeader+": "+webhook.AzurePlatformValue+" (optional)")
 	}
 
+	// GitHub App installation lifecycle. This is how Cavix learns what it is
+	// allowed to READ, and without it repository access is only ever discovered
+	// by polling the next time somebody opens the dashboard.
+	if sink := webhook.NewControlPlaneSink(cfg.ControlPlaneURL, cfg.InternalToken, 3*time.Second); sink != nil {
+		handler = handler.WithInstallations(sink)
+		log.Info("installation lifecycle forwarding enabled", "control_plane", cfg.ControlPlaneURL)
+	} else {
+		log.Info("installation lifecycle events will be acknowledged and dropped",
+			"why", "set CAVIX_CONTROL_PLANE_URL and CAVIX_INTERNAL_TOKEN to apply them")
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", handler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

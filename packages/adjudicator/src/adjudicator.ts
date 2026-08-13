@@ -11,7 +11,17 @@ import { SEVERITY_RANK, type Evidence, type Finding, type Severity } from "@cavi
 //   2. deterministic findings (secret/sast/linter) are facts: they survive
 //      regardless of confidence (they may absorb overlapping LLM findings).
 //   3. only pure-LLM clusters are subject to the confidence threshold.
+//   4. an LLM finding the critic could not support is dropped BEFORE clustering,
+//      whatever its confidence and whatever agreed with it.
 // With the gate OFF there are no immutable findings, so nothing is force-passed.
+//
+// Invariant 4 is the one that needs defending, because it overrules the
+// agreement mechanism a few lines down. `mergeCluster` treats independent
+// agreement as confirmation and raises confidence for it. For models of one
+// family reading one context that independence is largely fictional: they agree
+// on the same hallucination, and the agreement bonus then pushes an invented
+// finding straight past the threshold. Agreement is evidence about the models.
+// It is not evidence about the code. The critic's checks are, so they outrank it.
 
 export interface AdjudicationOptions {
   confidenceThreshold?: number;
@@ -26,6 +36,15 @@ export interface AdjudicationOptions {
    */
   thresholdByCategory?: Record<string, number>;
   lineTolerance?: number;
+  /**
+   * The critic's answer for one finding: a reason string when it could not be
+   * supported, and undefined when it could.
+   *
+   * Applied only to `source === "llm"` findings that are not immutable, so a
+   * tool's fact is never overruled by an inference about it. Absent means no
+   * critic ran, and no critic is not a failed critic: nothing is dropped.
+   */
+  unsupported?: (finding: Finding) => string | undefined;
 }
 
 export interface DroppedFinding {
@@ -57,12 +76,21 @@ export function adjudicate(findings: Finding[], options: AdjudicationOptions = {
   const immutable = findings.filter((f) => f.immutable);
   const rest = findings.filter((f) => !f.immutable);
 
-  // Cluster the remaining findings by location + topical similarity.
-  const clusters = clusterFindings(rest, opts.lineTolerance);
-
   const kept: Finding[] = [];
   const dropped: DroppedFinding[] = [];
   const votes: AdjudicationResult["votesByFinding"] = [];
+
+  // (4) The critic's screen, applied BEFORE clustering so that two agents
+  // reporting the same phantom cannot vote it into existence between them.
+  const survivors: Finding[] = [];
+  for (const f of rest) {
+    const objection = f.source === "llm" ? options.unsupported?.(f) : undefined;
+    if (objection) dropped.push({ finding: f, reason: objection });
+    else survivors.push(f);
+  }
+
+  // Cluster the remaining findings by location + topical similarity.
+  const clusters = clusterFindings(survivors, opts.lineTolerance);
 
   for (const cluster of clusters) {
     const sources = new Set(cluster.map((f) => f.agent ?? f.source));

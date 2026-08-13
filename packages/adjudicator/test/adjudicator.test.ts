@@ -119,3 +119,42 @@ test("a learned threshold never touches deterministic facts or policy findings",
   assert.equal(res.findings.length, 2, "neither is subject to a learned bar");
   assert.equal(res.dropped.length, 0);
 });
+
+test("agreement cannot vote a phantom into existence", () => {
+  // Two agents report the same invented finding. Independent agreement raises
+  // confidence, and for models of one family it is not independent at all: this
+  // is exactly how a hallucination used to clear the bar. The critic's screen
+  // runs before clustering so the vote never happens.
+  const a = mk({ path: "ghost.ts", line: 9, title: "null deref", confidence: 0.6, agent: "correctness" });
+  const b = mk({ path: "ghost.ts", line: 9, title: "null deref", confidence: 0.6, agent: "security" });
+
+  const withoutCritic = adjudicate([a, b], { confidenceThreshold: 0.7 });
+  assert.equal(withoutCritic.findings.length, 1, "agreement alone clears the bar");
+  assert.ok(withoutCritic.findings[0].confidence >= 0.7);
+
+  const withCritic = adjudicate([a, b], {
+    confidenceThreshold: 0.7,
+    unsupported: (f) => (f.path === "ghost.ts" ? "critic: `ghost.ts` is not part of this change" : undefined),
+  });
+  assert.equal(withCritic.findings.length, 0);
+  assert.equal(withCritic.dropped.length, 2, "both copies, not just the merged one");
+  assert.match(withCritic.dropped[0].reason, /not part of this change/);
+});
+
+test("the critic never overrules a deterministic fact or a policy gate", () => {
+  const fact = mk({ path: "ghost.ts", line: 1, source: "sast", title: "hardcoded key", confidence: 0.9 });
+  const policy = mk({ path: "ghost.ts", line: 1, source: "policy", immutable: true, title: "no auth", confidence: 0.9 });
+  const guess = mk({ path: "ghost.ts", line: 40, title: "invented", confidence: 0.9 });
+
+  const res = adjudicate([fact, policy, guess], { unsupported: () => "critic: not part of this change" });
+  assert.equal(res.dropped.length, 1, "only the LLM finding");
+  assert.equal(res.dropped[0].finding.title, "invented");
+  assert.equal(res.findings.length, 2);
+});
+
+test("no critic is not a failed critic", () => {
+  const f = mk({ path: "a.js", line: 1, title: "real", confidence: 0.9 });
+  const res = adjudicate([f], {});
+  assert.equal(res.findings.length, 1);
+  assert.equal(res.dropped.length, 0);
+});

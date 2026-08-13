@@ -92,7 +92,13 @@ test("buildReviewSubmission: anchors a finding on an added line as an inline com
   // A hidden marker leads the body, so a later run can recognise its own inline
   // comments on a platform that has no review object to ask. It renders as
   // nothing, which is why the alert callout is still the first thing seen.
-  assert.match(c.body, /^<!-- cavix:inline -->\n> \[!WARNING\]\n> \*\*◈ SQL injection via string concatenation\*\*/);
+  // Two hidden markers, then the alert. The first says "Cavix wrote this"; the
+  // second says WHICH finding it is for, so a later review can update this
+  // comment in place instead of posting a second copy of it beside the first.
+  assert.match(
+    c.body,
+    /^<!-- cavix:inline -->\n<!-- cavix:inline:fp=[0-9a-f]+ -->\n> \[!WARNING\]\n> \*\*◈ SQL injection via string concatenation\*\*/,
+  );
   assert.match(c.body, /<kbd>high<\/kbd> <kbd>security<\/kbd> <kbd>confidence 92%<\/kbd>/);
   assert.match(c.body, /<sub>`src\/auth\.js` line 12<\/sub>/); // location travels with the body
 });

@@ -15,6 +15,8 @@ export {
   reconcile,
   fingerprintOf,
   fileDigests,
+  regionDigests,
+  type FileRegions,
   openEntries,
   dismiss,
   dismissAll,

@@ -69,6 +69,18 @@ export class CodeIndex {
     return [...this.files.keys()];
   }
 
+  /**
+   * Every symbol name the index resolved, deduplicated.
+   *
+   * Used to tell an invented identifier from a real one that happens not to
+   * appear in the diff. The distinction matters: "the `validateRefund` helper"
+   * is a hallucination when nothing by that name exists anywhere, and an
+   * ordinary cross-file reference when it exists two directories away.
+   */
+  allSymbolNames(): string[] {
+    return [...this.byName.keys()];
+  }
+
   stats(): { files: number; symbols: number; edges: number } {
     let edges = 0;
     for (const s of this.callsOut.values()) edges += s.size;

@@ -10,7 +10,12 @@ import {
 import type { ReviewPlatform, PostedReview, PullRef } from "../github/client.ts";
 import { CHECK_NAME, refFromJob } from "../github/client.ts";
 import type { Reviewer } from "../reviewer/reviewer.ts";
-import { buildCheckOutput, buildPullDescription, buildReviewSubmission } from "../poster/poster.ts";
+import {
+  buildCheckOutput,
+  buildPullDescription,
+  buildReviewSubmission,
+  type ReviewDelta,
+} from "../poster/poster.ts";
 import type { VerifyStep } from "../verify/verify.ts";
 import { preMergeUnavailable, runPreMergeChecks, type PreMergeResult } from "../policy/preMerge.ts";
 import { changedPaths, fetchSources, MAX_SOURCE_FILES } from "../sources.ts";
@@ -761,6 +766,8 @@ export async function runReview(
   // reach it, because there the review genuinely does not know what earlier
   // reviews left open. Only that case sets this false.
   let ledgerKnown = true;
+  let historyRewritten = false;
+  let reviewDelta: ReviewDelta | undefined;
   let nextLedger: ReturnType<typeof reconcile>["ledger"] | undefined;
   if (deps.ledger) {
     try {
@@ -771,9 +778,32 @@ export async function runReview(
         findings: result.findings,
         diff,
         headSha: ref.headSha,
+        // The history, so a REBASE is not mistaken for the author fixing
+        // everything. After a rebase every hunk differs because the base moved,
+        // so on file digests alone every open finding clears at once without a
+        // line of anybody's code being fixed.
+        ...(job.base_sha ? { baseSha: job.base_sha } : {}),
+        ...(state.ledger.lastHeadSha ? { priorHeadSha: state.ledger.lastHeadSha } : {}),
+        ...(state.ledger.lastBaseSha ? { priorBaseSha: state.ledger.lastBaseSha } : {}),
       });
       carried = folded.carried;
       resolvedNow = folded.resolved;
+      historyRewritten = folded.historyRewritten;
+      // "What changed since I last looked" is the reader's real question on any
+      // pull request past its first review, and answering it used to mean
+      // scrolling back and diffing two Cavix comments by eye.
+      if (state.ledger.lastHeadSha && state.ledger.lastHeadSha !== ref.headSha) {
+        const touched = new Set(parseUnifiedDiff(diff).map((f) => f.path));
+        const openPaths = new Set(folded.ledger.entries.filter((e) => e.state === "open").map((e) => e.path));
+        reviewDelta = {
+          fromSha: state.ledger.lastHeadSha,
+          toSha: ref.headSha,
+          filesReread: touched.size,
+          // Files carrying an open finding that this push did not touch. Stated
+          // because a reviewer has to know what was NOT looked at again.
+          unchangedFiles: [...openPaths].filter((p) => !touched.has(p)).length,
+        };
+      }
       // Written back ONLY when the read succeeded, and this is not a detail.
       //
       // A failed read hands back an EMPTY ledger, because that is the only
@@ -893,6 +923,13 @@ export async function runReview(
     // findings that did NOT clear and Cavix reads as if it never noticed.
     ...(carried.length > 0 ? { carried } : {}),
     ...(resolvedNow.length > 0 ? { resolved: resolvedNow } : {}),
+    // What this push changed about the review, on every review after the first.
+    ...(reviewDelta ? { delta: reviewDelta } : {}),
+    // Nothing cleared, and the reason. Without this the author sees a fix they
+    // pushed go unacknowledged and concludes Cavix stopped working; the truth is
+    // that the evidence for clearing anything was measured against a history
+    // that no longer exists.
+    ...(historyRewritten ? { historyRewritten } : {}),
     // How many of THIS review's findings clear the owner's blocking bar. The
     // poster cannot work it out: the bar is `failOn` and only this function
     // reads the config. It uses the number to say where a block came from.

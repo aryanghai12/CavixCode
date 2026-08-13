@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createControlPlane, InMemoryStore, githubConfigured, installUrl, demoOrgs, demoRepos, authorizeUrl, encryptSecret } from "@cavix/control-plane";
+import { createHash } from "node:crypto";
+import { createControlPlane, InMemoryStore, githubConfigured, installUrl, configureUrl, pkce, demoOrgs, demoRepos, authorizeUrl, encryptSecret } from "@cavix/control-plane";
 import { readJson, type Body } from "./http.ts";
 
 async function withServer(fn: (base: string, store: InMemoryStore) => Promise<void>) {
@@ -24,6 +25,7 @@ const cookieFrom = (res: Response) => (res.headers.get("set-cookie") ?? "").spli
 test("github: unconfigured by default (demo mode) + fixtures are sane", () => {
   assert.equal(githubConfigured(), false, "no client id/secret in test env");
   assert.match(installUrl(), /github\.com\/apps\//);
+  assert.match(installUrl(), /installations\/new/);
   assert.ok(demoOrgs().length >= 2);
   assert.ok(demoOrgs().some((o) => o.type === "User"), "personal account is included");
   assert.ok(demoRepos("cavix-labs").every((r) => r.full_name.startsWith("cavix-labs/")));
@@ -38,8 +40,72 @@ test("github: authorizeUrl builds a valid consent URL when configured", () => {
   assert.match(u, /client_id=abc/);
   assert.match(u, /state=state123/);
   assert.match(u, /redirect_uri=https/);
+
+  // The account chooser, so a user with a personal and a work account is never
+  // silently signed in as whichever GitHub saw last.
+  assert.match(u, /prompt=select_account/);
+
+  // NO scope parameter. A GitHub App user token does not use scopes, it uses the
+  // App's registered fine-grained permissions, so GitHub discards this on
+  // arrival. Sending "repo" here read like an access control and was not one,
+  // and reading it as though it granted repository access is exactly the
+  // confusion that made this flow look broken.
+  assert.doesNotMatch(u, /[?&]scope=/);
+
+  // PKCE when a challenge is supplied. GitHub strongly recommends it for this
+  // flow and it costs one hash.
+  const withPkce = authorizeUrl("state123", "https://app.cavix.ai/cb", "challenge123");
+  assert.match(withPkce, /code_challenge=challenge123/);
+  assert.match(withPkce, /code_challenge_method=S256/);
+
   delete process.env.CAVIX_GITHUB_OAUTH_CLIENT_ID;
   delete process.env.CAVIX_GITHUB_OAUTH_CLIENT_SECRET;
+});
+
+test("the authorize screen and the install screen are different doors", () => {
+  // The distinction this whole flow turns on. GitHub: "You can install a GitHub
+  // App without authorizing the app. Similarly, you can authorize the app
+  // without installing the app." Authorization grants access to the PERSON and
+  // has no repository picker on it at all. Installation grants access to
+  // REPOSITORIES and always renders one.
+  const signIn = authorizeUrl("s", "https://app.cavix.ai/cb");
+  const connect = installUrl({ state: "s" });
+  assert.match(signIn, /login\/oauth\/authorize/);
+  assert.match(connect, /apps\/[^/]+\/installations\/new/);
+  assert.notEqual(signIn, connect);
+  assert.match(connect, /state=s/);
+});
+
+test("installUrl can pre-target an account, skipping the chooser", () => {
+  const targeted = installUrl({ state: "s", targetId: 4242, targetType: "Organization" });
+  assert.match(targeted, /installations\/new\/permissions/);
+  assert.match(targeted, /target_id=4242/);
+  assert.match(targeted, /target_type=Organization/);
+});
+
+test("configureUrl prefers what GitHub handed back, and never guesses over it", () => {
+  // The path differs between a user account and an organisation, and a guess
+  // that gets it wrong sends somebody to a 404 in the middle of the one flow
+  // that matters.
+  assert.equal(
+    configureUrl({ id: 7, account: { login: "acme", type: "Organization" }, html_url: "https://github.com/x/7" }),
+    "https://github.com/x/7",
+  );
+  assert.match(
+    configureUrl({ id: 7, account: { login: "sam", type: "User" } }),
+    /^https:\/\/github\.com\/settings\/installations\/7$/,
+  );
+  assert.match(
+    configureUrl({ id: 7, account: { login: "acme", type: "Organization" } }),
+    /^https:\/\/github\.com\/organizations\/acme\/settings\/installations\/7$/,
+  );
+});
+
+test("pkce produces a verifier and a matching S256 challenge", () => {
+  const a = pkce();
+  const b = pkce();
+  assert.notEqual(a.verifier, b.verifier, "a fresh verifier every time");
+  assert.equal(createHash("sha256").update(a.verifier).digest("base64url"), a.challenge);
 });
 
 // ---------- OAuth start / callback (demo) ----------
@@ -89,7 +155,11 @@ test("github connect: list orgs + repos and enable one from the site", async () 
 
     const status = await readJson(await fetch(base + "/api/github/status", { headers: { cookie } }));
     assert.equal(status.demo, true);
-    assert.match(status.installUrl, /github\.com\/apps/);
+    // A Cavix route, NOT a github.com link. The route mints and stores the state
+    // that ties the install GitHub sends back to this session; a link straight to
+    // github.com skips that, so nothing on the way back can be trusted.
+    assert.equal(status.connectUrl, "/api/github/connect");
+    assert.equal(status.hasInstallation, false);
 
     const orgs = await readJson(await fetch(base + "/api/github/orgs", { headers: { cookie } }));
     assert.ok(orgs.length >= 2);
@@ -161,7 +231,7 @@ test("installations: lists orgs with install status + repos + enabled state (dem
     const cookie = cookieFrom(await post(base, "/api/auth/login", { email: "u@acme.co", password: "password123" }));
 
     const data = await readJson(await fetch(base + "/api/github/installations", { headers: { cookie } }));
-    assert.match(data.installUrl, /github\.com\/apps\//);
+    assert.equal(data.connectUrl, "/api/github/connect");
     const byLogin = Object.fromEntries(data.orgs.map((o: Body) => [o.login, o]));
     // demo: cavix-labs installed, acme-inc NOT installed (Install button case)
     assert.equal(byLogin["cavix-labs"].installed, true);
@@ -170,6 +240,17 @@ test("installations: lists orgs with install status + repos + enabled state (dem
     assert.equal(byLogin["acme-inc"].repos.length, 0);
     // nothing enabled yet
     assert.ok(byLogin["cavix-labs"].repos.every((r: Body) => r.enabled === false));
+
+    // Every org row carries somewhere to go, and the two destinations are
+    // different questions. Not installed goes to the install screen. Installed
+    // goes to GitHub's configure page, which is the ONLY place an existing
+    // installation's repository selection can be changed. Without the second
+    // one there was no route back to the picker after the first install, which
+    // is most of what "GitHub never asks me anything" actually was.
+    assert.match(byLogin["acme-inc"].manageUrl, /^\/api\/github\/connect\?target=acme-inc$/);
+    assert.match(byLogin["cavix-labs"].manageUrl, /github\.com.*installations\/\d+$/);
+    assert.equal(byLogin["cavix-labs"].repositorySelection, "all");
+    assert.equal(byLogin["acme-inc"].repositorySelection, null);
   });
 });
 

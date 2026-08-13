@@ -158,6 +158,46 @@ must feed in: **App ID (④)**, **Private key (⑤)**, and **Webhook secret (⑥
    mention handle.** If the resulting handle is `cavixcode`, users will type
    `@cavixcode review` on their PRs. Remember it — you'll put it in `CAVIX_BOT_HANDLE`.
 4. **Homepage URL:** any valid URL (your website, or even your GitHub profile).
+
+   ---
+
+   ### ⚠️ 4b. The four settings that decide whether GitHub asks people to pick repositories
+
+   **Read this bit even if you skim everything else.** These four settings are the
+   difference between "GitHub shows a proper screen where I choose my repositories"
+   and "I clicked Connect and nothing happened".
+
+   Here is the thing almost everyone gets wrong, in GitHub's own words:
+
+   > "You can install a GitHub App without authorizing the app. Similarly, you can
+   > authorize the app without installing the app."
+
+   GitHub has **two separate permissions**, not one:
+
+   | | What it is | Does it show a repository picker? |
+   |---|---|---|
+   | **Authorize** | "This app may see who I am" (your name, your email) | **No. Never. There is no picker on that screen.** |
+   | **Install** | "This app may read these repositories" | **Yes.** Choose the account, then "All repositories" or "Only select repositories" |
+
+   Signing in with GitHub only does the first one. That is why it feels like
+   nothing happened: you already said yes once, so GitHub says yes again instantly
+   and sends you straight back. Nothing is broken. It is the wrong door.
+
+   Set these four so people land at the right door and come back properly:
+
+   | Setting on the App page | Set it to | Why |
+   |---|---|---|
+   | **Callback URL** | `https://YOUR-SITE/api/github/setup` | Where GitHub returns after somebody installs |
+   | **Setup URL** | `https://YOUR-SITE/api/github/setup` | The same address. GitHub uses one or the other depending on the next setting, and Cavix handles both |
+   | **Request user authorization (OAuth) during installation** | ✅ **Ticked** | Makes install and sign-in one screen and one click, instead of two |
+   | **Redirect on update** | ✅ **Ticked** | When somebody later changes which repositories Cavix can see, Cavix is told straight away instead of finding out hours later |
+
+   Replace `YOUR-SITE` with your real public address, for example
+   `https://cavix.onrender.com`. It must be the **control-plane** (the website and
+   dashboard), not the edge service.
+
+   ---
+
 5. **Webhook** section:
    - Tick **Active**.
    - **Webhook URL:** the public internet address of your running "edge" service,
@@ -178,7 +218,15 @@ must feed in: **App ID (④)**, **Private key (⑤)**, and **Webhook secret (⑥
    | Checks | Read and write |
    | Metadata | Read‑only |
 7. **Subscribe to events:** tick **Pull request**, **Issue comment**,
-   **Pull request review comment**, **Installation**, **Installation repositories**.
+   **Pull request review comment**, **Installation**, **Installation repositories**,
+   and **Installation target**.
+
+   The last three are how Cavix finds out what it is allowed to read. Without them,
+   somebody can add a repository on GitHub and Cavix will not notice until the next
+   time a person happens to open the Repositories page. For those events to be
+   acted on rather than politely ignored, the edge service also needs
+   `CAVIX_CONTROL_PLANE_URL` and `CAVIX_INTERNAL_TOKEN` set (see the table in
+   PART 5); without them the edge accepts the event and drops it.
 8. **Where can this app be installed:** "Only on this account" (private) or "Any
    account" (if you'll publish it publicly / on the Marketplace).
 9. Click **Create GitHub App**.

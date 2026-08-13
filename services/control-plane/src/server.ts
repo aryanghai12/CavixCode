@@ -232,16 +232,163 @@ async function apiRoute(
     }
     const state = gh.newState();
     const redirectUri = `${baseUrl(req)}/api/auth/github/callback`;
+    const { verifier, challenge } = gh.pkce();
+    store.putOAuthState({ state, uid: null, kind: "signin", codeVerifier: verifier, createdAt: Date.now() });
     res.setHeader("Set-Cookie", `gh_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${cookieSecureAttr()}`);
-    const dest = gh.githubConfigured() ? gh.authorizeUrl(state, redirectUri) : `/api/auth/github/callback?demo=1&state=${state}`;
+    const dest = gh.githubConfigured()
+      ? gh.authorizeUrl(state, redirectUri, challenge)
+      : `/api/auth/github/callback?demo=1&state=${state}`;
     res.writeHead(302, { location: dest });
     return void res.end();
+  }
+
+  // ----- Connect repositories: the INSTALL flow -----
+  //
+  // The one entry point for connecting repositories, and it is deliberately not
+  // the authorize URL. Authorization grants access to the signed-in PERSON;
+  // installation grants access to REPOSITORIES, and only the installation screen
+  // has an account chooser and a "All repositories / Only select repositories"
+  // picker on it. Sending somebody to authorize and calling it "connect GitHub"
+  // is what made the whole thing look silently broken: they had already granted
+  // it, so GitHub honoured the grant and bounced them straight back with nothing
+  // to choose.
+  if (m === "GET" && p === "/api/github/connect") {
+    if (!gh.githubConfigured()) {
+      res.writeHead(302, { location: "/app/repositories?error=github_unconfigured" });
+      return void res.end();
+    }
+    const s = sessionFromRequest(req);
+    const state = gh.newState();
+    const target = url.searchParams.get("target") ?? "";
+    const targetId = Number(url.searchParams.get("target_id") ?? 0);
+    const targetType = url.searchParams.get("target_type") === "User" ? "User" : "Organization";
+    store.putOAuthState({
+      state,
+      // Signing in first is not required. Somebody can arrive from a marketing
+      // page, install, and have the account created on the way back.
+      uid: s?.uid ?? null,
+      kind: "install",
+      ...(target ? { target } : {}),
+      ...(safeNext(url.searchParams.get("next")) ? { next: safeNext(url.searchParams.get("next"))! } : {}),
+      createdAt: Date.now(),
+    });
+    res.setHeader("Set-Cookie", `gh_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${cookieSecureAttr()}`);
+    res.writeHead(302, {
+      location: gh.installUrl({
+        state,
+        ...(targetId > 0 ? { targetId, targetType } : {}),
+      }),
+    });
+    return void res.end();
+  }
+
+  // ----- Where GitHub returns after an install -----
+  //
+  // Serves both shapes: with "Request user authorization (OAuth) during
+  // installation" switched on GitHub sends a `code` here and one screen produces
+  // both grants; with it off it sends only `installation_id` to the Setup URL.
+  // Nothing landed here before, so the single highest-signal moment in the whole
+  // onboarding, the instant somebody actually granted repository access, was
+  // dropped on the floor.
+  if (m === "GET" && p === "/api/github/setup") {
+    const cookies = parseCookies(req.headers.cookie);
+    const state = url.searchParams.get("state") ?? "";
+    const rec = store.takeOAuthState(state);
+    // Both must agree. The cookie alone can be replayed from a captured URL; the
+    // server record alone cannot prove the browser that finished is the browser
+    // that started.
+    if (!rec || !constantTimeEqual(state, cookies.gh_state ?? "")) {
+      res.writeHead(302, { location: "/app/repositories?error=github_state", "set-cookie": clearStateCookie() });
+      return void res.end();
+    }
+
+    const code = url.searchParams.get("code");
+    const setupAction = url.searchParams.get("setup_action") ?? "";
+    const claimedInstall = Number(url.searchParams.get("installation_id") ?? 0);
+
+    try {
+      let uid = rec.uid;
+      let tokens: gh.GitHubTokens | null = null;
+
+      if (code && gh.githubConfigured()) {
+        tokens = await gh.exchangeCode(code, `${baseUrl(req)}/api/github/setup`, rec.codeVerifier);
+        const ghUser = await gh.getUser(tokens.accessToken);
+        const primary = await gh.getPrimaryEmail(tokens.accessToken);
+        const email = primary ?? `${ghUser.login}@users.noreply.github.com`;
+        const orgName = ghUser.login.toLowerCase();
+        const isNew = !store.getUserByEmail(email);
+        const user = store.upsertOAuthUser({
+          email,
+          name: ghUser.name ?? ghUser.login,
+          org: orgName,
+          provider: "github",
+          login: ghUser.login,
+        });
+        store.setOAuthToken(user.id, tokens);
+        if (isNew) store.startTrial(orgName, 14);
+        uid = user.id;
+      }
+
+      if (!uid) {
+        // Installed while signed out and the App does not request authorization
+        // during install. There is nothing to attach the installation to yet, so
+        // send them to sign in and pick it up on the other side.
+        res.writeHead(302, {
+          location: `/login?next=${encodeURIComponent("/app/repositories")}`,
+          "set-cookie": clearStateCookie(),
+        });
+        return void res.end();
+      }
+
+      const user = store.getUser(uid);
+      if (!user) {
+        res.writeHead(302, { location: "/login", "set-cookie": clearStateCookie() });
+        return void res.end();
+      }
+
+      const token = tokens?.accessToken ?? (await liveGitHubToken(store, uid));
+      // NEVER trust installation_id off the query string. GitHub says so in as
+      // many words: "Bad actors can hit this URL with a spoofed installation_id."
+      // The only proof is enumerating what this user can actually see.
+      const installs = token ? await gh.getInstallations(token) : [];
+      const verified = installs.find((i) => i.id === claimedInstall) ?? null;
+
+      if (!verified && setupAction === "request") {
+        // An org that requires owner approval. A real state with a real answer,
+        // not an error: showing an empty repository list here tells somebody
+        // their install failed when it is sitting in a queue.
+        res.writeHead(302, {
+          location: `/app/repositories?pending=${encodeURIComponent(rec.target ?? "1")}`,
+          "set-cookie": [sessionCookie(signSession(sessionClaims(user))), clearStateCookie()],
+        });
+        return void res.end();
+      }
+
+      if (token) await reconcileInstallations(store, user.org, token, installs);
+
+      const dest =
+        rec.next ??
+        `/app/repositories?connected=${encodeURIComponent(verified?.account.login ?? user.githubLogin ?? "")}`;
+      res.writeHead(302, {
+        location: dest,
+        "set-cookie": [sessionCookie(signSession(sessionClaims(user))), clearStateCookie()],
+      });
+      return void res.end();
+    } catch (err) {
+      log("error", "GitHub setup callback failed", { err: (err as Error).message });
+      res.writeHead(302, {
+        location: `/app/repositories?error=${encodeURIComponent((err as Error).message)}`,
+        "set-cookie": clearStateCookie(),
+      });
+      return void res.end();
+    }
   }
 
   if (m === "GET" && p === "/api/auth/github/callback") {
     const cookies = parseCookies(req.headers.cookie);
     const state = url.searchParams.get("state");
-    if (!state || state !== cookies.gh_state) {
+    const pending = state ? store.takeOAuthState(state) : null;
+    if (!state || !constantTimeEqual(state, cookies.gh_state ?? "")) {
       res.writeHead(302, { location: "/login?error=github_state" });
       return void res.end();
     }
@@ -250,7 +397,7 @@ async function apiRoute(
       let tokens: gh.GitHubTokens | null = null;
       if (gh.githubConfigured() && url.searchParams.get("code")) {
         const redirectUri = `${baseUrl(req)}/api/auth/github/callback`;
-        tokens = await gh.exchangeCode(url.searchParams.get("code")!, redirectUri);
+        tokens = await gh.exchangeCode(url.searchParams.get("code")!, redirectUri, pending?.codeVerifier);
         const ghUser = await gh.getUser(tokens.accessToken);
         const primary = await gh.getPrimaryEmail(tokens.accessToken);
         // The fallback is fine; being SILENT about it was not.
@@ -289,7 +436,24 @@ async function apiRoute(
       if (tokens) store.setOAuthToken(user.id, tokens);
       if (isNew) store.startTrial(orgName, 14); // new GitHub signups get a 14-day trial (can connect private repos)
       const session = signSession({ uid: user.id, email: user.email, org: user.org, role: user.role });
-      res.writeHead(302, { location: "/app", "set-cookie": sessionCookie(session) });
+
+      // Signing in is not connecting. A user with no installation has granted
+      // Cavix access to their profile and to no repository at all, and dropping
+      // them on a dashboard with an empty Repositories page is the original
+      // silent failure restated in the UI. Send them to the flow that actually
+      // asks, which is the install screen.
+      let dest = "/app";
+      if (tokens) {
+        try {
+          const installs = await gh.getInstallations(tokens.accessToken);
+          if (installs.length === 0) dest = "/api/github/connect";
+          else await reconcileInstallations(store, user.org, tokens.accessToken, installs);
+        } catch (err) {
+          // Never block a sign-in on this. The dashboard asks again.
+          log("warn", "could not read installations during sign-in", { err: (err as Error).message });
+        }
+      }
+      res.writeHead(302, { location: dest, "set-cookie": sessionCookie(session) });
       return void res.end();
     } catch (err) {
       res.writeHead(302, { location: `/login?error=${encodeURIComponent((err as Error).message)}` });
@@ -327,6 +491,7 @@ async function apiRoute(
     const needsReconnect = !live && !demo;
 
     if (m === "GET" && p === "/api/github/status") {
+      const stored = store.listInstallations(user.org);
       return void sendJson(res, 200, {
         configured: gh.githubConfigured(),
         // "Connected" means we hold a credential GitHub will accept right now,
@@ -337,7 +502,49 @@ async function apiRoute(
         login: user.githubLogin ?? null,
         demo,
         appSlug: gh.githubConfig().appSlug,
-        installUrl: gh.installUrl(),
+        // The route, not the GitHub URL. It mints a state first, and a link
+        // straight to github.com skips that and cannot be tied back to a session.
+        connectUrl: "/api/github/connect",
+        // Signed in and installed nowhere is the state this whole flow exists
+        // for. It is NOT the same as disconnected, and the UI has to tell them
+        // apart or it repeats the failure it was built to fix.
+        hasInstallation: stored.length > 0,
+        installations: stored.map((i) => ({
+          id: i.id,
+          account: i.accountLogin,
+          accountType: i.accountType,
+          repositorySelection: i.repositorySelection,
+          repoCount: i.repos.length,
+          suspended: i.suspended,
+          configureUrl: i.htmlUrl,
+        })),
+      });
+    }
+
+    // Revoke the authorization outright. The only thing GitHub offers that
+    // really does force a full consent screen next time, which is why it is
+    // bound to a button somebody pressed on purpose and to nothing else.
+    if (m === "POST" && p === "/api/github/disconnect") {
+      if (live && token) {
+        try {
+          await gh.revokeGrant(token);
+        } catch (err) {
+          log("warn", "GitHub grant revocation failed; clearing the local credential anyway", {
+            err: (err as Error).message,
+          });
+        }
+      }
+      store.clearOAuthToken(user.id);
+      for (const i of store.listInstallations(user.org)) store.removeInstallation(i.id);
+      return void sendJson(res, 200, {
+        ok: true,
+        // Precise on purpose. Revoking the authorization does not uninstall the
+        // App, and somebody who believes it did thinks Cavix has lost access it
+        // still has.
+        note:
+          "Cavix's GitHub authorization was revoked and its stored credential deleted. The Cavix app may " +
+          "still be installed on your account; only an account owner can remove it from GitHub. " +
+          "Reconnecting will show the full consent screen.",
       });
     }
 
@@ -351,6 +558,15 @@ async function apiRoute(
         const installById = new Map(installs.map((i) => [i.account.login.toLowerCase(), i.id]));
         const enabledSet = new Set(store.listRepos(user.org).filter((r) => r.enabled !== false).map((r) => r.name));
 
+        // The live answer is also the authoritative one, so write it through:
+        // a page load is the cheapest repair there is for a webhook that never
+        // arrived.
+        if (live) await reconcileInstallations(store, user.org, token!, installs);
+        const configureByLogin = new Map(installs.map((i) => [i.account.login.toLowerCase(), gh.configureUrl(i)]));
+        const selectionByLogin = new Map(
+          installs.map((i) => [i.account.login.toLowerCase(), i.repository_selection ?? "selected"]),
+        );
+
         const out = [];
         for (const o of orgs) {
           const installed = installById.has(o.login.toLowerCase());
@@ -361,9 +577,28 @@ async function apiRoute(
               repos = list.map((r) => ({ name: r.name, fullName: r.full_name, private: r.private, description: r.description ?? "", language: r.language ?? "", enabled: enabledSet.has(r.full_name) }));
             } catch { repos = []; }
           }
-          out.push({ login: o.login, isUser: (o.type ?? "Organization") === "User", installed, repos });
+          out.push({
+            login: o.login,
+            isUser: (o.type ?? "Organization") === "User",
+            installed,
+            repos,
+            // Where to send somebody to CHANGE what Cavix can see. Not installed
+            // means the install screen; installed means GitHub's configure page,
+            // which carries the same repository picker. Without this second link
+            // there was no way back to the picker once the first install was
+            // done, which is most of what "it never asks me" was about.
+            manageUrl: installed
+              ? (configureByLogin.get(o.login.toLowerCase()) ?? "")
+              : `/api/github/connect?target=${encodeURIComponent(o.login)}`,
+            repositorySelection: installed ? (selectionByLogin.get(o.login.toLowerCase()) ?? "selected") : null,
+          });
         }
-        return void sendJson(res, 200, { demo, appSlug: gh.githubConfig().appSlug, installUrl: gh.installUrl(), orgs: out });
+        return void sendJson(res, 200, {
+          demo,
+          appSlug: gh.githubConfig().appSlug,
+          connectUrl: "/api/github/connect",
+          orgs: out,
+        });
       } catch (err) {
         return void sendGitHubError(res, store, user.id, err as Error, user.githubLogin);
       }
@@ -736,6 +971,95 @@ async function apiRoute(
       return void sendJson(res, 200, store.saveCiHistory(org, repo, runs));
     }
     return void sendJson(res, 405, { error: `no telemetry route for ${m}` });
+  }
+
+  // ----- internal: GitHub App installation lifecycle, forwarded by the edge -----
+  //
+  // The webhook that tells Cavix what it may READ. It arrives at the edge, which
+  // is the one service with the App's webhook secret, and is forwarded here
+  // because this is the service that owns the installation record.
+  //
+  // Before this existed, repository access was only ever discovered by polling
+  // /user/installations the next time somebody happened to open the Repositories
+  // page. Between two page loads Cavix's idea of its own reach and GitHub's could
+  // disagree with nothing anywhere noticing, and every review decision made from
+  // the stale side is wrong in one of two directions: a repository reviewed after
+  // access was revoked, or one ignored after it was granted.
+  if (m === "POST" && p === "/api/internal/github/installation") {
+    const token = process.env.CAVIX_INTERNAL_TOKEN;
+    if (!token) return void sendJson(res, 404, { error: "internal API disabled (set CAVIX_INTERNAL_TOKEN)" });
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    if (!constantTimeEqual(bearer, token)) return void sendJson(res, 401, { error: "unauthorized" });
+
+    const body = await readJson(req);
+    const id = Number(body.installation_id ?? 0);
+    if (!id) return void sendJson(res, 400, { error: "installation_id required" });
+    const action = String(body.action ?? "");
+    const accountLogin = String(body.account_login ?? "");
+    const at = String(body.updated_at ?? new Date().toISOString());
+    const existing = store.getInstallation(id);
+    // The workspace an installation belongs to. A GitHub sign-in creates the
+    // workspace under the account's own login, so that is the mapping; an
+    // installation Cavix already knows keeps whatever workspace it was attached
+    // to, because a rename must not silently move it to a different one.
+    const org = existing?.org ?? accountLogin.toLowerCase();
+    if (!org) return void sendJson(res, 400, { error: "account_login required for a new installation" });
+
+    const repos = (list: unknown): Array<{ id: number; fullName: string; private: boolean }> =>
+      (Array.isArray(list) ? list : []).map((r) => {
+        const row = (r ?? {}) as Record<string, unknown>;
+        return {
+          id: Number(row.id ?? 0),
+          fullName: String(row.full_name ?? ""),
+          private: row.private === true,
+        };
+      });
+
+    if (action === "deleted") {
+      // Uninstalled. Everything Cavix believed about this account's repositories
+      // is now false, and leaving the row behind means it keeps reviewing
+      // repositories it has been thrown out of.
+      store.removeInstallation(id);
+      log("info", "GitHub App uninstalled", { installation: id, account: accountLogin, org });
+      return void sendJson(res, 200, { ok: true, removed: true });
+    }
+
+    if (action === "added" || action === "removed") {
+      // The repository picker's output, which is the control customers are
+      // actually told to use.
+      const next = store.updateInstallationRepos(id, repos(body.added), repos(body.removed).map((r) => r.id), at);
+      if (!next) {
+        // A delta for an installation nobody recorded. Do not invent one from a
+        // partial payload: the full set is unknown, and a guess would claim a
+        // reach that was never granted. A reconcile on the next page load fills
+        // it in from the authoritative list.
+        log("warn", "repository delta for an unknown installation; waiting for a full reconcile", {
+          installation: id,
+          account: accountLogin,
+        });
+        return void sendJson(res, 202, { ok: true, deferred: "unknown installation" });
+      }
+      return void sendJson(res, 200, { ok: true, repos: next.repos.length });
+    }
+
+    const saved = store.saveInstallation({
+      id,
+      org,
+      accountLogin: accountLogin || existing?.accountLogin || "",
+      accountId: Number(body.account_id ?? existing?.accountId ?? 0),
+      accountType: body.account_type === "User" ? "User" : "Organization",
+      repositorySelection: body.repository_selection === "all" ? "all" : "selected",
+      htmlUrl: String(body.html_url ?? existing?.htmlUrl ?? ""),
+      suspended: body.suspended === true,
+      // A payload that carries no repository list is not a claim that there are
+      // none. Only `installation.created` enumerates them; a suspend or a rename
+      // says nothing about the set, and reading silence as "empty" would stop
+      // every review on the account.
+      repos: Array.isArray(body.repositories) ? repos(body.repositories) : (existing?.repos ?? []),
+      updatedAt: at,
+    });
+    if (!saved) return void sendJson(res, 200, { ok: true, stale: true });
+    return void sendJson(res, 200, { ok: true, repos: saved.repos.length });
   }
 
   // ----- orgs / onboarding (unauthenticated create kept for API/tests & GitHub App onboarding) -----
@@ -1156,6 +1480,92 @@ async function apiRoute(
  * place every route reads the token from, keeps that invisible to the user:
  * they stay signed in for as long as the refresh token lives (six months).
  */
+/** Expire the round-trip cookie. Every terminal path in the flow sends this. */
+function clearStateCookie(): string {
+  return `gh_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${cookieSecureAttr()}`;
+}
+
+/**
+ * A post-connect destination, or undefined.
+ *
+ * Only a path on this site. An absolute URL here is an open redirect: GitHub
+ * hands the value straight back and Cavix would forward somebody to it having
+ * just proved they are signed in.
+ */
+function safeNext(value: string | null): string | undefined {
+  if (!value) return undefined;
+  if (!value.startsWith("/") || value.startsWith("//")) return undefined;
+  return value;
+}
+
+function sessionClaims(user: { id: string; email: string; org: string; role: Role }): {
+  uid: string;
+  email: string;
+  org: string;
+  role: Role;
+} {
+  return { uid: user.id, email: user.email, org: user.org, role: user.role };
+}
+
+/**
+ * Make the store agree with GitHub about what Cavix may read.
+ *
+ * GitHub is the authority here and this is a full replacement for the given
+ * workspace, not a merge: an installation the user can no longer see has been
+ * removed, and leaving the row behind means Cavix keeps believing it can review
+ * repositories it has been thrown out of.
+ */
+async function reconcileInstallations(
+  store: Store,
+  org: string,
+  token: string,
+  installs: gh.GitHubInstallation[],
+): Promise<void> {
+  const at = new Date().toISOString();
+  const seen = new Set<number>();
+
+  for (const i of installs) {
+    seen.add(i.id);
+    let repos: Array<{ id: number; fullName: string; private: boolean }> = [];
+    try {
+      const list = await gh.getInstallationRepos(token, i.id);
+      repos = list.map((r) => ({ id: repoId(r), fullName: r.full_name, private: r.private }));
+    } catch {
+      // Keep whatever was already known rather than recording an empty set: a
+      // transient API failure must not read as "this installation lost every
+      // repository", which would stop reviews on all of them.
+      repos = store.getInstallation(i.id)?.repos ?? [];
+    }
+    store.saveInstallation({
+      id: i.id,
+      org,
+      accountLogin: i.account.login,
+      accountId: i.account.id ?? 0,
+      accountType: i.account.type === "User" ? "User" : "Organization",
+      repositorySelection: i.repository_selection ?? "selected",
+      htmlUrl: gh.configureUrl(i),
+      suspended: !!i.suspended_at,
+      repos,
+      updatedAt: at,
+    });
+  }
+
+  for (const stored of store.listInstallations(org)) {
+    if (!seen.has(stored.id)) store.removeInstallation(stored.id);
+  }
+}
+
+/**
+ * GitHub's numeric repository id, when the response carried one.
+ *
+ * Zero means the shape did not include it (the demo fixtures, an older API
+ * response). A zero id is never used as a key, only stored, so it degrades to
+ * the full name rather than colliding with another repository.
+ */
+function repoId(r: gh.GitHubRepo & { id?: number }): number {
+  return typeof r.id === "number" ? r.id : 0;
+}
+
 async function liveGitHubToken(store: Store, userId: string): Promise<string | null> {
   const tokens = store.getOAuthToken(userId);
   if (!tokens) return null;

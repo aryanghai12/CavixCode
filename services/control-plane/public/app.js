@@ -69,11 +69,31 @@
     document.querySelectorAll(".nav-item").forEach((el) => el.addEventListener("click", () => go(el.dataset.view)));
     window.addEventListener("hashchange", () => go(location.hash.slice(1) || "overview", true));
 
-    // Returning from the GitHub App install flow (GitHub appends installation_id).
+    // Returning from the GitHub App install flow. The server handles the real
+    // callback at /api/github/setup and redirects here with a plain outcome, so
+    // everything below is presentation and nothing here is trusted.
     const q = new URLSearchParams(location.search);
-    if (q.has("installation_id") || q.get("setup_action") === "install") {
+    if (q.has("connected") || q.has("pending") || q.has("installation_id") || q.get("setup_action") === "install") {
+      const account = q.get("connected");
+      const pending = q.get("pending");
       history.replaceState(null, "", "/app#repos");
-      setTimeout(() => toast("Cavix installed. Toggle the repositories you want reviewed."), 400);
+      setTimeout(() => {
+        if (pending) {
+          // An org that requires an owner's approval. A real state with a real
+          // answer: telling somebody nothing happened, when a request is sitting
+          // in a queue, is how they conclude the product is broken.
+          toast(`Install requested${pending && pending !== "1" ? ` for ${pending}` : ""}. An owner of that organization has to approve it before Cavix can read anything.`);
+        } else {
+          toast(account ? `Connected ${account}. Toggle the repositories you want reviewed.` : "Cavix installed. Toggle the repositories you want reviewed.");
+        }
+      }, 400);
+      go("repos", true);
+      return;
+    }
+    if (q.has("error")) {
+      const err = q.get("error");
+      history.replaceState(null, "", "/app#repos");
+      setTimeout(() => toast(err === "github_state" ? "That GitHub link had expired. Try connecting again." : `GitHub: ${err}`), 400);
       go("repos", true);
       return;
     }
@@ -446,17 +466,25 @@
     }
 
     const data = await api(`/api/github/installations`);
-    const connectedNote = data.demo ? `<span class="badge">demo data</span>` : `<span class="badge badge-verified">connected as ${esc(status.login || "you")}</span>`;
+    const connectedNote = data.demo ? `<span class="badge">demo data</span>` : `<span class="badge badge-verified">signed in as ${esc(status.login || "you")}</span>`;
+    // Cavix's own route, never a github.com link. The route mints and stores the
+    // state that ties the install GitHub sends back to this session.
+    const connectUrl = data.connectUrl || "/api/github/connect";
 
     const orgCards = data.orgs.map((o) => {
       if (!o.installed) {
         return `<div class="panel">
           <div class="panel-head">
-            <div class="ao-name"><span class="ao-av">${esc(o.login[0].toUpperCase())}</span><div>${esc(o.login)}${o.isUser ? " (you)" : ""}<div class="ao-meta">Cavix isn't installed here yet</div></div></div>
-            <a class="btn btn-primary btn-sm" href="${esc(data.installUrl)}" target="_blank" rel="noopener">${GH_SVG} Install Cavix</a>
+            <div class="ao-name"><span class="ao-av">${esc(o.login[0].toUpperCase())}</span><div>${esc(o.login)}${o.isUser ? " (you)" : ""}<div class="ao-meta">Cavix can't read anything here yet</div></div></div>
+            <a class="btn btn-primary btn-sm" href="${esc(o.manageUrl || connectUrl)}">${GH_SVG} Choose repositories</a>
           </div>
         </div>`;
       }
+      // "All repositories" and "3 of 47 selected" are different promises, and the
+      // difference decides whether a repo created tomorrow gets reviewed.
+      const scope = o.repositorySelection === "all"
+        ? `all repositories, including ones added later`
+        : `${o.repos.length} ${o.repos.length === 1 ? "repository" : "repositories"} selected`;
       const rows = o.repos.length ? o.repos.map((r) => `
         <div class="repo-row">
           <div class="r-ico">${r.private ? ic("lock") : ic("repos")}</div>
@@ -466,21 +494,34 @@
           </div>
           ${r.language ? `<span class="r-lang">${esc(r.language)}</span>` : ""}
           <label class="switch"><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="cavixToggleRepo('${esc(r.fullName)}', ${!r.private}, this)"><span class="slider"></span></label>
-        </div>`).join("") : `<div class="empty" style="padding:24px">No repositories granted to this installation. <a href="${esc(data.installUrl)}" target="_blank">Adjust repo access ↗</a></div>`;
+        </div>`).join("") : `<div class="empty" style="padding:24px">Cavix has access to no repositories here. <a href="${esc(o.manageUrl || connectUrl)}" target="_blank" rel="noopener">Choose repositories on GitHub ↗</a></div>`;
       return `<div class="panel">
         <div class="panel-head">
-          <div class="ao-name"><span class="ao-av">${esc(o.login[0].toUpperCase())}</span><div>${esc(o.login)}${o.isUser ? " (you)" : ""}<div class="ao-meta">${o.repos.filter((r) => r.enabled).length} of ${o.repos.length} enabled</div></div></div>
-          <span class="badge badge-verified">installed</span>
+          <div class="ao-name"><span class="ao-av">${esc(o.login[0].toUpperCase())}</span><div>${esc(o.login)}${o.isUser ? " (you)" : ""}<div class="ao-meta">Cavix can read ${esc(scope)} &middot; ${o.repos.filter((r) => r.enabled).length} enabled for review</div></div></div>
+          <a class="btn btn-soft btn-sm" href="${esc(o.manageUrl || connectUrl)}" target="_blank" rel="noopener">Change repositories ↗</a>
         </div>
         <div class="repo-list" style="border:none">${rows}</div>
       </div>`;
     }).join("");
 
+    // Signed in and installed nowhere is its own state. It is NOT "connected",
+    // and showing an empty list here is what made this look silently broken:
+    // signing in grants Cavix your profile and no repository at all.
+    const nothingInstalled = data.orgs.length > 0 && data.orgs.every((o) => !o.installed);
+    const banner = nothingInstalled
+      ? `<div class="panel"><div class="panel-body">
+          <div class="sr-label">Cavix cannot read any repository yet</div>
+          <div class="sr-desc">Signing in with GitHub identified you. It did not give Cavix access to any code. GitHub keeps those two things separate, so choosing repositories is a second, deliberate step.</div>
+          <div style="margin-top:12px"><a class="btn btn-primary" href="${esc(connectUrl)}">${GH_SVG} Choose repositories</a></div>
+        </div></div>`
+      : "";
+
     content.innerHTML = `
       <div class="panel"><div class="panel-body" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <div><div class="sr-label">${GH_SVG} Your GitHub organizations</div><div class="sr-desc">Install Cavix on an org, then toggle the repos it should review. Only enabled repos are reviewed.</div></div>
-        <div style="display:flex;gap:10px;align-items:center">${connectedNote}<a class="btn btn-soft btn-sm" href="${esc(data.installUrl)}" target="_blank" rel="noopener">Manage installation ↗</a></div>
+        <div><div class="sr-label">${GH_SVG} Your GitHub organizations</div><div class="sr-desc">Choose which repositories Cavix may read on GitHub, then toggle the ones it should review. Only enabled repositories are reviewed.</div></div>
+        <div style="display:flex;gap:10px;align-items:center">${connectedNote}<a class="btn btn-primary btn-sm" href="${esc(connectUrl)}">${GH_SVG} Add repositories</a></div>
       </div></div>
+      ${banner}
       ${orgCards || `<div class="empty" style="padding:40px">No organizations found.</div>`}`;
   }
   window.cavixToggleRepo = async function (fullName, isPublic, el) {

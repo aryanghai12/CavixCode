@@ -445,6 +445,25 @@ export interface Store {
   /** Forget a dead credential, so the UI stops pretending the user is connected. */
   clearOAuthToken(userId: string): void;
 
+  // --- GitHub App: pending round trips and installations ---
+  /** Remember a round trip we are about to send someone on. */
+  putOAuthState(rec: OAuthStateRecord): void;
+  /** Take it back, once. A replayed state must not authenticate a second time. */
+  takeOAuthState(state: string): OAuthStateRecord | null;
+  /** Record or update an installation. Older payloads are discarded. */
+  saveInstallation(install: Installation): Installation | null;
+  listInstallations(org: string): Installation[];
+  getInstallation(id: number): Installation | undefined;
+  /** Forget one, on `installation.deleted`. */
+  removeInstallation(id: number): void;
+  /** Apply an `installation_repositories` delta. */
+  updateInstallationRepos(
+    id: number,
+    added: Array<{ id: number; fullName: string; private: boolean }>,
+    removed: number[],
+    at: string,
+  ): Installation | undefined;
+
   // --- BYOK / settings ---
   getSettings(org: string): OrgSettings;
   updateSettings(org: string, patch: Partial<OrgSettings>): OrgSettings;
@@ -549,7 +568,69 @@ export interface StoreSnapshot {
    * there.
    */
   prLedgers?: Array<[key: string, ledger: PrLedger]>;
+  /**
+   * GitHub App installations, keyed by GitHub's installation id.
+   *
+   * Persisted because it is the only record of WHAT Cavix may read. Before this
+   * existed the answer was recomputed from a live API call every time somebody
+   * opened the Repositories page, so between two page loads the store and GitHub
+   * could disagree with nothing anywhere noticing.
+   */
+  installations?: Installation[];
 }
+
+/**
+ * One GitHub App installation, as Cavix stores it.
+ *
+ * Repositories are keyed by GitHub's numeric id, not by `owner/name`. Renames
+ * happen, and a repository keyed by name is orphaned the moment it is renamed:
+ * the old row goes stale and a new one appears with no history, no settings and
+ * no ledger. The numeric id is stable for the repository's lifetime.
+ */
+export interface Installation {
+  id: number;
+  org: string;
+  accountLogin: string;
+  accountId: number;
+  accountType: "User" | "Organization";
+  /** "all" means repositories added in future are automatically in scope. */
+  repositorySelection: "all" | "selected";
+  htmlUrl: string;
+  suspended: boolean;
+  repos: Array<{ id: number; fullName: string; private: boolean }>;
+  /**
+   * The payload timestamp this row was last written from.
+   *
+   * Webhook deliveries arrive out of order and are redelivered. An older
+   * delivery applied on top of a newer one silently reverts the repository set,
+   * so anything older than what is stored is discarded rather than applied.
+   */
+  updatedAt: string;
+}
+
+/**
+ * A pending OAuth or install round trip.
+ *
+ * Held server-side as well as in a cookie, because the cookie does not always
+ * survive the hop back from GitHub, and a callback that cannot prove which
+ * session it belongs to must be rejected rather than guessed at.
+ */
+export interface OAuthStateRecord {
+  state: string;
+  /** The session that started it. Null when an anonymous visitor installed first. */
+  uid: string | null;
+  kind: "install" | "signin";
+  /** PKCE verifier, kept out of the browser entirely. */
+  codeVerifier?: string;
+  /** Account login the user asked to install onto. */
+  target?: string;
+  /** Where to send them afterwards. Validated before it is stored. */
+  next?: string;
+  createdAt: number;
+}
+
+/** How long a pending round trip stays valid. GitHub round trips take seconds. */
+export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
  * A workspace's contract graph as stored: the JSON the orggraph package
@@ -614,6 +695,13 @@ export class InMemoryStore implements Store {
    */
   private platformTokens = new Map<string, string>();
   private oauthTokens = new Map<string, string>(); // userId → encrypted provider token
+  private installations = new Map<number, Installation>();
+  /**
+   * Pending round trips. Deliberately NOT in the snapshot: they live ten
+   * minutes, and a restart losing one costs somebody a second click, while
+   * persisting them would put a PKCE verifier in the database for no benefit.
+   */
+  private oauthStates = new Map<string, OAuthStateRecord>();
   private mutes: MuteEvent[] = [];
   private orgGraphs = new Map<string, StoredOrgGraph>();
   private ciRuns = new Map<string, StoredCiHistory>();
@@ -1043,6 +1131,72 @@ export class InMemoryStore implements Store {
   }
   clearOAuthToken(userId: string): void {
     this.oauthTokens.delete(userId);
+  }
+
+  // ---------- GitHub App: pending round trips and installations ----------
+
+  putOAuthState(rec: OAuthStateRecord): void {
+    this.sweepOAuthStates();
+    this.oauthStates.set(rec.state, rec);
+  }
+
+  /**
+   * Single use, by design. A state that can be replayed is a state an attacker
+   * can replay: they capture one callback URL and re-run it to bind an
+   * installation they control onto somebody else's session.
+   */
+  takeOAuthState(state: string): OAuthStateRecord | null {
+    if (!state) return null;
+    const rec = this.oauthStates.get(state);
+    if (!rec) return null;
+    this.oauthStates.delete(state);
+    if (Date.now() - rec.createdAt > OAUTH_STATE_TTL_MS) return null;
+    return rec;
+  }
+
+  private sweepOAuthStates(): void {
+    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+    for (const [k, v] of this.oauthStates) if (v.createdAt < cutoff) this.oauthStates.delete(k);
+  }
+
+  saveInstallation(install: Installation): Installation | null {
+    const existing = this.installations.get(install.id);
+    // Out-of-order delivery. Applying it would revert the repository set to what
+    // it was before the newer event, and nothing would ever say so.
+    if (existing && install.updatedAt < existing.updatedAt) return null;
+    this.installations.set(install.id, install);
+    return install;
+  }
+
+  listInstallations(org: string): Installation[] {
+    return [...this.installations.values()]
+      .filter((i) => i.org === org)
+      .sort((a, b) => a.accountLogin.localeCompare(b.accountLogin));
+  }
+
+  getInstallation(id: number): Installation | undefined {
+    return this.installations.get(id);
+  }
+
+  removeInstallation(id: number): void {
+    this.installations.delete(id);
+  }
+
+  updateInstallationRepos(
+    id: number,
+    added: Array<{ id: number; fullName: string; private: boolean }>,
+    removed: number[],
+    at: string,
+  ): Installation | undefined {
+    const install = this.installations.get(id);
+    if (!install) return undefined;
+    if (at < install.updatedAt) return install; // stale delivery, see saveInstallation
+    const gone = new Set(removed);
+    const byId = new Map(install.repos.filter((r) => !gone.has(r.id)).map((r) => [r.id, r]));
+    for (const r of added) byId.set(r.id, r);
+    const next: Installation = { ...install, repos: [...byId.values()], updatedAt: at };
+    this.installations.set(id, next);
+    return next;
   }
 
   // ---------- BYOK / settings ----------
@@ -1529,6 +1683,7 @@ export class InMemoryStore implements Store {
       orgGraphs: [...this.orgGraphs.entries()],
       ciRuns: [...this.ciRuns.entries()],
       prLedgers: [...this.prLedgers.entries()],
+      installations: [...this.installations.values()],
     };
   }
 
@@ -1561,6 +1716,7 @@ export class InMemoryStore implements Store {
     // an entry with a missing state would read as open-with-no-digest and carry
     // a finding forever on a pull request that fixed it months ago.
     this.prLedgers = new Map((s.prLedgers ?? []).map(([k, v]) => [k, coerceLedger(v)]));
+    this.installations = new Map((s.installations ?? []).map((i) => [i.id, i]));
     // Derived from the decisions that were just replaced, so anything cached
     // from the previous state now describes a workspace that is no longer here.
     this.calibrations.clear();

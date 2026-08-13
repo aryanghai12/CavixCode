@@ -144,10 +144,26 @@ test("a re-review that goes quiet does NOT clear findings in code nobody touched
   });
 
   // The file changed, so the reviewer's silence is allowed to clear findings in
-  // it. All three sit in the same file, so all three clear. That is the honest
-  // limit of file-level granularity and the reason the next test exists.
-  assert.equal(second.carried.length, 0);
-  assert.equal(second.resolved.length, 3);
+  // the parts of it that moved. It is NOT allowed to clear a finding in a region
+  // that is byte-identical.
+  //
+  // `adminOnly` lives under the second hunk, whose enclosing symbol git names as
+  // `refresh` and whose content did not change by one byte between these two
+  // pushes. Nobody touched that code, so a silent reviewer cannot retire it, and
+  // before regions existed it did exactly that: a critical "adminOnly always
+  // returns true" cleared itself because somebody fixed a SQL string 40 lines up.
+  assert.equal(second.carried.length, 1);
+  assert.equal(second.carried[0].title, ADMIN.title);
+  assert.equal(second.carried[0].regionKey, "refresh");
+
+  // The other two sit in the first hunk, which really did change, and git named
+  // no symbol for it (its header is an import line). No region means the file
+  // digest decides, which is the behaviour that shipped. One of the two was
+  // genuinely fixed; the other is the honest limit of what a hunk header can
+  // resolve, and it fails in the safe direction only when git names a symbol.
+  assert.equal(second.resolved.length, 2);
+  assert.ok(second.resolved.every((e) => e.resolution === "fixed"));
+  assert.equal(second.historyRewritten, false);
 });
 
 test("a finding in an UNTOUCHED file is carried forward and still blocks", () => {
@@ -434,6 +450,251 @@ test("trimming drops history and never an open finding", () => {
 // ---------------------------------------------------------------------------
 // Off the wire
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Regions: an edit somewhere else in the file is not a fix here.
+// ---------------------------------------------------------------------------
+
+test("an edit elsewhere in the file does not clear a finding whose region is untouched", () => {
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [ADMIN],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+  assert.equal(first.ledger.entries[0].regionKey, "refresh");
+
+  // Somebody edits a completely different part of the same file. The file
+  // digest moves. `refresh` does not.
+  const second = reconcile({
+    prior: first.ledger,
+    findings: [],
+    diff: AUTH_V2,
+    headSha: "bbb2222",
+    now: clock("2026-08-01T11:00:00.000Z"),
+  });
+
+  assert.equal(second.resolved.length, 0);
+  assert.equal(second.carried.length, 1);
+  assert.equal(openEntries(second.ledger).length, 1);
+});
+
+test("a finding IS cleared when its own region changes and nobody raises it again", () => {
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [ADMIN],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+
+  // Now the author actually fixes adminOnly, inside the `refresh` hunk.
+  const fixed = AUTH_V1.replace("  return true;", "  return user.isAdmin === true;");
+  const second = reconcile({
+    prior: first.ledger,
+    findings: [],
+    diff: fixed,
+    headSha: "ccc3333",
+    now: clock("2026-08-01T12:00:00.000Z"),
+  });
+
+  assert.equal(second.carried.length, 0);
+  assert.equal(second.resolved.length, 1);
+  assert.equal(second.resolved[0].resolution, "fixed");
+});
+
+// ---------------------------------------------------------------------------
+// Renames: a finding follows its file.
+// ---------------------------------------------------------------------------
+
+const RENAMED = `diff --git a/src/auth/session.ts b/src/auth/token.ts
+similarity index 98%
+rename from src/auth/session.ts
+rename to src/auth/token.ts
+index 1111111..6666666 100644
+--- a/src/auth/session.ts
++++ b/src/auth/token.ts
+@@ -40,3 +48,7 @@ export function refresh(token: string) {
+   return mint(token);
+ }
++
++export function adminOnly(user: User) {
++  return true;
++}
+`;
+
+test("a rename carries findings across instead of clearing them and raising them again", () => {
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [ADMIN],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+
+  // The file moves. Its content is untouched. Before renames were understood
+  // this reported one finding fixed and one brand new, on a push that renamed
+  // a file and changed nothing.
+  const second = reconcile({
+    prior: first.ledger,
+    findings: [{ ...ADMIN, path: "src/auth/token.ts" }],
+    diff: RENAMED,
+    headSha: "ddd4444",
+    now: clock("2026-08-01T13:00:00.000Z"),
+  });
+
+  assert.equal(second.resolved.length, 0, "nothing was fixed by a rename");
+  assert.equal(second.fresh.length, 0, "and nothing is new");
+  assert.equal(second.repeated.length, 1);
+  assert.equal(second.renamed.length, 1);
+  assert.equal(second.renamed[0].renamedFrom, "src/auth/session.ts");
+  assert.equal(openEntries(second.ledger).length, 1);
+  assert.equal(openEntries(second.ledger)[0].path, "src/auth/token.ts");
+  // The identity was recomputed at the new path, so this review's re-raise
+  // matched it rather than minting a second row.
+  assert.equal(
+    openEntries(second.ledger)[0].fingerprint,
+    fingerprintOf({ ...ADMIN, path: "src/auth/token.ts" } as Finding),
+  );
+});
+
+test("a rewritten file is not treated as a rename", () => {
+  const rewritten = RENAMED.replace("similarity index 98%", "similarity index 31%");
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [ADMIN],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+  const second = reconcile({
+    prior: first.ledger,
+    findings: [],
+    diff: rewritten,
+    headSha: "eee5555",
+    now: clock("2026-08-01T14:00:00.000Z"),
+  });
+  // Below git's similarity floor the old file is gone, not moved.
+  assert.equal(second.renamed.length, 0);
+  assert.equal(second.resolved.length, 1);
+  assert.equal(second.resolved[0].resolution, "reverted");
+});
+
+// ---------------------------------------------------------------------------
+// Rewritten history: a rebase must not empty the ledger.
+// ---------------------------------------------------------------------------
+
+test("a rebase carries every open finding forward and clears nothing", () => {
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [SQLI, EXPIRY, ADMIN],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    baseSha: "base111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+  assert.equal(openEntries(first.ledger).length, 3);
+
+  // The branch is rebased. Every hunk in the diff differs because the base it
+  // is computed against moved, so every digest comparison is meaningless. On
+  // file digests alone this cleared all three without a line being fixed.
+  const second = reconcile({
+    prior: first.ledger,
+    findings: [],
+    diff: AUTH_V2,
+    headSha: "fff6666",
+    baseSha: "base222",
+    priorBaseSha: "base111",
+    priorHeadSha: "aaa1111",
+    now: clock("2026-08-01T15:00:00.000Z"),
+  });
+
+  assert.equal(second.historyRewritten, true);
+  assert.equal(second.resolved.length, 0);
+  assert.equal(second.carried.length, 3);
+  assert.equal(openEntries(second.ledger).length, 3);
+});
+
+test("a force-push with no base change is still a rewritten history", () => {
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [SQLI],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    baseSha: "base111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+  const second = reconcile({
+    prior: first.ledger,
+    findings: [],
+    diff: AUTH_V2,
+    headSha: "999zzzz",
+    baseSha: "base111",
+    priorBaseSha: "base111",
+    priorHeadSha: "aaa1111",
+    linearHistory: false,
+    now: clock("2026-08-01T16:00:00.000Z"),
+  });
+  assert.equal(second.historyRewritten, true);
+  assert.equal(second.carried.length, 1);
+  assert.equal(second.resolved.length, 0);
+});
+
+test("an ordinary push measures nothing about history and behaves exactly as before", () => {
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [SQLI],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+  const second = reconcile({
+    prior: first.ledger,
+    findings: [],
+    diff: AUTH_V2,
+    headSha: "bbb2222",
+    now: clock("2026-08-01T17:00:00.000Z"),
+  });
+  // No base was passed, so no claim is made, and an unasked question is not a
+  // "yes": the file digest still decides.
+  assert.equal(second.historyRewritten, false);
+  assert.equal(second.resolved.length, 1);
+});
+
+test("the conservative pass re-stamps digests so the NEXT push resolves normally", () => {
+  const first = reconcile({
+    prior: EMPTY_LEDGER,
+    findings: [SQLI],
+    diff: AUTH_V1,
+    headSha: "aaa1111",
+    baseSha: "base111",
+    now: clock("2026-08-01T10:00:00.000Z"),
+  });
+  const rebase = reconcile({
+    prior: first.ledger,
+    findings: [],
+    diff: AUTH_V2,
+    headSha: "fff6666",
+    baseSha: "base222",
+    priorBaseSha: "base111",
+    now: clock("2026-08-01T18:00:00.000Z"),
+  });
+  // Same diff again on an ordinary push: nothing moved since the rebase, so the
+  // finding is still carried rather than clearing itself on stale evidence.
+  const after = reconcile({
+    prior: rebase.ledger,
+    findings: [],
+    diff: AUTH_V2,
+    headSha: "fff7777",
+    baseSha: "base222",
+    priorBaseSha: "base222",
+    now: clock("2026-08-01T19:00:00.000Z"),
+  });
+  assert.equal(after.historyRewritten, false);
+  assert.equal(after.carried.length, 1);
+  assert.equal(after.resolved.length, 0);
+});
 
 test("a malformed ledger cannot fabricate or erase an open finding", () => {
   const parsed = coerceLedger({

@@ -10,7 +10,7 @@ import {
   type Verification,
 } from "@cavix/core";
 import type { CallTrace } from "@cavix/analyzer";
-import type { LedgerEntry } from "@cavix/review-session";
+import { fingerprintOf, type LedgerEntry } from "@cavix/review-session";
 import {
   CHECK_NAME,
   INLINE_MARKER,
@@ -226,6 +226,62 @@ export interface ScopeSignals {
   ciRuns?: number;
 }
 
+/**
+ * What this push changed about the REVIEW, as opposed to about the code.
+ *
+ * Every field is a count somebody measured. `unchangedFiles` in particular is
+ * the one that earns trust in incremental review: it states plainly what Cavix
+ * did not look at again, and why that was safe.
+ */
+export interface ReviewDelta {
+  /** Head of the previous review. */
+  fromSha: string;
+  /** Head of this one. */
+  toSha: string;
+  /** Commits between the two, where the host could count them. */
+  commits?: number;
+  /** Files with hunks in the push, which is what got full attention. */
+  filesReread: number;
+  /** Files in the pull request that this push did not touch. */
+  unchangedFiles: number;
+}
+
+/** One call site the change can reach. */
+export interface ImpactSite {
+  path: string;
+  line?: number;
+}
+
+/**
+ * The blast radius, as measured by the graph.
+ *
+ * Optional throughout, and every absent field simply omits its row rather than
+ * rendering a zero. A zero here reads as "nothing calls this", which is a strong
+ * claim, and it is exactly the wrong thing to say when the truth is that the
+ * indexer did not run.
+ */
+export interface ImpactScope {
+  /** The symbol the change centres on, when one dominates. */
+  symbol?: string;
+  path?: string;
+  /** True when the symbol's signature changed, not just its body. */
+  signatureChanged?: boolean;
+  callSites?: ImpactSite[];
+  /** Repositories other than this one that call the changed code. */
+  consumers?: string[];
+  /** Public exports that re-export the changed symbol. */
+  publicExports?: string[];
+  tests?: { selected: number; passed: number; failed: number };
+  /**
+   * How the edges were resolved. Rendered verbatim as the caveat under the
+   * table, because a reach claim that does not disclose its method is the same
+   * fabricated statistic the Scope module refuses to print.
+   */
+  resolution?: "exact" | "heuristic";
+  /** Graph depth the trace ran to. */
+  depth?: number;
+}
+
 export interface PosterOptions {
   ref?: ReviewLinkRef;
   /**
@@ -322,6 +378,35 @@ export interface PosterOptions {
    * unanswered question is not one.
    */
   ledgerKnown?: boolean;
+  /**
+   * What changed since the last review of this pull request.
+   *
+   * Absent on a first review, which is why the whole section is optional: there
+   * is no "since" to speak of. On every review after that it is the reader's
+   * actual first question, and answering it used to require diffing two Cavix
+   * comments by eye.
+   */
+  delta?: ReviewDelta;
+  /**
+   * What the change can reach, from the AST graph.
+   *
+   * This is the payoff for having a graph at all. "3 files changed" is already
+   * rendered by the host a few pixels above; "reaches 11 call sites across 4
+   * modules, 2 of them in other repositories" is the thing nothing else on the
+   * page can say.
+   */
+  impact?: ImpactScope;
+  /**
+   * The branch was rebased or force-pushed, so this review cleared nothing.
+   *
+   * Said out loud because the alternative is somebody pushing a fix, watching
+   * Cavix not acknowledge it, and concluding the tool is broken. It is not: the
+   * evidence for clearing anything was measured against a history that no longer
+   * exists, and guessing from it would retire real findings.
+   */
+  historyRewritten?: boolean;
+  /** How the work was routed across model tiers, for the run footer. */
+  routeMix?: Record<string, number>;
   /**
    * How many of THIS review's findings sit at or above the owner's blocking
    * severity.
@@ -530,6 +615,28 @@ function isVerified(f: Finding): boolean {
 }
 
 /**
+ * The hidden tag that names which finding an inline comment belongs to.
+ *
+ * The same fingerprint the ledger tracks the finding by, so the two can be
+ * joined. It renders as nothing on every host, and it is what lets a later
+ * review UPDATE a comment rather than posting another one beside it.
+ */
+export function inlineFingerprint(f: Finding): string {
+  return `<!-- cavix:inline:fp=${fingerprintOf(f)} -->`;
+}
+
+/**
+ * Read the fingerprint back out of a comment body Cavix wrote, or null.
+ *
+ * Null for anything this did not write, which is the safety property: a later
+ * run must never adopt, edit or resolve a comment a human left.
+ */
+export function fingerprintFromComment(body: string): string | null {
+  const m = /<!--\s*cavix:inline:fp=([0-9a-f]{6,64})\s*-->/.exec(body);
+  return m ? m[1] : null;
+}
+
+/**
  * One finding, as it reads on the line at fault.
  *
  * The headline sits inside a GitHub alert whose colour is the severity: a
@@ -553,6 +660,11 @@ function renderInlineBody(f: Finding, sections: ReviewSections = ALL_SECTIONS): 
     // and does not need this; GitLab's anchored notes are just notes. Renders as
     // nothing everywhere, so no reader ever sees it.
     INLINE_MARKER,
+    // WHICH finding this comment is for, so a later review can reconcile its own
+    // comments against the ledger instead of posting a fresh set every push.
+    // Without it the ledger can be perfectly correct while the pull request
+    // shows six copies of the same comment, and the reader believes the page.
+    inlineFingerprint(f),
     `> [!${SEVERITY_ALERT[f.severity]}]`,
     `> **${SEVERITY_MARK[f.severity]} ${plain(f.title)}**`,
     ">",
@@ -674,6 +786,18 @@ function renderReviewComment(
 
   // Each entry is one whole section, so truncation can drop them atomically.
   const findingSections: string[][] = [];
+
+  // Directly under the verdict, because on any pull request past its first
+  // review "what changed since I last looked" is the reader's real question.
+  const delta = renderDelta(
+    opts.delta,
+    opts.resolved ?? [],
+    all.length,
+    opts.carried ?? [],
+    opts.historyRewritten === true,
+  );
+  if (delta.length > 0) findingSections.push(["", "---", "", ...delta]);
+
   const notDiffed = renderDiffLimitations(opts.diffLimitations ?? []);
   if (notDiffed.length > 0) findingSections.push(["", "---", "", ...notDiffed]);
   const gate = renderPreMerge(opts.preMerge, opts.requestChanges === true);
@@ -689,13 +813,27 @@ function renderReviewComment(
   if (stillOpen.length > 0) findingSections.push(["", "---", "", ...stillOpen]);
   const cleared = renderResolved(opts.resolved ?? []);
   if (cleared.length > 0) findingSections.push(["", "---", "", ...cleared]);
+
+  // The graph's payoff, above the findings: what this change can reach is
+  // context for every finding under it.
+  const impact = renderImpact(opts.impact, ref);
+  if (impact.length > 0) findingSections.push(["", "---", "", ...impact]);
+
+  // Security ahead of the general list. Different reader, different urgency.
+  const security = renderSecurity(all, ref);
+  if (security.length > 0) findingSections.push(["", "---", "", ...security]);
+
   if (groups.length > 0) {
     findingSections.push(["", "---", "", "### Findings", "", ...renderPriority(all, ref)]);
     for (const g of groups) findingSections.push(["", ...renderFileSection(g, offDiff, ref, sections)]);
   }
 
+  // Last. Design opinions above defects train people to skim past the defects.
+  const architecture = renderArchitecture(all, ref);
+  if (architecture.length > 0) findingSections.push(["", "---", "", ...architecture]);
+
   const legend = all.length > 0 ? legendLine(offDiff.size, all.length - offDiff.size, all, sections) : "";
-  return assemble(head, findingSections, legend, footer(result, all.some(isVerified)));
+  return assemble(head, findingSections, legend, footer(result, all.some(isVerified), opts));
 }
 
 // ── the Review Scope & Effort module ──────────────────────────────────────────
@@ -1242,6 +1380,228 @@ function renderResolved(resolved: LedgerEntry[]): string[] {
 /** Carried rows rendered before the list is summarised. */
 const MAX_CARRIED_ROWS = 15;
 
+/**
+ * What changed since the last review.
+ *
+ * Sits directly under the verdict because on any pull request past its first
+ * review this is the reader's actual question, and until now answering it meant
+ * scrolling back and diffing two Cavix comments by eye.
+ *
+ * Every row is a count. The last one is the row that earns trust in incremental
+ * review: it says out loud what Cavix did not read again, so nobody has to guess
+ * whether silence about a file means "clean" or "skipped".
+ */
+function renderDelta(
+  delta: ReviewDelta | undefined,
+  resolved: LedgerEntry[],
+  fresh: number,
+  carried: LedgerEntry[],
+  historyRewritten: boolean,
+): string[] {
+  if (!delta) return [];
+
+  const cleared = resolved.filter((e) => e.resolution === "fixed");
+  const out = ["### ◈ Since your last push", ""];
+
+  const commits = delta.commits && delta.commits > 0 ? ` · ${plural(delta.commits, "commit")}` : "";
+  out.push(
+    `\`${shortSha(delta.fromSha)}\` to \`${shortSha(delta.toSha)}\`${commits} · ` +
+      `${plural(delta.filesReread, "file")} re-read`,
+    "",
+    "| | Change |",
+    "| :--: | :--- |",
+  );
+
+  if (cleared.length > 0) {
+    const names = cleared.slice(0, 3).map((e) => cell(e.title)).join(", ");
+    const more = cleared.length > 3 ? `, and ${cleared.length - 3} more` : "";
+    out.push(`| ${CHECK_MARK.pass} | **${plural(cleared.length, "finding")} cleared.** ${names}${more} |`);
+  }
+  if (fresh > 0) {
+    out.push(`| ${SEVERITY_MARK.critical} | **${plural(fresh, "finding")} raised** on this push |`);
+  }
+  if (carried.length > 0) {
+    out.push(
+      `| ${MARK_ATTENTION} | **${plural(carried.length, "finding")} still open.** ` +
+        `The code they point at has not changed |`,
+    );
+  }
+  if (delta.unchangedFiles > 0) {
+    out.push(
+      `| ${MARK_NEUTRAL} | **${plural(delta.unchangedFiles, "file")} unchanged since the last review.** Not re-read |`,
+    );
+  }
+  if (historyRewritten) {
+    // The reader pushed something and is about to notice nothing cleared. Tell
+    // them why before they conclude the tool stopped working.
+    out.push(
+      `| ${MARK_ATTENTION} | **History was rewritten.** Findings from earlier reviews are carried forward ` +
+        `without clearing, because the evidence for clearing them was measured against a history that no longer exists |`,
+    );
+  }
+
+  // Four header lines and nothing under them is worse than no section.
+  return out.length > 6 ? out : [];
+}
+
+/** First seven characters, the length every host renders a commit at. */
+function shortSha(sha: string): string {
+  return plain(sha).slice(0, 7);
+}
+
+/**
+ * What the change can reach.
+ *
+ * The one section on the page that a diff cannot produce. Note what it does NOT
+ * print: a zero. An absent measurement omits its row, because "0 call sites"
+ * reads as "nothing calls this", which is a strong claim and exactly the wrong
+ * thing to say when the truth is that the indexer never ran.
+ */
+function renderImpact(impact: ImpactScope | undefined, ref?: ReviewLinkRef): string[] {
+  if (!impact) return [];
+
+  const rows: string[] = [];
+  const sites = impact.callSites ?? [];
+  if (sites.length > 0) {
+    const shown = sites.slice(0, 3).map((s) => fileLink(s.path, ref)).join(", ");
+    const more = sites.length > 3 ? `, +${sites.length - 3} more` : "";
+    rows.push(`| ${SEVERITY_MARK.critical} | ${plural(sites.length, "call site")} | ${shown}${more} |`);
+  }
+  const consumers = impact.consumers ?? [];
+  if (consumers.length > 0) {
+    rows.push(
+      `| ${MARK_ATTENTION} | ${plural(consumers.length, "consumer")} | ` +
+        `${consumers.slice(0, 3).map((c) => `\`${plain(c)}\``).join(", ")} |`,
+    );
+  }
+  const exports_ = impact.publicExports ?? [];
+  if (exports_.length > 0) {
+    rows.push(
+      `| ${MARK_NEUTRAL} | ${plural(exports_.length, "public export")} | ` +
+        `${exports_.slice(0, 3).map((e) => `\`${plain(e)}\``).join(", ")} |`,
+    );
+  }
+  if (impact.tests && impact.tests.selected > 0) {
+    const t = impact.tests;
+    const verdictText =
+      t.failed > 0 ? `${t.passed} passed, **${t.failed} failed**` : `${t.passed} passed`;
+    rows.push(`| ${MARK_PROVEN} | ${plural(t.selected, "test")} | selected from the graph, ${verdictText} |`);
+  }
+  if (rows.length === 0) return [];
+
+  const out = ["### ◈ Impact Scope", ""];
+  if (impact.symbol) {
+    const where = impact.path ? ` in ${fileLink(impact.path, ref)}` : "";
+    const what = impact.signatureChanged ? "changed signature" : "changed";
+    out.push(`**\`${plain(impact.symbol)}\`**${where} ${what}.`, "");
+  }
+  out.push("| | Reached | Where |", "| :--: | :--- | :--- |", ...rows, "");
+
+  // Mandatory. A reach claim that does not disclose how it was resolved is the
+  // same fabricated statistic the Scope module refuses to print.
+  const depth = impact.depth ? ` at depth ${impact.depth}` : "";
+  out.push(
+    impact.resolution === "heuristic"
+      ? `<sub>Traced from the call graph${depth}. Call sites resolved by name match, not by type resolution; dynamic dispatch is not represented.</sub>`
+      : `<sub>Traced from the AST call graph${depth}. Call sites resolved statically; dynamic dispatch is not represented.</sub>`,
+  );
+  return out;
+}
+
+/**
+ * The security read, pulled out of the findings list.
+ *
+ * Separated because it has a different reader with different urgency, and
+ * restated rather than relocated: every finding here still appears in its file
+ * section with its inline comment. Somebody scanning for "is this safe to ship"
+ * should not have to read thirty style notes to find out.
+ */
+function renderSecurity(all: Finding[], ref?: ReviewLinkRef): string[] {
+  const sec = all.filter(isSecurity);
+  if (sec.length === 0) return [];
+
+  const worst = worstOf(sec);
+  const verified = sec.filter(isVerified).length;
+  const kind = SEVERITY_RANK[worst] >= SEVERITY_RANK.high ? "CAUTION" : "WARNING";
+
+  const out = [
+    "### ▲ Security Risks",
+    "",
+    `> [!${kind}]`,
+    `> **${plural(sec.length, "exposure")}, highest ${worst}.**` +
+      (verified > 0 ? ` ${verified === sec.length ? "Every one was" : `${verified} of them ${verified === 1 ? "was" : "were"}`} reproduced by execution.` : ""),
+    "",
+    "| | Risk | Where | Evidence |",
+    "| :--: | :--- | :--- | :--- |",
+  ];
+  for (const f of sec.slice(0, MAX_SECURITY_ROWS)) {
+    const evidence = [
+      ...(isVerified(f) ? [VERIFIED_BADGE] : []),
+      ...(f.ruleId ? [`\`${plain(f.ruleId)}\``] : []),
+      ...(f.source !== "llm" ? [plain(f.source)] : []),
+    ];
+    out.push(
+      `| ${SEVERITY_MARK[f.severity]} | ${cell(f.title)} | ${locationLink(f, ref)} | ` +
+        `${evidence.length > 0 ? evidence.join(" · ") : "reasoned, not executed"} |`,
+    );
+  }
+  if (sec.length > MAX_SECURITY_ROWS) {
+    out.push("", `<sub>and ${sec.length - MAX_SECURITY_ROWS} more, listed below.</sub>`);
+  }
+  return out;
+}
+
+function isSecurity(f: Finding): boolean {
+  return /security|secret|vuln|injection|auth/i.test(f.category) || f.source === "secret" || f.source === "sast";
+}
+
+const MAX_SECURITY_ROWS = 8;
+
+/**
+ * Design observations, deliberately at the BOTTOM.
+ *
+ * Three rules hold this section honest, and the third is the one that keeps it
+ * worth reading:
+ *
+ *   1. Capped. A review with nine architectural opinions is a review nobody
+ *      finishes.
+ *   2. Never blocking. These do not escalate to REQUEST_CHANGES even with the
+ *      gate on, and it says so.
+ *   3. It sits below the defects. Putting design opinions above bugs trains
+ *      people to skim past the bugs.
+ */
+function renderArchitecture(all: Finding[], ref?: ReviewLinkRef): string[] {
+  const arch = all.filter(
+    (f) => /architect|design|coupling|structure|maintainab/i.test(f.category) && f.source === "llm",
+  );
+  if (arch.length === 0) return [];
+
+  const out = [
+    "### ◇ Architectural Feedback",
+    "",
+    "> [!NOTE]",
+    "> Observations about structure. Nothing here blocks the merge.",
+    "",
+  ];
+  for (const f of arch.slice(0, MAX_ARCH_ROWS)) {
+    out.push(`**${cell(f.title)}**`, "");
+    const body = plain(f.body).trim();
+    if (body !== "") out.push(body, "");
+    out.push(
+      `<sub>${locationLink(f, ref)} · category: ${plain(f.category)} · ` +
+        `confidence ${Math.round(f.confidence * 100)}%` +
+        `${isVerified(f) ? " · verified by execution" : " · not verified by execution"}</sub>`,
+      "",
+    );
+  }
+  if (arch.length > MAX_ARCH_ROWS) {
+    out.push(`<sub>and ${arch.length - MAX_ARCH_ROWS} more structural notes, in the findings above.</sub>`);
+  }
+  return out;
+}
+
+const MAX_ARCH_ROWS = 3;
+
 /** How each host is named in prose. */
 const PLATFORM_LABEL: Record<PlatformName, string> = {
   github: "GitHub",
@@ -1426,8 +1786,23 @@ function renderNarrative(
  * The receipt line. The sandbox sentence is only there when something was
  * actually proven: on a clean review it would be a claim about nothing.
  */
-function footer(result: ReviewResult, anyVerified: boolean): string {
+function footer(result: ReviewResult, anyVerified: boolean, opts: PosterOptions = {}): string {
   const parts = [`Cavix · ${plain(result.model)} · $${result.costUsd.toFixed(4)}`];
+
+  // Which review of this pull request this is. Cheap to state and it reframes
+  // everything above it: a reader looking at review four knows the findings are
+  // cumulative rather than a fresh opinion.
+  if (opts.delta) parts.push(`${shortSha(opts.delta.fromSha)} to ${shortSha(opts.delta.toSha)}`);
+
+  // How the work was routed. Cost made legible without printing token counts a
+  // customer cannot act on.
+  const mix = opts.routeMix ?? {};
+  const routed = Object.entries(mix)
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([tier, n]) => `${plain(tier)} (${n})`);
+  if (routed.length > 0) parts.push(`routed ${routed.join(", ")}`);
+
   if (anyVerified) {
     parts.push(`findings marked ${VERIFIED_BADGE} were reproduced by running the code in a sealed sandbox`);
   }

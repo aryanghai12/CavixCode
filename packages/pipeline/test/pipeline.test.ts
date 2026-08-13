@@ -108,3 +108,75 @@ test("pipeline: the SAME run with gate off vs on differs only by the policy find
   );
   assert.equal(on.findings.length, off.findings.length + 1, "gate adds exactly its policy finding");
 });
+
+
+// ---------- the critic's deterministic screen (Stage 8b) ----------
+
+/** A model that invents a finding in a file this pull request never touched. */
+function phantomFileResponder(req: { system?: string }): string {
+  const id = /Cavix "([\w-]+)" review agent/.exec(req.system ?? "")?.[1] ?? "";
+  if (id === "security") {
+    return JSON.stringify({
+      abstain: false,
+      findings: [{
+        path: "billing/invoice.ts", line: 88, severity: "critical", category: "security",
+        title: "Unauthenticated refund endpoint",
+        body: "The handler is reachable without a session.",
+        confidence: 0.95,
+      }],
+    });
+  }
+  return JSON.stringify({ abstain: true, findings: [] });
+}
+
+/** A model that cites a helper which exists nowhere in the repository. */
+function phantomSymbolResponder(req: { system?: string }): string {
+  const id = /Cavix "([\w-]+)" review agent/.exec(req.system ?? "")?.[1] ?? "";
+  if (id === "correctness") {
+    return JSON.stringify({
+      abstain: false,
+      findings: [{
+        path: "auth.ts", line: 1, severity: "high", category: "correctness",
+        title: "Missing guard",
+        body: "The `assertStrictOpts` helper is never called before opts is read.",
+        confidence: 0.9,
+      }],
+    });
+  }
+  return JSON.stringify({ abstain: true, findings: [] });
+}
+
+function depsWith(responder: (req: { system?: string; messages: Array<{ content: string }> }) => string) {
+  const base = buildDeps();
+  const config: GatewayConfigData = { orgs: { acme: { provider: "fake", apiKey: "k", model: "u" } } };
+  return {
+    ...base,
+    gateway: new Gateway({ providers: new Map([["fake", new FakeProvider(responder)]]), config }),
+  };
+}
+
+test("pipeline: a finding in a file the change never touched is dropped before it can be posted", async () => {
+  // The most damaging hallucination class there is. A reviewer that comments on
+  // a file this pull request does not contain is not merely wrong, it is
+  // visibly not reading, and a reader who catches one stops believing the rest.
+  const res = await runPhase1Review({ org: "acme", title: "t", diff: DIFF }, depsWith(phantomFileResponder));
+  assert.equal(res.unsupportedCount, 1);
+  assert.ok(!res.findings.some((f) => f.path === "billing/invoice.ts"), "never reaches the pull request");
+});
+
+test("pipeline: a cited helper that exists nowhere lowers confidence but is not deleted", async () => {
+  // REPAIRABLE, not UNSUPPORTED. The claim may well be true and the corpus
+  // simply incomplete, and deleting somebody's bug report on that basis is
+  // worse than the hallucination it was meant to catch.
+  const res = await runPhase1Review({ org: "acme", title: "t", diff: DIFF }, depsWith(phantomSymbolResponder));
+  assert.equal(res.unsupportedCount, 0);
+  const f = res.findings.find((x) => x.title === "Missing guard");
+  assert.ok(f, "still posted");
+  assert.ok(f!.confidence < 0.9, "but trusted less");
+});
+
+test("pipeline: an honest cross-file finding is untouched by the critic", async () => {
+  const res = await runPhase1Review({ org: "acme", title: "t", diff: DIFF }, buildDeps());
+  assert.equal(res.unsupportedCount, 0);
+  assert.ok(res.findings.some((f) => f.agent === "api-breaking"));
+});
