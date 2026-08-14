@@ -44,6 +44,61 @@ function seedDemo(store: InMemoryStore): void {
   });
 }
 
+/**
+ * Keep trying to reach Postgres, and adopt it the moment it answers.
+ *
+ * The store is already serving requests in memory by the time this runs, so the
+ * ordering matters: LOAD first and only merge in what the database holds if this
+ * process has not yet been given anything of its own. A process that has taken
+ * real work since booting must not have it replaced by an older snapshot, and a
+ * process that has taken none must not overwrite the database with its emptiness.
+ * `save` refuses the second case outright; this handles the first.
+ */
+async function retryPersistence(
+  dbUrl: string,
+  store: InMemoryStore,
+  onReady: (autosave: Autosave) => void,
+): Promise<void> {
+  for (let attempt = 1; attempt <= PERSISTENCE_ATTEMPTS; attempt++) {
+    await new Promise((r) => setTimeout(r, Math.min(30_000, 2_000 * attempt)));
+    try {
+      const p = await PostgresPersistence.create(dbUrl, {
+        onError: (e) => log("warn", "Postgres dropped a connection; the pool will reopen", { err: e.message }),
+      });
+      const snap = await p.load();
+      if (snap && store.isEmpty()) {
+        store.restore(snap);
+        log("info", "persistence: recovered, and loaded the stored workspace", {
+          attempt,
+          orgs: store.listOrgs().length,
+        });
+      } else if (snap) {
+        // Somebody signed up or connected a repository while the database was
+        // unreachable. Their work is in memory and the snapshot is older, so
+        // restoring would throw away the newer of the two.
+        log("warn", "persistence: recovered, but this process already holds newer state; keeping it", {
+          attempt,
+          note: "the stored snapshot was NOT loaded, and will be replaced by what is in memory",
+        });
+      } else {
+        log("info", "persistence: recovered (the database holds nothing yet)", { attempt });
+      }
+      onReady(startAutosave(store, p, { onError: (e) => log("error", "autosave failed", { err: e.message }) }));
+      log("info", "persistence: Postgres enabled (data survives restarts)");
+      return;
+    } catch (e) {
+      log("warn", "Postgres still unreachable", { attempt, err: (e as Error).message });
+    }
+  }
+  log("error", "gave up reaching Postgres; this process is not saving anything", {
+    attempts: PERSISTENCE_ATTEMPTS,
+    fix: "check DATABASE_URL and that the database is awake, then redeploy",
+  });
+}
+
+/** Roughly ten minutes of trying, which outlasts any cold start worth waiting for. */
+const PERSISTENCE_ATTEMPTS = 30;
+
 async function main(): Promise<void> {
   const store = new InMemoryStore();
   let autosave: Autosave | null = null;
@@ -71,7 +126,24 @@ async function main(): Promise<void> {
       autosave = startAutosave(store, p, { onError: (e) => log("error", "autosave failed", { err: e.message }) });
       log("info", "persistence: Postgres enabled (data survives restarts)");
     } catch (e) {
-      log("warn", "Postgres unavailable; using in-memory store (data will NOT survive restart)", { err: (e as Error).message });
+      // Giving up here is what cost somebody their workspace.
+      //
+      // Serverless Postgres suspends when idle (Neon does after minutes) and
+      // free hosting spins down, so a boot that lands while the database is
+      // asleep hits a timeout. The old code logged a warning and ran in memory
+      // FOREVER: the site came up looking perfectly normal and completely empty,
+      // the customer set everything up again, nothing was persisting, and the
+      // next restart lost it a second time.
+      //
+      // The data was never gone. Nothing could reach it, and nothing tried again.
+      log("error", "Postgres could not be reached at startup; retrying in the background", {
+        err: (e as Error).message,
+        effect: "the site is running WITHOUT persistence and may look empty; nothing is being saved yet",
+        note: "existing data is still in the database, not lost",
+      });
+      void retryPersistence(dbUrl, store, (a) => {
+        autosave = a;
+      });
     }
   } else {
     log("info", "persistence: in-memory (set DATABASE_URL for a Postgres that survives restarts)");

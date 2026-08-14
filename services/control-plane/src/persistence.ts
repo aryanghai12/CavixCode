@@ -99,6 +99,33 @@ export class PostgresPersistence implements Persistence {
   }
 
   async save(snap: StoreSnapshot): Promise<void> {
+    // Never replace a workspace with an empty one.
+    //
+    // This is the guard against the worst thing this file can do. The process
+    // holds state in memory and writes it here every few seconds. If it ever
+    // starts up EMPTY while the database holds a real workspace, the next tick
+    // overwrites months of settings, connected repositories and encrypted keys
+    // with nothing, three seconds after boot, and the only symptom is a customer
+    // logging in to a site that has forgotten them.
+    //
+    // An empty store is legitimate exactly once, on a genuinely fresh database.
+    // So emptiness is not refused outright, it is refused when the database
+    // already holds something, which is a question worth one extra query on the
+    // rare tick where the snapshot is empty at all.
+    if (isEmptySnapshot(snap)) {
+      const res = await this.pool.query(
+        "SELECT coalesce(jsonb_array_length(data->'orgs'), 0) AS orgs, coalesce(jsonb_array_length(data->'users'), 0) AS users FROM cavix_state WHERE id = 1",
+      );
+      const row = res.rows[0];
+      const stored = Number(row?.orgs ?? 0) + Number(row?.users ?? 0);
+      if (stored > 0) {
+        throw new Error(
+          `refusing to overwrite ${stored} stored records with an empty state. ` +
+            "The process started without loading them, so saving now would destroy them. " +
+            "Restart once Postgres is reachable, or set CAVIX_ALLOW_EMPTY_OVERWRITE=true if the wipe is intended.",
+        );
+      }
+    }
     await this.pool.query(
       "INSERT INTO cavix_state (id, data, updated_at) VALUES (1, $1, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()",
       [JSON.stringify(snap)],
@@ -146,6 +173,19 @@ export function wantSsl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Nothing worth keeping.
+ *
+ * Orgs and users, not repos or settings: those hang off an org, so a state with
+ * neither an org nor a user has nobody's work in it. An escape hatch exists for
+ * the deliberate wipe, because "the guard is wrong and I cannot get past it" is
+ * its own kind of outage.
+ */
+export function isEmptySnapshot(snap: StoreSnapshot): boolean {
+  if (process.env.CAVIX_ALLOW_EMPTY_OVERWRITE === "true") return false;
+  return (snap.orgs?.length ?? 0) === 0 && (snap.users?.length ?? 0) === 0;
 }
 
 export interface Autosave {

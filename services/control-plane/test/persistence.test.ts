@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { connectionUrl, wantSsl, startAutosave, type Persistence } from "@cavix/control-plane";
+import { connectionUrl, wantSsl, startAutosave, isEmptySnapshot, type Persistence } from "@cavix/control-plane";
 import type { StoreSnapshot } from "@cavix/control-plane";
 
 // Managed Postgres closes connections routinely: maintenance, failover, an idle
@@ -110,4 +110,36 @@ test("a final save that fails does not throw out of shutdown", async () => {
   const autosave = startAutosave(store, p, { intervalMs: 10_000, onError: (e) => errors.push(e) });
   await autosave.stop();
   assert.equal(errors.length, 1);
+});
+
+// ---------- the guard that stops a workspace being wiped ----------
+
+test("an empty state never replaces a stored workspace", () => {
+  // The worst thing this file can do. The process holds state in memory and
+  // writes it every few seconds. If it ever starts EMPTY while the database
+  // holds a real workspace, the next tick destroys months of settings,
+  // connected repositories and encrypted keys, three seconds after boot, and
+  // the only symptom is a customer logging in to a site that forgot them.
+  const empty = { v: 1, orgs: [], users: [] } as unknown as StoreSnapshot;
+  assert.equal(isEmptySnapshot(empty), true);
+});
+
+test("a state with a workspace or a user in it is not empty", () => {
+  const withOrg = { v: 1, orgs: [{ name: "acme" }], users: [] } as unknown as StoreSnapshot;
+  const withUser = { v: 1, orgs: [], users: [{ id: "u1" }] } as unknown as StoreSnapshot;
+  assert.equal(isEmptySnapshot(withOrg), false);
+  assert.equal(isEmptySnapshot(withUser), false);
+});
+
+test("the deliberate wipe has an escape hatch", () => {
+  // "The guard is wrong and I cannot get past it" is its own kind of outage.
+  const previous = process.env.CAVIX_ALLOW_EMPTY_OVERWRITE;
+  process.env.CAVIX_ALLOW_EMPTY_OVERWRITE = "true";
+  try {
+    const empty = { v: 1, orgs: [], users: [] } as unknown as StoreSnapshot;
+    assert.equal(isEmptySnapshot(empty), false, "the guard stands down when asked explicitly");
+  } finally {
+    if (previous === undefined) delete process.env.CAVIX_ALLOW_EMPTY_OVERWRITE;
+    else process.env.CAVIX_ALLOW_EMPTY_OVERWRITE = previous;
+  }
 });

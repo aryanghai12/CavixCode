@@ -5,6 +5,52 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed: a sleeping database made the site look empty, and could have wiped it
+
+Reported: a workspace set up one day was gone the next. Repositories off, API key
+missing, everything to do again.
+
+The data was never gone. Nothing could reach it, and nothing tried again.
+
+Serverless Postgres suspends when idle (Neon does after minutes) and free hosting
+spins down. A boot that lands while the database is asleep hits a connection
+timeout. The old code logged one warning and ran **in memory forever**: the site
+came up looking perfectly normal and completely empty, the customer set
+everything up again, nothing was persisting, and the next restart lost it a
+second time.
+
+- **Cavix now keeps trying**, for roughly ten minutes, and adopts the database
+  the moment it answers. If the stored workspace is still there and this process
+  has taken no work of its own, it is loaded. If somebody signed up or connected
+  a repository while the database was unreachable, that newer work is kept and
+  the older snapshot is not restored over it.
+- **An empty state can no longer replace a stored workspace.** This is the guard
+  against the worse version of the same bug: a process that starts empty writes
+  its state every few seconds, so it would have destroyed months of settings,
+  connected repositories and encrypted keys three seconds after boot. Emptiness
+  is legitimate exactly once, on a genuinely fresh database, so it is refused
+  only when the database already holds something. `CAVIX_ALLOW_EMPTY_OVERWRITE=true`
+  stands the guard down when a wipe is intended.
+- **The logs say what is happening.** "Running WITHOUT persistence and may look
+  empty; nothing is being saved yet", and "existing data is still in the
+  database, not lost", rather than one warning that scrolls past.
+
+### Fixed: a review could fail without saying so anywhere
+
+A review that fails reports itself in the Checks box. That row is not always
+there: a check run needs a GitHub App with `checks: write`, so an installation on
+a personal token, or one predating the permission, gets no row and closing it
+does nothing.
+
+The review then failed in complete silence. Somebody with no API key saved saw a
+reaction on their comment, no review, and no explanation anywhere; the only way
+to find out was the orchestrator's own logs.
+
+When there was no check row to write to, an automatic review now says so in a
+comment instead. It goes through the single status comment, so a repository
+pushed to twenty times carries one current message rather than twenty.
+
+
 ### The code graph can be kept between reviews, safely
 
 Every review re-parses the repository from scratch, so the cost of building the

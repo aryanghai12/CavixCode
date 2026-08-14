@@ -2067,6 +2067,23 @@ export function makeReviewHandler(deps: ReviewWorkflowDeps): ReviewHandler {
         `${explain(message)}\n\n<details><summary>Technical detail</summary>\n\n\`\`\`\n${cleanUp(message)}\n\`\`\`\n\n</details>`,
       );
 
+      // A failure nobody can see is a failure nobody will fix.
+      //
+      // The check run above is where an automatic review reports itself, and it
+      // is not always there: a check row needs a GitHub App with `checks: write`,
+      // so an installation on a personal token, or one predating the permission,
+      // gets `runId === 0` and `finish` silently does nothing. The review then
+      // fails in complete silence. Somebody with no API key saved sees a
+      // reaction on their comment, no review, no explanation anywhere, and their
+      // only way to find out is the orchestrator's own logs.
+      //
+      // So when there was no check row to write to, say it in a comment instead.
+      // `say` edits one status comment in place, so a repository pushed to
+      // twenty times carries one current message rather than twenty.
+      if (!isCommandJob(job) && check.runId === 0) {
+        await say(deps, job, ref, `**Cavix could not review this pull request.**\n\n${explain(message)}`);
+      }
+
       if (isCommandJob(job)) {
         // A retired model is the one failure where we can name the fix exactly,
         // so fetch the org's real options instead of pointing at the dashboard.
