@@ -420,8 +420,34 @@ async function say(deps: ReviewWorkflowDeps, job: ReviewJob, ref: PullRef, body:
   const withMarker = `${STATUS_MARKER}\n${body}`;
   try {
     const existing = await deps.github.findComment(ref, STATUS_MARKER);
+
+    // Editing was the whole point of this function, and editing is also what
+    // made Cavix look broken.
+    //
+    // GitHub sends NO NOTIFICATION when a comment is edited. So a person typed
+    // "@cavixcode review", got a reaction, and Cavix quietly rewrote a status
+    // comment from hours earlier, half a page up a thread nobody was looking at.
+    // From where they stood: an emoji and silence. They asked again, got the
+    // same nothing, and concluded the product does not work.
+    //
+    // The two cases have to be told apart:
+    //   the SAME status, again   a retry of one job. Editing is right, and in
+    //                            fact nothing needs to happen at all.
+    //   a DIFFERENT status       something new happened, and it has to surface.
+    //                            That means a new comment, because only a new
+    //                            comment notifies anybody.
+    if (existing?.body === withMarker) return;
+
     if (existing) {
-      await deps.github.updateComment(ref, existing.id, withMarker);
+      await deps.github.createComment(ref, withMarker);
+      // Take the superseded one away so the thread carries one current status
+      // rather than a pile of them. Best-effort: a platform that cannot delete
+      // leaves it, which is untidy and not wrong.
+      try {
+        await deps.github.deleteComment?.(ref, existing.id);
+      } catch {
+        /* untidy, never wrong */
+      }
       return;
     }
     await deps.github.createComment(ref, withMarker);

@@ -217,7 +217,7 @@ export class RestGitHubClient implements ReviewPlatform {
    * what lets a repeated status update EDIT one comment instead of posting a new
    * one each time — without it, three retries meant three identical comments.
    */
-  async findComment(ref: PullRef, marker: string): Promise<{ id: number } | null> {
+  async findComment(ref: PullRef, marker: string): Promise<{ id: number; body?: string } | null> {
     // Newest first: our status comment is almost always among the last few.
     const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/issues/${ref.number}/comments?per_page=100`;
     const res = await this.fetchImpl(url, {
@@ -226,7 +226,19 @@ export class RestGitHubClient implements ReviewPlatform {
     if (!res.ok) return null; // best-effort: fall back to posting a new comment
     const data = (await res.json()) as Array<{ id: number; body?: string }>;
     const found = [...data].reverse().find((c) => (c.body ?? "").includes(marker));
-    return found ? { id: found.id } : null;
+    return found ? { id: found.id, ...(found.body ? { body: found.body } : {}) } : null;
+  }
+
+  /** Delete one of our own conversation comments. A missing one is a success. */
+  async deleteComment(ref: PullRef, commentId: number): Promise<void> {
+    const url = `${this.baseUrl}/repos/${ref.owner}/${ref.repo}/issues/comments/${commentId}`;
+    const res = await this.fetchImpl(url, {
+      method: "DELETE",
+      headers: await this.headers(ref, "application/vnd.github+json"),
+    });
+    if (res.status !== 204 && res.status !== 404) {
+      throw new Error(`github: delete comment HTTP ${res.status} ${res.statusText}`);
+    }
   }
 
   async updateComment(ref: PullRef, commentId: number, body: string): Promise<void> {

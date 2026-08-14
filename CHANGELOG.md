@@ -5,6 +5,44 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed: Cavix answered with a reaction and nothing else
+
+Reported twice, and the second time made it findable: a command produced an emoji
+and no comment, whatever went wrong. No key saved, repository not enabled, a
+failure mid-review; always the same emoji and the same silence.
+
+Cavix was replying. Nobody could see it.
+
+Status replies went through one function that FINDS Cavix's earlier status
+comment and EDITS it. That was written for a good reason: the queue retries a
+failed job three times, and creating a comment per attempt produced three
+identical comments. But GitHub sends **no notification when a comment is
+edited**. So a person typed `@cavixcode review`, got a reaction, and Cavix
+quietly rewrote a comment from hours earlier, half a page up a thread nobody was
+looking at. From where they stood, that is an emoji and nothing else. They asked
+again, got the same nothing, and concluded the product does not work.
+
+The two cases are now told apart:
+
+- **The same status, again.** A retry of one job. It does nothing at all now, not
+  even an edit: no post, no rewrite, no API call.
+- **A different status.** Something new happened, so it gets a NEW comment,
+  because a new comment is the only thing that notifies anybody. The superseded
+  one is removed, so the thread carries one current status rather than a pile.
+
+Also fixed, from the same report: a review that fails reports itself in the
+Checks box, and that row is not always there. A check run needs a GitHub App with
+`checks: write`, so an installation on a personal token gets no row and closing
+it does nothing. An automatic review that fails now says so in a comment when
+there was no check row to write to.
+
+### Fixed
+
+- `findComment` returned only an id, never the body, so a caller could not tell
+  "the same status, said again" from "something new happened". The fake client
+  did the same, which is why no test caught the behaviour above.
+
+
 ### Fixed: a sleeping database made the site look empty, and could have wiped it
 
 Reported: a workspace set up one day was gone the next. Repositories off, API key

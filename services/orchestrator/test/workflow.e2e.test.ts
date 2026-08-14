@@ -271,6 +271,7 @@ function withFailure(github: FakeGitHubClient, fail: () => never): ReviewPlatfor
     createComment: (ref, body) => github.createComment(ref, body),
     findComment: (ref, marker) => github.findComment(ref, marker),
     updateComment: (ref, id, body) => github.updateComment(ref, id, body),
+    deleteComment: (ref, id) => github.deleteComment(ref, id),
     listTree: (r) => github.listTree(r),
     listWorkflowRuns: (r, b, l) => github.listWorkflowRuns(r, b, l),
     listOwnReviews: (r) => github.listOwnReviews(r),
@@ -302,6 +303,7 @@ test("command job: a failure reacts 😕 and explains the cause in a comment", a
     createComment: (ref, body) => github.createComment(ref, body),
     findComment: (ref, marker) => github.findComment(ref, marker),
     updateComment: (ref, id, body) => github.updateComment(ref, id, body),
+    deleteComment: (ref, id) => github.deleteComment(ref, id),
     listTree: (r) => github.listTree(r),
     listWorkflowRuns: (r, b, l) => github.listWorkflowRuns(r, b, l),
     listOwnReviews: (r) => github.listOwnReviews(r),
@@ -377,7 +379,31 @@ test("even if the queue does retry, the status comment is EDITED, not duplicated
   }
 
   assert.equal(github.comments.length, 1, "one status comment on the PR, however many attempts ran");
-  assert.equal(github.commentEdits, 2, "the later attempts edited it in place");
+  // The later attempts say exactly the same thing, so they do nothing at all:
+  // no edit, no post, no API call.
+  //
+  // Editing used to be how repeats were absorbed, and it was also what made
+  // Cavix look broken. GitHub sends NO NOTIFICATION on an edit, so a genuinely
+  // NEW status quietly rewritten into an old comment reaches nobody: the person
+  // sees a reaction and silence. Repeats are now a no-op and anything different
+  // gets a fresh comment, which is the only thing that notifies.
+  assert.equal(github.commentEdits, 0, "an identical status is not even rewritten");
+});
+
+test("a DIFFERENT status posts a new comment, because an edit notifies nobody", async () => {
+  const { github, reviewer } = wire();
+  const broken = withFailure(github, () => { throw new Error("github: HTTP 404 Not Found"); });
+  const handler = makeReviewHandler({ github: broken, reviewer, gate: async () => ({ enabled: true }) });
+  await handler(makeCommandJob());
+  assert.equal(github.comments.length, 1);
+
+  // A second, different failure on the same pull request.
+  const broken2 = withFailure(github, () => { throw new Error("api key is empty"); });
+  await makeReviewHandler({ github: broken2, reviewer, gate: async () => ({ enabled: true }) })(makeCommandJob());
+
+  // One current status comment, and it is a NEW one, so the author is told.
+  assert.equal(github.comments.length, 1, "the superseded status is taken away");
+  assert.match(github.comments[0], /AI key/i);
 });
 
 test("the status comment carries a hidden marker so it can be found again", async () => {

@@ -172,11 +172,24 @@ export class FakeGitHubClient implements ReviewPlatform {
     return { id, htmlUrl: `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}#issuecomment-${id}` };
   }
 
-  async findComment(_ref: PullRef, marker: string): Promise<{ id: number } | null> {
+  async findComment(_ref: PullRef, marker: string): Promise<{ id: number; body?: string } | null> {
+    // The BODY matters, and returning only the id hid a real bug: the caller
+    // uses it to tell "the same status, said again" from "something new
+    // happened", and a fake that never supplies it makes every status look new.
     for (const [id, idx] of this.commentIds) {
-      if (this.comments[idx]?.includes(marker)) return { id };
+      const body = this.comments[idx];
+      if (body?.includes(marker)) return { id, body };
     }
     return null;
+  }
+
+  async deleteComment(_ref: PullRef, commentId: number): Promise<void> {
+    const idx = this.commentIds.get(commentId);
+    if (idx === undefined) return;
+    this.comments.splice(idx, 1);
+    this.commentIds.delete(commentId);
+    // Indexes after the removed one shift down by one.
+    for (const [id, i] of this.commentIds) if (i > idx) this.commentIds.set(id, i - 1);
   }
 
   async updateComment(_ref: PullRef, commentId: number, body: string): Promise<void> {

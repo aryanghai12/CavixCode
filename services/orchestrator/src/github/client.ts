@@ -308,8 +308,22 @@ export interface ReviewPlatform {
   addReaction(ref: PullRef, commentId: number, content: ReactionContent): Promise<void>;
   /** Post a normal PR conversation comment (status, errors, help, answers). */
   createComment(ref: PullRef, body: string): Promise<{ id: number; htmlUrl: string }>;
-  /** Find our own earlier comment by hidden marker, so we can edit instead of repost. */
-  findComment(ref: PullRef, marker: string): Promise<{ id: number } | null>;
+  /**
+   * Find our own earlier comment by hidden marker.
+   *
+   * The BODY comes back too, because the caller has to tell "the same thing,
+   * said again" from "something new happened". Editing is right for the first
+   * and wrong for the second: GitHub sends no notification on an edit, so a new
+   * failure quietly rewritten into an old comment reaches nobody.
+   */
+  findComment(ref: PullRef, marker: string): Promise<{ id: number; body?: string } | null>;
+  /**
+   * Delete one of our own conversation comments.
+   *
+   * Optional: a platform that cannot do it simply leaves the superseded status
+   * comment in place, which is untidy rather than wrong.
+   */
+  deleteComment?(ref: PullRef, commentId: number): Promise<void>;
   /** Edit a comment we posted earlier. */
   updateComment(ref: PullRef, commentId: number, body: string): Promise<void>;
   /**
