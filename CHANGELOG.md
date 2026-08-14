@@ -5,6 +5,42 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### The code graph can be kept between reviews, safely
+
+Every review re-parses the repository from scratch, so the cost of building the
+call graph scales with the size of the REPOSITORY rather than the size of the
+change, and it is paid again on every push of every pull request. On a large
+monorepo that is the dominant cost of a review.
+
+The graph now serialises to plain JSON and rebuilds from it without re-parsing
+anything.
+
+Caching a graph is only acceptable under one rule, and the rule is what most of
+this work is: **the graph is a cache and never a source of truth, so a stale
+entry makes a review slower, never wrong.** That is enforced rather than
+intended.
+
+A restored file record describes a version of a file that may since have been
+edited or deleted, so a caller it names may no longer exist. Cavix tracks which
+paths this review actually READ, as opposed to loaded from cache, and a caller
+drawn from a cached record can never support an `exact` claim: the blast radius
+caps its confidence, and the Impact Scope then says "resolved by name match"
+rather than "resolved statically".
+
+So the cache buys speed and pays for it in the strength of a sentence, which is
+the right currency. Re-reading a file restores the stronger claim, including when
+the content turns out to be identical: reading it and finding it unchanged is
+exactly what verification means.
+
+### Fixed
+
+- Confirming a cached file against the head commit did not mark it verified,
+  because the incremental path short-circuits on an unchanged hash. That threw
+  away the most valuable case: a cached graph whose files are then confirmed one
+  by one would have stayed permanently "unverified", downgrading every reach
+  claim on a repository that barely changes, forever, for no reason.
+
+
 ### Security findings say what can reach them
 
 A scanner reports "string-built query". A reviewer that knows the routes reports

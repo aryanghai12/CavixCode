@@ -62,6 +62,24 @@ export interface BlastRadiusOptions {
 /** Beyond this, a symbol is infrastructure and its caller list is noise. */
 export const DEFAULT_FANOUT_CAP = 25;
 
+/**
+ * The whole graph, in a shape that survives a process.
+ *
+ * Every review re-parses the repository from scratch, so the cost of building
+ * the graph scales with the size of the REPOSITORY rather than the size of the
+ * change. On a large monorepo that is the dominant cost of a review, and it is
+ * paid again on every push of every pull request.
+ *
+ * `Set` is spelled as an array because this is written to storage as JSON.
+ */
+export interface CodeIndexSnapshot {
+  v: 1;
+  /** The commit this was built from, for the operator's log. Never trusted. */
+  commit?: string;
+  files: Array<Omit<FileRecord, "importedNames"> & { importedNames: string[] }>;
+  symbols: SymbolNode[];
+}
+
 // CodeIndex builds and maintains the whole-repo call graph. Parsing is
 // incremental (only changed files are re-parsed); call-edge resolution is
 // recomputed globally after a change because it is cheap relative to parsing and
@@ -75,6 +93,13 @@ export class CodeIndex {
   private callsIn = new Map<string, Set<string>>();
   /** "fromId toId" -> the evidence behind that edge. */
   private edgeResolution = new Map<string, EdgeResolution>();
+  /**
+   * Paths whose content this process read, as opposed to loading from a cache.
+   *
+   * Empty after a restore, and filled in as files are ingested. What separates a
+   * fact from a recollection.
+   */
+  private readonly verified = new Set<string>();
 
   constructor(parser: Parser) {
     this.parser = parser;
@@ -86,11 +111,73 @@ export class CodeIndex {
     this.resolveEdges();
   }
 
+  /**
+   * Rebuild an index from storage, without re-parsing anything.
+   *
+   * Restored records are NOT marked verified, and that distinction is the whole
+   * safety story of caching this. See `verifiedPaths`.
+   */
+  static fromSnapshot(parser: Parser, snap: CodeIndexSnapshot): CodeIndex {
+    const ix = new CodeIndex(parser);
+    for (const f of snap.files) {
+      ix.files.set(f.path, { ...f, importedNames: new Set(f.importedNames) });
+    }
+    for (const s of snap.symbols) {
+      ix.symbols.set(s.id, s);
+      if (!ix.byName.has(s.name)) ix.byName.set(s.name, new Set());
+      ix.byName.get(s.name)!.add(s.id);
+    }
+    ix.resolveEdges();
+    return ix;
+  }
+
+  /** Serialise the whole graph. */
+  toSnapshot(commit?: string): CodeIndexSnapshot {
+    return {
+      v: 1,
+      ...(commit ? { commit } : {}),
+      files: [...this.files.values()].map((f) => ({ ...f, importedNames: [...f.importedNames] })),
+      symbols: [...this.symbols.values()],
+    };
+  }
+
+  /**
+   * Paths whose CONTENT this process actually read, as opposed to loaded from a
+   * cache.
+   *
+   * The spec's rule for persisting a graph is that it must be a cache and never
+   * a source of truth: a stale entry may make a review slower, never wrong. This
+   * is how that rule is enforced rather than merely intended.
+   *
+   * A cached file record describes a version of a file that may since have been
+   * edited or deleted. Using it for RECALL is fine and is the point: a plausible
+   * caller is worth showing a model. Using it to support a CLAIM on somebody's
+   * pull request is not, because the caller may no longer exist.
+   *
+   * So `blastRadius` caps its resolution at `heuristic` the moment an unverified
+   * file contributes, and the Impact Scope then says "resolved by name match"
+   * instead of "resolved statically". A stale cache costs a weaker sentence.
+   */
+  verifiedPaths(): string[] {
+    return [...this.verified];
+  }
+
   /** Incremental re-index of one changed/added file. Returns true if content changed. */
   updateFile(path: string, content: string): boolean {
     const existing = this.files.get(path);
     const h = hashContent(content);
-    if (existing && existing.hash === h) return false; // unchanged → no work
+    if (existing && existing.hash === h) {
+      // Unchanged, so there is no parsing to redo. But we DID read it, and it
+      // agrees with what was cached, which is precisely what re-verification
+      // means: the record is confirmed against the head commit.
+      //
+      // Without this line the most valuable case is thrown away. A cached graph
+      // whose files are then confirmed one by one would stay permanently
+      // "unverified", so every reach claim on a repository that barely changes
+      // would be downgraded forever, for no reason.
+      this.verified.add(path);
+      return false;
+    }
     this.removeFileSymbols(path);
     this.ingest(path, content);
     this.resolveEdges();
@@ -292,6 +379,19 @@ export class CodeIndex {
         }
         for (const caller of callers) {
           note(this.edgeResolutionFor(caller, id));
+          // A caller drawn from a CACHED file record, not re-read this review.
+          //
+          // This is what keeps a persisted graph a cache rather than a source of
+          // truth. The record describes a version of that file which may since
+          // have been edited or deleted, so the caller may no longer exist. It
+          // still earns its place as recall, because a plausible caller is worth
+          // showing a model, and it may never support a claim on somebody's pull
+          // request. Capping the resolution here is how the review ends up
+          // saying "resolved by name match" instead of "resolved statically",
+          // which is the difference between a stale cache costing a weaker
+          // sentence and costing a wrong one.
+          const from = this.symbols.get(caller);
+          if (from && !this.verified.has(from.path)) note("heuristic");
           if (!seen.has(caller) && !changedIds.includes(caller)) {
             seen.add(caller);
             next.add(caller);
@@ -318,6 +418,7 @@ export class CodeIndex {
 
   private ingest(path: string, content: string): void {
     const parsed = this.parser.parse(path, content);
+    this.verified.add(path);
     const symbolIds: string[] = [];
     // Sort defs by line so enclosing-symbol attribution is correct.
     const defs = [...parsed.symbols].sort((a, b) => a.line - b.line);

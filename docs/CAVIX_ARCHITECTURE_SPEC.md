@@ -2193,7 +2193,7 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 | Spec | Why not |
 | :--- | :--- |
 | §3.2 gap 2, the remaining edge kinds | `routes` shipped, because it is the only one that changes what a review can SAY. `implements` / `extends`, `reads` / `writes` and `tests` widen what it can see, which is worth less per unit of parser work and can follow |
-| §3.2 gap 5, graph persistence | Needs a store and a cache-invalidation story, and changes no answer Cavix gives: it makes an existing answer cheaper. The last genuinely open item |
+| §3.2 gap 5, the storage backend | The graph serialises, restores, and enforces the cache rule (below). What is not wired is the durable store itself: a `(org, repo)` keyed blob and the call that loads it before a review. That is plumbing of exactly the shape [store.ts](services/orchestrator/src/orggraph/store.ts) already uses for the cross-repo graph, and it is deliberately the last thing rather than the first: a cache whose safety rule is unproven is worth less than no cache |
 
 ### Shipped in the fourth pass
 
@@ -2206,6 +2206,9 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 | §3.1.3 | The Impact Scope section is populated. It was written in an earlier pass and nothing ever filled it in, so it rendered on no review at all | [reviewWorkflow.ts](services/orchestrator/src/workflow/reviewWorkflow.ts) |
 | §3.2 gap 2 (`routes`) | HTTP entry points parsed across frameworks; `routesReaching()` walks the graph to find which reach a change | [heuristic.ts](packages/analyzer/src/parsers/heuristic.ts), [indexer.ts](packages/analyzer/src/indexer.ts) |
 | §3.1.3 Reachability | The Security Risks section names the routes a finding is reachable from, or says nothing | [poster.ts](services/orchestrator/src/poster/poster.ts) |
+| §3.2 gap 5, requirement 6 | The graph serialises and restores, and a cached record can never support an `exact` claim | [indexer.ts](packages/analyzer/src/indexer.ts) |
+
+Requirement 6 of gap 5 ("the graph is a cache, never a source of truth: a stale entry produces a slower review, never a wrong one") was the whole difficulty, and the spec stated it as an aspiration without saying how it would hold. It is now a mechanism. Cavix tracks which paths a review actually READ as opposed to loaded from cache, and a caller drawn from a cached record caps the blast radius at `heuristic`, so the Impact Scope says "resolved by name match" instead of "resolved statically". The cache buys speed and pays in the strength of a sentence, which is the right currency. Re-reading a file restores the stronger claim, including when the content is unchanged: reading it and finding it identical is exactly what verification means.
 
 `routes` was picked out of gap 2's list because it is the only edge kind that changes what a review can *say* rather than how much it can see. The others (`implements`, `reads`/`writes`, `tests`) widen recall, which is worth less per unit of per-language parser work.
 
