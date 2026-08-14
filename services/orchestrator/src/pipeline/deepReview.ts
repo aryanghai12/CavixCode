@@ -72,6 +72,20 @@ export interface DeepReviewResult {
   astSymbols: number;
   filesIndexed: number;
   /**
+   * What the change can reach, measured off the same graph Stage 4 built.
+   *
+   * Carried so the review can say it, and carried WITH its evidence: a reach
+   * claim is only as good as the shakiest edge behind it, and the parsers are
+   * static and heuristic. `resolution` is what stops the pull request saying
+   * "resolved statically" about an edge that was a name match.
+   */
+  reach?: {
+    resolution?: "exact" | "heuristic" | "ambiguous";
+    callerFiles: string[];
+    callerSymbols: string[];
+    truncated: Array<{ symbol: string; path: string; callers: number }>;
+  };
+  /**
    * The call path this change sits on, traced across files from the same graph
    * Stage 4 built. Absent when the graph had nothing worth drawing, which is the
    * usual case: a single-file change has no boundary to show being crossed.
@@ -200,6 +214,12 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
       calibratedCategories: Object.keys(learned).length,
       astSymbols,
       filesIndexed: sourceFiles.length,
+      reach: {
+        ...(result.context.reachResolution ? { resolution: result.context.reachResolution } : {}),
+        callerFiles: result.context.blastFiles,
+        callerSymbols: result.context.callerSymbols,
+        truncated: result.context.reachTruncated ?? [],
+      },
       ...(trace ? { trace } : {}),
       costUsd: result.totalCostUsd,
     };

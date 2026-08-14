@@ -23,6 +23,37 @@ export interface ResolvedCall {
   line: number;
 }
 
+/**
+ * How much a call edge is actually worth.
+ *
+ * The distinction exists because the parsers are static and heuristic, and a
+ * reach claim posted on somebody's pull request has to be able to say which of
+ * these it stands on.
+ *
+ *   exact      only one thing it could be: the sole symbol with that name, or
+ *              one reached through an import the file declares.
+ *   heuristic  the right file or module, more than one candidate inside it.
+ *   ambiguous  several candidates and no evidence choosing between them. Useful
+ *              as CONTEXT for a model, never presentable to a human as a
+ *              resolved call.
+ */
+export type EdgeResolution = "exact" | "heuristic" | "ambiguous";
+
+/** Worst-first, so the weakest evidence for an edge is the one that survives. */
+export const RESOLUTION_RANK: Record<EdgeResolution, number> = {
+  ambiguous: 0,
+  heuristic: 1,
+  exact: 2,
+};
+
+/** A resolved call target, with the evidence behind it. */
+export interface ResolvedTarget {
+  id: string;
+  resolution: EdgeResolution;
+  /** How many symbols the name could have meant. Only set when more than one. */
+  candidates?: number;
+}
+
 export interface FileRecord {
   path: string;
   hash: string;

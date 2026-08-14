@@ -176,7 +176,18 @@ export class ContextAssembler {
     }
   }
 
-  private pack(items: ContextItem[], blast: { files: string[]; changed: SymbolNode[]; callers: SymbolNode[] }, changedSymbols: string[], callerSymbols: string[]): ReviewContext {
+  private pack(
+    items: ContextItem[],
+    blast: {
+      files: string[];
+      changed: SymbolNode[];
+      callers: SymbolNode[];
+      resolution?: "exact" | "heuristic" | "ambiguous";
+      truncated?: Array<{ symbol: SymbolNode; callers: number }>;
+    },
+    changedSymbols: string[],
+    callerSymbols: string[],
+  ): ReviewContext {
     const ordered = [...items].sort((a, b) => b.priority - a.priority);
     const kept: ContextItem[] = [];
     let used = 0;
@@ -196,6 +207,12 @@ export class ContextAssembler {
       callerSymbols,
       tokenEstimate: used,
       droppedForBudget: dropped,
+      ...(blast.resolution ? { reachResolution: blast.resolution } : {}),
+      reachTruncated: (blast.truncated ?? []).map((t) => ({
+        symbol: t.symbol.name,
+        path: t.symbol.path,
+        callers: t.callers,
+      })),
     };
   }
 }

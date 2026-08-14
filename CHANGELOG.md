@@ -5,6 +5,52 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### The code graph says how sure it is, and the review repeats it
+
+Cavix's parsers are static and heuristic. The graph they build decides what a
+review CLAIMS about reach, and until now it made every claim with the same
+confidence whether it had proof or had guessed.
+
+Three bugs, each of which produced a confident wrong answer rather than a visible
+failure.
+
+**An arbitrary guess was recorded as a resolved call.** The last line of call
+resolution was `return [...candidates][0]`. With three functions named `send` in
+a repository and no import evidence, it picked whichever happened to be first in
+a Set and stored that as a call edge, indistinguishable from one it had actually
+resolved. A review could then name a "caller" that does not call the changed code
+at all, and report the whole thing as "resolved statically".
+
+Every edge now carries its evidence: `exact` when only one symbol could have been
+meant, `heuristic` when the file or module is known but not which symbol inside
+it, `ambiguous` when several candidates and nothing choosing between them. The
+guess is still made, because a plausible caller is useful context for a model.
+What changed is that it is labelled, so a claim posted on somebody's pull request
+is held to a higher bar than a hint fed to a prompt.
+
+The Impact Scope section now reports the weakest evidence behind anything it
+walked: "resolved statically" only when every edge was exact, and "resolved by
+name match" the moment one was not. A reach claim is worth exactly its shakiest
+link.
+
+**Two symbols with the same name in one file merged into one.** `path#name` was
+the same string for both, so the second overwrote the first and their callers
+merged: the blast radius for one silently included the other's. The first
+occurrence keeps its original id, so nothing that exists today changed; later
+ones are disambiguated.
+
+**A symbol called from everywhere flooded the context.** The caller walk had no
+fanout cap, so a utility called from four hundred places contributed four hundred
+caller snippets and evicted every other kind of context under a fixed token
+budget: the changed definitions, past discussions, the team's own rules. Symbols
+past the cap are now reported with their real caller count instead of expanded,
+because a reviewer told `log()` has 412 callers reasons differently from one
+shown 25 and left to assume that is all of them.
+
+The Impact Scope section was also dead code until now: it rendered nothing
+because nothing populated it. It is wired to the graph.
+
+
 ### A re-review can read only what the push changed
 
 Every review reads the whole pull request, `base...head`. On the tenth push of a

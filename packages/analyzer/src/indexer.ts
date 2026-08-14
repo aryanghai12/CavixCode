@@ -4,8 +4,11 @@ import { detectLanguage, type Parser } from "./parser.ts";
 import {
   moduleBasename,
   symbolId,
+  RESOLUTION_RANK,
+  type EdgeResolution,
   type FileRecord,
   type ResolvedCall,
+  type ResolvedTarget,
   type SymbolNode,
 } from "./graph.ts";
 
@@ -21,7 +24,42 @@ export interface BlastRadius {
   callers: SymbolNode[];
   /** Union of files involved (changed + caller files). */
   files: string[];
+  /**
+   * The WEAKEST evidence behind any edge that was traversed to build this.
+   *
+   * A reach claim is only as good as the shakiest link in it, so this is the
+   * word a review is allowed to use: "resolved statically" when every edge was
+   * exact, "resolved by name match" the moment one was not. Undefined when no
+   * edges were traversed at all.
+   */
+  resolution?: EdgeResolution;
+  /**
+   * Symbols whose callers were NOT fully expanded because too many things call
+   * them, with the real count.
+   *
+   * Reported rather than hidden. A reviewer told that `log()` has 412 callers
+   * reasons differently from one shown 25 and left to assume that is all of
+   * them, and quietly truncating is how the second happens.
+   */
+  truncated: Array<{ symbol: SymbolNode; callers: number }>;
 }
+
+export interface BlastRadiusOptions {
+  /** How far to walk the caller graph. */
+  depth?: number;
+  /**
+   * Stop expanding a symbol with more callers than this.
+   *
+   * A utility called from four hundred places contributes four hundred caller
+   * snippets, which evicts every other kind of context under a fixed token
+   * budget: the diff's own definitions, past discussions, the team's rules. The
+   * cap is what stops one hot function crowding out everything a reviewer needs.
+   */
+  fanoutCap?: number;
+}
+
+/** Beyond this, a symbol is infrastructure and its caller list is noise. */
+export const DEFAULT_FANOUT_CAP = 25;
 
 // CodeIndex builds and maintains the whole-repo call graph. Parsing is
 // incremental (only changed files are re-parsed); call-edge resolution is
@@ -34,6 +72,8 @@ export class CodeIndex {
   private readonly byName = new Map<string, Set<string>>();
   private callsOut = new Map<string, Set<string>>();
   private callsIn = new Map<string, Set<string>>();
+  /** "fromId toId" -> the evidence behind that edge. */
+  private edgeResolution = new Map<string, EdgeResolution>();
 
   constructor(parser: Parser) {
     this.parser = parser;
@@ -141,10 +181,10 @@ export class CodeIndex {
     const firstByTarget = new Map<string, number>();
     for (const call of rec.calls) {
       if (call.fromId !== id) continue;
-      const targetId = this.resolveCallee(rec, call.callee);
-      if (!targetId || targetId === id) continue;
-      const seen = firstByTarget.get(targetId);
-      if (seen === undefined || call.line < seen) firstByTarget.set(targetId, call.line);
+      const target = this.resolveCallee(rec, call.callee);
+      if (!target || target.id === id) continue;
+      const seen = firstByTarget.get(target.id);
+      if (seen === undefined || call.line < seen) firstByTarget.set(target.id, call.line);
     }
 
     return [...firstByTarget.entries()]
@@ -220,14 +260,57 @@ export class CodeIndex {
     return this.blastRadius([...changedIds]);
   }
 
-  blastRadius(changedIds: string[], depth = 3): BlastRadius {
+  blastRadius(changedIds: string[], options: number | BlastRadiusOptions = {}): BlastRadius {
+    // The old signature took a bare depth. Kept working, because several call
+    // sites and tests pass one.
+    const opts = typeof options === "number" ? { depth: options } : options;
+    const depth = opts.depth ?? 3;
+    const fanoutCap = opts.fanoutCap ?? DEFAULT_FANOUT_CAP;
+
     const changed = changedIds.map((id) => this.symbols.get(id)).filter((s): s is SymbolNode => !!s);
-    const callerIds = this.transitiveCallers(changedIds, depth);
-    const callers = [...callerIds].map((id) => this.symbols.get(id)!).filter(Boolean);
+
+    const seen = new Set<string>();
+    const truncated: BlastRadius["truncated"] = [];
+    let weakest: EdgeResolution | undefined;
+    const note = (r: EdgeResolution | undefined) => {
+      if (!r) return;
+      if (!weakest || RESOLUTION_RANK[r] < RESOLUTION_RANK[weakest]) weakest = r;
+    };
+
+    let frontier = new Set(changedIds);
+    for (let d = 0; d < depth && frontier.size > 0; d++) {
+      const next = new Set<string>();
+      for (const id of frontier) {
+        const callers = this.callsIn.get(id) ?? new Set<string>();
+        if (callers.size > fanoutCap) {
+          // Infrastructure. Expanding it would bury every other kind of context
+          // under one hot function's caller list, so it is reported instead.
+          const symbol = this.symbols.get(id);
+          if (symbol) truncated.push({ symbol, callers: callers.size });
+          continue;
+        }
+        for (const caller of callers) {
+          note(this.edgeResolutionFor(caller, id));
+          if (!seen.has(caller) && !changedIds.includes(caller)) {
+            seen.add(caller);
+            next.add(caller);
+          }
+        }
+      }
+      frontier = next;
+    }
+
+    const callers = [...seen].map((id) => this.symbols.get(id)!).filter(Boolean);
     const fileSet = new Set<string>();
     for (const s of changed) fileSet.add(s.path);
     for (const s of callers) fileSet.add(s.path);
-    return { changed, callers, files: [...fileSet] };
+    return {
+      changed,
+      callers,
+      files: [...fileSet],
+      ...(weakest ? { resolution: weakest } : {}),
+      truncated,
+    };
   }
 
   // --- internals -----------------------------------------------------------
@@ -237,8 +320,19 @@ export class CodeIndex {
     const symbolIds: string[] = [];
     // Sort defs by line so enclosing-symbol attribution is correct.
     const defs = [...parsed.symbols].sort((a, b) => a.line - b.line);
+    // Two symbols in one file can share a name: `run` on two classes, an
+    // overload, a method and a helper. `path#name` is the same string for both,
+    // so the second overwrote the first in the symbol map and their CALLERS
+    // MERGED. The blast radius for one then silently included the other's, which
+    // is a wrong answer that looks exactly like a right one.
+    //
+    // The first occurrence keeps the plain id, so every id that exists today is
+    // unchanged; later ones are disambiguated by their line.
+    const usedIds = new Set<string>();
     for (const d of defs) {
-      const id = symbolId(path, d.name);
+      let id = symbolId(path, d.name);
+      if (usedIds.has(id)) id = `${id}@${d.line}`;
+      usedIds.add(id);
       const node: SymbolNode = { id, name: d.name, path, line: d.line, kind: d.kind, language: parsed.language };
       this.symbols.set(id, node);
       symbolIds.push(id);
@@ -283,37 +377,79 @@ export class CodeIndex {
   private resolveEdges(): void {
     this.callsOut = new Map();
     this.callsIn = new Map();
+    this.edgeResolution = new Map();
     for (const rec of this.files.values()) {
       for (const call of rec.calls) {
         if (!call.fromId) continue;
-        const targetId = this.resolveCallee(rec, call.callee);
-        if (!targetId || targetId === call.fromId) continue;
+        const target = this.resolveCallee(rec, call.callee);
+        if (!target || target.id === call.fromId) continue;
         if (!this.callsOut.has(call.fromId)) this.callsOut.set(call.fromId, new Set());
-        this.callsOut.get(call.fromId)!.add(targetId);
-        if (!this.callsIn.has(targetId)) this.callsIn.set(targetId, new Set());
-        this.callsIn.get(targetId)!.add(call.fromId);
+        this.callsOut.get(call.fromId)!.add(target.id);
+        if (!this.callsIn.has(target.id)) this.callsIn.set(target.id, new Set());
+        this.callsIn.get(target.id)!.add(call.fromId);
+        // Keep the WEAKEST resolution seen for a pair. Two call sites can reach
+        // the same symbol, one provably and one by guess, and an edge is only as
+        // trustworthy as its worst evidence.
+        const key = `${call.fromId} ${target.id}`;
+        const seen = this.edgeResolution.get(key);
+        if (!seen || RESOLUTION_RANK[target.resolution] < RESOLUTION_RANK[seen]) {
+          this.edgeResolution.set(key, target.resolution);
+        }
       }
     }
   }
 
+  /** How this caller edge was resolved, or undefined when there is no such edge. */
+  edgeResolutionFor(fromId: string, toId: string): EdgeResolution | undefined {
+    return this.edgeResolution.get(`${fromId} ${toId}`);
+  }
+
   // Resolve a callee name to a target symbol, biasing toward (1) same file,
   // (2) a file this one imports (by basename or named import), (3) any match.
-  private resolveCallee(from: FileRecord, callee: string): string | null {
+  /**
+   * Which symbol does this call reach, and HOW SURE ARE WE.
+   *
+   * The second half used to be missing, and it mattered. The last line was
+   * `return [...candidates][0]`: with three functions named `send` in the
+   * repository and no import evidence, it picked whichever happened to be first
+   * in a Set and recorded that as a call edge, indistinguishable from one it had
+   * actually resolved. Downstream, a review could then name a "caller" that does
+   * not call the changed code at all, and the Impact Scope would report the whole
+   * thing as "resolved statically".
+   *
+   * The guess is still made, because a plausible caller is useful CONTEXT for a
+   * model. What changed is that it is now labelled, so a claim posted on somebody's
+   * pull request can be held to a higher bar than a hint fed to a prompt.
+   */
+  private resolveCallee(from: FileRecord, callee: string): ResolvedTarget | null {
     const candidates = this.byName.get(callee);
     if (!candidates || candidates.size === 0) return null;
+    const ids = [...candidates];
 
-    const sameFile = [...candidates].find((id) => this.symbols.get(id)!.path === from.path);
-    if (sameFile) return sameFile;
+    // Same file. Exact when there is only one of them; if the file declares the
+    // name twice we know the file but not which one, so it is a guess about
+    // which, not about where.
+    const sameFile = ids.filter((id) => this.symbols.get(id)!.path === from.path);
+    if (sameFile.length === 1) return { id: sameFile[0], resolution: "exact" };
+    if (sameFile.length > 1) return { id: sameFile[0], resolution: "heuristic", candidates: sameFile.length };
 
+    // Reached through an import this file actually declares.
     const importedBasenames = new Set(from.importedModules.map(moduleBasename));
-    const viaImport = [...candidates].find((id) => {
-      const p = this.symbols.get(id)!.path;
-      const base = moduleBasename(p);
+    const viaImport = ids.filter((id) => {
+      const base = moduleBasename(this.symbols.get(id)!.path);
       return importedBasenames.has(base) || from.importedNames.has(callee);
     });
-    if (viaImport) return viaImport;
+    if (viaImport.length === 1) return { id: viaImport[0], resolution: "exact" };
+    if (viaImport.length > 1) return { id: viaImport[0], resolution: "heuristic", candidates: viaImport.length };
 
-    return [...candidates][0];
+    // Exactly one thing in the whole repository has this name. Nothing else it
+    // could be, so this is a fact even without an import to prove it.
+    if (ids.length === 1) return { id: ids[0], resolution: "exact" };
+
+    // Several candidates and no evidence at all. Still returned, because a
+    // plausible caller is worth showing a model, and never presented to a human
+    // as a resolved call.
+    return { id: ids[0], resolution: "ambiguous", candidates: ids.length };
   }
 }
 

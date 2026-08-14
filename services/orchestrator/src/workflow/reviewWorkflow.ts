@@ -1201,6 +1201,25 @@ export async function runReview(
     // permission), in which case the whole narrative folds into the comment and
     // the diagram goes with it rather than being the one piece that vanishes.
     ...(signals?.trace ? { trace: signals.trace } : {}),
+    // What the change can reach, from the graph, with the evidence behind it.
+    //
+    // Every number here was measured by walking the index; none is inferred from
+    // the diff, and the `resolution` decides the sentence under the table. It is
+    // "resolved statically" only when EVERY edge walked was exact, and the
+    // moment one was a name match the whole claim drops to "resolved by name
+    // match". A reach claim is worth exactly its shakiest link, and this is a
+    // heuristic parser: a review that says "statically" anyway is inventing
+    // precision it does not have.
+    ...(signals?.reach && signals.reach.callerSymbols.length > 0
+      ? {
+          impact: {
+            callSites: signals.reach.callerFiles.map((path) => ({ path })),
+            ...(crossRepoConsumers > 0 ? { consumers: [`${crossRepoConsumers} other repositories`] } : {}),
+            resolution: signals.reach.resolution === "exact" ? ("exact" as const) : ("heuristic" as const),
+            depth: 3,
+          },
+        }
+      : {}),
     badges: deps.badges !== false,
     // The Scope module's AST, Deterministic Pass, Ensemble and Blast Radius rows
     // exist for exactly this: real counts from stages that actually ran. Each is

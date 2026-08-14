@@ -76,6 +76,22 @@ export interface ReviewContext {
   callerSymbols: string[];
   tokenEstimate: number;
   droppedForBudget: number;
+  /**
+   * The weakest evidence behind any call edge walked to build this.
+   *
+   * Carried all the way to the pull request, because a reach claim is only as
+   * good as its shakiest link. "Resolved statically" is a stronger statement
+   * than a heuristic parser can support the moment one edge was a name match,
+   * and a review that says it anyway is inventing precision.
+   */
+  reachResolution?: "exact" | "heuristic" | "ambiguous";
+  /**
+   * Symbols too widely called to expand, with their real caller counts.
+   *
+   * Reported rather than hidden: a reviewer told `log()` has 412 callers reasons
+   * differently from one shown 25 and left to assume that is all of them.
+   */
+  reachTruncated: Array<{ symbol: string; path: string; callers: number }>;
 }
 
 export function estimateTokens(text: string): number {

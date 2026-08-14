@@ -2192,13 +2192,21 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 
 | Spec | Why not |
 | :--- | :--- |
-| §3.2 graph persistence, new edge kinds, tree-sitter | Largest effort in the document. `allSymbolNames()` landed because the critic needs it; the rest changes no user-visible behaviour on its own, and it is the one remaining item |
+| §3.2 gap 2 (new edge kinds) and gap 5 (graph persistence) | Both are additive and neither changes an existing answer. Edge kinds (`implements`, `routes`, `reads`/`writes`, `tests`) need parser work per language; persistence needs a store and a cache-invalidation story. The three gaps that were producing *wrong* answers are closed, which is the part that could not wait |
 
 ### Shipped in the fourth pass
 
 | Spec | What landed | Where |
 | :--- | :--- | :--- |
 | §3.3.3, second half | The findings pass reads only the hot files, behind `CAVIX_NARROW_REREVIEWS`. Default OFF | [reviewWorkflow.ts](services/orchestrator/src/workflow/reviewWorkflow.ts) |
+| §3.2 gap 1 | Symbol identity no longer collides when one file declares a name twice | [indexer.ts](packages/analyzer/src/indexer.ts) |
+| §3.2 gap 3 | Every call edge carries `exact` / `heuristic` / `ambiguous`, and the Impact Scope repeats the weakest one | [graph.ts](packages/analyzer/src/graph.ts), [indexer.ts](packages/analyzer/src/indexer.ts) |
+| §3.2 gap 4 | Fanout cap, with truncated symbols reported and their real caller counts | [indexer.ts](packages/analyzer/src/indexer.ts) |
+| §3.1.3 | The Impact Scope section is populated. It was written in an earlier pass and nothing ever filled it in, so it rendered on no review at all | [reviewWorkflow.ts](services/orchestrator/src/workflow/reviewWorkflow.ts) |
+
+The spec's proposed fix for gap 1 was a structured `SymbolId` carrying a scope chain and a signature hash. That needs the parser to track enclosing scope, which the heuristic parsers do not, so it would have meant a parser rewrite to fix a collision. Disambiguating a repeated name by its line achieves the same thing: the first occurrence keeps the id it has today, so nothing downstream moves.
+
+Gap 3 turned out to be the one that mattered. The spec framed it as "carry confidence so a tree-sitter backend can land later". Reading the code, the fallback `return [...candidates][0]` was already producing wrong answers in production: an arbitrary pick among same-named symbols, stored as a call edge indistinguishable from a resolved one, feeding a review that would then report the lot as "resolved statically".
 
 The restructure the previous pass balked at turned out to be unnecessary. Rather than reordering the workflow so the ledger is fetched before the review, the narrowing step makes its own cheap ledger read, which touches nothing else: with the flag off, not a single line of the existing path executes differently. That is a smaller blast radius than the reorder would have had, and it is why this shipped.
 
