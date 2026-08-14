@@ -1,4 +1,4 @@
-import type { Language } from "./parser.ts";
+import type { Language, RouteDef } from "./parser.ts";
 
 // The code graph: symbols (nodes) connected by resolved call edges, plus the
 // per-file records the incremental indexer maintains. In production this is
@@ -63,6 +63,20 @@ export interface FileRecord {
   importedModules: string[];
   /** Import names statically visible, used to bias call resolution. */
   importedNames: Set<string>;
+  /** HTTP entry points declared in this file. */
+  routes: RouteDef[];
+}
+
+/** A route, and the symbol that declares it. */
+export interface RouteRef {
+  method: string;
+  route: string;
+  path: string;
+  line: number;
+  /** True when the declaring line mentions something auth-shaped. A hint. */
+  guarded: boolean;
+  /** The symbol enclosing the declaration, when there is one. */
+  symbol?: string;
 }
 
 export function symbolId(path: string, name: string): string {

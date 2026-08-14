@@ -282,6 +282,14 @@ export interface ImpactScope {
   depth?: number;
 }
 
+/** One HTTP entry point that can reach the changed code. */
+export interface RouteReach {
+  method: string;
+  route: string;
+  /** True when the declaring line mentions something auth-shaped. A hint only. */
+  guarded: boolean;
+}
+
 export interface PosterOptions {
   ref?: ReviewLinkRef;
   /**
@@ -407,6 +415,15 @@ export interface PosterOptions {
   historyRewritten?: boolean;
   /** How the work was routed across model tiers, for the run footer. */
   routeMix?: Record<string, number>;
+  /**
+   * HTTP entry points from which the changed code is reachable, measured off the
+   * call graph.
+   *
+   * Drives the Reachability line under Security Risks. Absent means the graph
+   * found none, or did not run, and the line is simply omitted: a hedge like
+   * "potentially reachable" reads as a finding and is not one.
+   */
+  reachableFrom?: RouteReach[];
   /**
    * How many of THIS review's findings sit at or above the owner's blocking
    * severity.
@@ -820,7 +837,7 @@ function renderReviewComment(
   if (impact.length > 0) findingSections.push(["", "---", "", ...impact]);
 
   // Security ahead of the general list. Different reader, different urgency.
-  const security = renderSecurity(all, ref);
+  const security = renderSecurity(all, ref, opts.reachableFrom);
   if (security.length > 0) findingSections.push(["", "---", "", ...security]);
 
   if (groups.length > 0) {
@@ -1516,7 +1533,7 @@ function renderImpact(impact: ImpactScope | undefined, ref?: ReviewLinkRef): str
  * section with its inline comment. Somebody scanning for "is this safe to ship"
  * should not have to read thirty style notes to find out.
  */
-function renderSecurity(all: Finding[], ref?: ReviewLinkRef): string[] {
+function renderSecurity(all: Finding[], ref?: ReviewLinkRef, routes?: readonly RouteReach[]): string[] {
   const sec = all.filter(isSecurity);
   if (sec.length === 0) return [];
 
@@ -1548,8 +1565,39 @@ function renderSecurity(all: Finding[], ref?: ReviewLinkRef): string[] {
   if (sec.length > MAX_SECURITY_ROWS) {
     out.push("", `<sub>and ${sec.length - MAX_SECURITY_ROWS} more, listed below.</sub>`);
   }
+
+  // Reachability, and only when it was MEASURED.
+  //
+  // This is the difference between a scanner and a reviewer. "String-built
+  // query" is a fact about a line; "an unauthenticated POST reaches a
+  // string-built query" is a fact about the system, and only the second is worth
+  // interrupting somebody for.
+  //
+  // Omitted entirely when the graph found no route to the changed code, rather
+  // than hedged into "potentially reachable". A hedge here reads as a finding
+  // and is not one, and on a security section that is the worst way to be wrong.
+  if (routes && routes.length > 0) {
+    const shown = routes.slice(0, MAX_ROUTE_ROWS);
+    const list = shown.map((r) => `\`${plain(r.method)} ${plain(r.route)}\``).join(", ");
+    const more = routes.length > shown.length ? `, and ${routes.length - shown.length} more` : "";
+    out.push("", `**Reachability.** This code is reachable from ${list}${more}.`);
+    // Stated only in the direction the evidence supports. A line parser cannot
+    // see middleware applied elsewhere, so "no auth here" is not "no auth", and
+    // claiming otherwise would be guessing about somebody's security.
+    const unguarded = shown.filter((r) => !r.guarded);
+    if (unguarded.length > 0) {
+      out.push(
+        "",
+        `<sub>No authentication is visible on ${unguarded.length === shown.length ? "those declarations" : "some of those declarations"}. ` +
+          `Middleware applied elsewhere would not be visible here, so this is worth checking rather than treating as settled.</sub>`,
+      );
+    }
+  }
   return out;
 }
+
+/** Enough routes to make the point; a wall of them is not reachability. */
+const MAX_ROUTE_ROWS = 4;
 
 function isSecurity(f: Finding): boolean {
   return /security|secret|vuln|injection|auth/i.test(f.category) || f.source === "secret" || f.source === "sast";

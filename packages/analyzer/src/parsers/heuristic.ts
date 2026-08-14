@@ -2,6 +2,7 @@ import {
   detectLanguage,
   type CallSite,
   type ImportRef,
+  type RouteDef,
   type Language,
   type ParsedFile,
   type Parser,
@@ -23,6 +24,17 @@ const NON_CALLEES = new Set([
 
 const CALL_RE = /(\b[A-Za-z_$][\w$]*)\s*\(/g;
 
+/**
+ * Words suggesting a route declaration line mentions authentication.
+ *
+ * A HINT, never a verdict. Middleware applied elsewhere is invisible to a
+ * line parser, so the most this can honestly support is "this line mentions
+ * auth". Reading the ABSENCE of these words as "this route is unprotected"
+ * would be guessing about security, which is the worst place to guess.
+ */
+const AUTH_HINT =
+  /\b(auth|authenticate|authorize|requireUser|requireAuth|isAuthenticated|ensureLoggedIn|jwt|passport|guard|protect|session|permission|verifyToken)\b/i;
+
 export class HeuristicParser implements Parser {
   supports(language: Language): boolean {
     return language !== "unknown";
@@ -34,6 +46,7 @@ export class HeuristicParser implements Parser {
     const symbols: SymbolDef[] = [];
     const calls: CallSite[] = [];
     const imports: ImportRef[] = [];
+    const routes: RouteDef[] = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -41,8 +54,46 @@ export class HeuristicParser implements Parser {
       this.collectDefs(language, line, lineNo, symbols);
       this.collectImports(language, line, lineNo, imports);
       this.collectCalls(line, lineNo, calls);
+      this.collectRoutes(line, lineNo, routes);
     }
-    return { path, language, symbols, calls, imports };
+    return { path, language, symbols, calls, imports, ...(routes.length > 0 ? { routes } : {}) };
+  }
+
+  /**
+   * HTTP entry points, across the shapes people actually write.
+   *
+   * Line-based and framework-agnostic on purpose: it recognises the SHAPE of a
+   * route declaration rather than a list of libraries, so a framework nobody
+   * here has heard of still registers as long as it looks like the others.
+   *
+   * Every miss costs a sentence on a review. Every false positive would claim a
+   * route that does not exist, so the patterns require both a verb and a
+   * string that starts with "/".
+   */
+  private collectRoutes(line: string, lineNo: number, out: RouteDef[]): void {
+    const guarded = AUTH_HINT.test(line);
+    const push = (method: string, route: string) => {
+      if (route.startsWith("/")) out.push({ method: method.toUpperCase(), route, line: lineNo, guarded });
+    };
+
+    // app.get("/x"), router.post('/x'), r.Get("/x"), srv.Delete(`/x`)
+    let m = /\.\s*(get|post|put|patch|delete|head|options|all|use)\s*\(\s*["'`]([^"'`]+)["'`]/i.exec(line);
+    if (m) {
+      push(m[1].toLowerCase() === "all" || m[1].toLowerCase() === "use" ? "ANY" : m[1], m[2]);
+      return;
+    }
+    // Go: mux.HandleFunc("/x", h), http.Handle("/x", h)
+    m = /\.\s*Handle(?:Func)?\s*\(\s*"([^"]+)"/.exec(line);
+    if (m) {
+      push("ANY", m[1]);
+      return;
+    }
+    // Python decorators: @app.route("/x", methods=["POST"]), @app.get("/x")
+    m = /^\s*@\s*[\w.]+\.\s*(route|get|post|put|patch|delete)\s*\(\s*["']([^"']+)["']/i.exec(line);
+    if (m) {
+      const verb = m[1].toLowerCase() === "route" ? (/methods\s*=\s*\[\s*["'](\w+)/i.exec(line)?.[1] ?? "ANY") : m[1];
+      push(verb, m[2]);
+    }
   }
 
   private collectDefs(lang: Language, line: string, lineNo: number, out: SymbolDef[]): void {

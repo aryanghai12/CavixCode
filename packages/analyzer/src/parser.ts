@@ -28,12 +28,42 @@ export interface ImportRef {
   line: number;
 }
 
+/**
+ * An HTTP entry point declared in this file.
+ *
+ * The one edge kind that changes what a review can SAY rather than how much it
+ * can see. A scanner reports "string-built query"; a reviewer that knows the
+ * routes reports "an unauthenticated POST reaches a string-built query", and
+ * those two sentences get very different responses from the person reading them.
+ *
+ * Deliberately shallow: the declaration line and what it says. Whether the
+ * handler is really reachable is a graph question, answered by the index.
+ */
+export interface RouteDef {
+  /** Upper-case verb, or "ANY" for a framework that does not say. */
+  method: string;
+  /** The path as written, e.g. "/api/refunds/:id". */
+  route: string;
+  line: number;
+  /**
+   * True when the declaration line also mentions something auth-shaped.
+   *
+   * A hint, never a verdict. Middleware applied elsewhere is invisible to a line
+   * parser, so this can only ever say "this line mentions auth" and never "this
+   * route is protected". Anything that claims the second from the first is
+   * guessing about security, which is the worst place to guess.
+   */
+  guarded: boolean;
+}
+
 export interface ParsedFile {
   path: string;
   language: Language;
   symbols: SymbolDef[];
   calls: CallSite[];
   imports: ImportRef[];
+  /** HTTP entry points, when the file declares any. */
+  routes?: RouteDef[];
 }
 
 export interface Parser {

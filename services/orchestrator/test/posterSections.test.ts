@@ -290,3 +290,46 @@ test("the new sections carry no emoji and no em dashes", () => {
   assert.doesNotMatch(b, /\p{Emoji_Presentation}|️/u);
   assert.doesNotMatch(b, /[—–]/);
 });
+
+// ---------- Reachability ----------
+
+test("the reachability line names the routes, and only when they were measured", () => {
+  // The difference between a scanner and a reviewer. "String-built query" is a
+  // fact about a line; "an unauthenticated POST reaches it" is a fact about the
+  // system, and only the second is worth interrupting somebody for.
+  const { submission } = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: REF,
+    reachableFrom: [{ method: "POST", route: "/api/refunds/:id", guarded: false }],
+  });
+  const b = submission.body;
+  assert.match(b, /\*\*Reachability\.\*\*/);
+  assert.match(b, /POST \/api\/refunds\/:id/);
+  assert.match(b, /No authentication is visible/);
+  // Stated only in the direction the evidence supports: a line parser cannot
+  // see middleware applied elsewhere.
+  assert.match(b, /Middleware applied elsewhere would not be visible/);
+});
+
+test("a guarded route makes no claim about missing authentication", () => {
+  const { submission } = buildReviewSubmission(resultWith(finding()), DIFF, {
+    ref: REF,
+    reachableFrom: [{ method: "POST", route: "/admin/keys", guarded: true }],
+  });
+  assert.match(submission.body, /Reachability/);
+  assert.doesNotMatch(submission.body, /No authentication is visible/);
+});
+
+test("no measured route means no reachability line, not a hedge", () => {
+  // "Potentially reachable" reads as a finding and is not one. On a security
+  // section that is the worst way to be wrong.
+  const { submission } = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF });
+  assert.match(submission.body, /Security Risks/);
+  assert.doesNotMatch(submission.body, /Reachability/);
+  assert.doesNotMatch(submission.body, /potentially reachable/i);
+});
+
+test("reachability is capped rather than becoming a wall of routes", () => {
+  const many = [1, 2, 3, 4, 5, 6].map((n) => ({ method: "GET", route: `/r${n}`, guarded: false }));
+  const { submission } = buildReviewSubmission(resultWith(finding()), DIFF, { ref: REF, reachableFrom: many });
+  assert.match(submission.body, /and 2 more/);
+});

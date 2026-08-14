@@ -5,6 +5,39 @@ All notable changes to Cavix are recorded here. Format loosely follows
 
 ## [Unreleased]
 
+### Security findings say what can reach them
+
+A scanner reports "string-built query". A reviewer that knows the routes reports
+"an unauthenticated POST reaches a string-built query". Those two sentences get
+very different responses from the person reading them, and only the second is
+worth interrupting somebody for.
+
+Cavix now reads HTTP entry points out of the code and walks the call graph to
+work out which of them reach a change. The Security Risks section carries a
+**Reachability** line naming the routes.
+
+Route detection is framework-agnostic on purpose: it matches the SHAPE of a route
+declaration rather than a list of libraries, so Express, Fastify, Koa, chi,
+net/http, Flask and FastAPI all register, and so does a framework nobody here has
+heard of. Both a verb and a path starting with `/` are required, so every
+`cache.get("user:42")` in a repository does not become an HTTP endpoint.
+
+Three things it will not do, each of which would be worse than saying nothing:
+
+- **It never claims a route it could not attribute to a symbol.** A top-level
+  registration with no enclosing function is known but never reported as
+  reaching anything, because the whole value of the sentence is that it is a
+  measurement rather than a decoration.
+- **It never says "potentially reachable".** When the graph found no route, the
+  line is omitted. A hedge reads as a finding and is not one, and on a security
+  section that is the worst way to be wrong.
+- **It never concludes a route is unprotected.** A line parser cannot see
+  middleware applied elsewhere, so the most it can honestly support is "no
+  authentication is visible on that declaration", said with the caveat attached.
+  Reading the absence of an auth keyword as "this endpoint is open" would be
+  guessing about somebody's security.
+
+
 ### The code graph says how sure it is, and the review repeats it
 
 Cavix's parsers are static and heuristic. The graph they build decides what a

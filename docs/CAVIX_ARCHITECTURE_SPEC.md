@@ -2192,7 +2192,8 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 
 | Spec | Why not |
 | :--- | :--- |
-| §3.2 gap 2 (new edge kinds) and gap 5 (graph persistence) | Both are additive and neither changes an existing answer. Edge kinds (`implements`, `routes`, `reads`/`writes`, `tests`) need parser work per language; persistence needs a store and a cache-invalidation story. The three gaps that were producing *wrong* answers are closed, which is the part that could not wait |
+| §3.2 gap 2, the remaining edge kinds | `routes` shipped, because it is the only one that changes what a review can SAY. `implements` / `extends`, `reads` / `writes` and `tests` widen what it can see, which is worth less per unit of parser work and can follow |
+| §3.2 gap 5, graph persistence | Needs a store and a cache-invalidation story, and changes no answer Cavix gives: it makes an existing answer cheaper. The last genuinely open item |
 
 ### Shipped in the fourth pass
 
@@ -2203,6 +2204,12 @@ Built on 2026-08-13. The whole tree typechecks, 894 TypeScript tests and every G
 | §3.2 gap 3 | Every call edge carries `exact` / `heuristic` / `ambiguous`, and the Impact Scope repeats the weakest one | [graph.ts](packages/analyzer/src/graph.ts), [indexer.ts](packages/analyzer/src/indexer.ts) |
 | §3.2 gap 4 | Fanout cap, with truncated symbols reported and their real caller counts | [indexer.ts](packages/analyzer/src/indexer.ts) |
 | §3.1.3 | The Impact Scope section is populated. It was written in an earlier pass and nothing ever filled it in, so it rendered on no review at all | [reviewWorkflow.ts](services/orchestrator/src/workflow/reviewWorkflow.ts) |
+| §3.2 gap 2 (`routes`) | HTTP entry points parsed across frameworks; `routesReaching()` walks the graph to find which reach a change | [heuristic.ts](packages/analyzer/src/parsers/heuristic.ts), [indexer.ts](packages/analyzer/src/indexer.ts) |
+| §3.1.3 Reachability | The Security Risks section names the routes a finding is reachable from, or says nothing | [poster.ts](services/orchestrator/src/poster/poster.ts) |
+
+`routes` was picked out of gap 2's list because it is the only edge kind that changes what a review can *say* rather than how much it can see. The others (`implements`, `reads`/`writes`, `tests`) widen recall, which is worth less per unit of per-language parser work.
+
+One claim from an earlier pass needs withdrawing. I reported that the heuristic parser extracts no class methods, having tested it with a single-line method body. It does: `run() {` on its own line is matched, and the fixture was the problem. There was no recall gap there.
 
 The spec's proposed fix for gap 1 was a structured `SymbolId` carrying a scope chain and a signature hash. That needs the parser to track enclosing scope, which the heuristic parsers do not, so it would have meant a parser rewrite to fix a collision. Disambiguating a repeated name by its line achieves the same thing: the first occurrence keeps the id it has today, so nothing downstream moves.
 

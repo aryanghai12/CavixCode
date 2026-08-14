@@ -1210,6 +1210,7 @@ export async function runReview(
     // match". A reach claim is worth exactly its shakiest link, and this is a
     // heuristic parser: a review that says "statically" anyway is inventing
     // precision it does not have.
+    ...(signals?.reach && signals.reach.routes.length > 0 ? { reachableFrom: signals.reach.routes } : {}),
     ...(signals?.reach && signals.reach.callerSymbols.length > 0
       ? {
           impact: {

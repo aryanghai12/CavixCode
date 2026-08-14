@@ -9,6 +9,7 @@ import {
   type FileRecord,
   type ResolvedCall,
   type ResolvedTarget,
+  type RouteRef,
   type SymbolNode,
 } from "./graph.ts";
 
@@ -355,6 +356,7 @@ export class CodeIndex {
       calls,
       importedModules: parsed.imports.map((i) => i.module),
       importedNames,
+      routes: parsed.routes ?? [],
     });
   }
 
@@ -397,6 +399,46 @@ export class CodeIndex {
         }
       }
     }
+  }
+
+  /** Every HTTP entry point the index knows about. */
+  allRoutes(): RouteRef[] {
+    const out: RouteRef[] = [];
+    for (const rec of this.files.values()) {
+      for (const r of rec.routes) {
+        const symbol = this.enclosingSymbol(rec.path, r.line);
+        out.push({
+          method: r.method,
+          route: r.route,
+          path: rec.path,
+          line: r.line,
+          guarded: r.guarded,
+          ...(symbol ? { symbol: symbol.id } : {}),
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Which HTTP entry points can reach these symbols.
+   *
+   * This is what turns a scanner's "string-built query" into a reviewer's "an
+   * unauthenticated POST reaches a string-built query", and those two sentences
+   * get very different responses from the person reading them.
+   *
+   * A route counts when the symbol declaring it is one of these symbols or one
+   * of their transitive callers: the same walk the blast radius uses, so a route
+   * reaches a change exactly when the code does. A route this parser could not
+   * attribute to a symbol is left OUT rather than attached to a guess, because
+   * the whole value of the sentence is that it is a measurement.
+   */
+  routesReaching(symbolIds: string[], depth = 4): RouteRef[] {
+    const routes = this.allRoutes().filter((r) => r.symbol);
+    if (routes.length === 0) return [];
+    const reachable = new Set<string>(symbolIds);
+    for (const id of this.transitiveCallers(symbolIds, depth)) reachable.add(id);
+    return routes.filter((r) => reachable.has(r.symbol!));
   }
 
   /** How this caller edge was resolved, or undefined when there is no such edge. */

@@ -84,6 +84,8 @@ export interface DeepReviewResult {
     callerFiles: string[];
     callerSymbols: string[];
     truncated: Array<{ symbol: string; path: string; callers: number }>;
+    /** HTTP entry points from which the changed code is reachable. */
+    routes: Array<{ method: string; route: string; guarded: boolean }>;
   };
   /**
    * The call path this change sits on, traced across files from the same graph
@@ -219,6 +221,11 @@ export function makeDeepReviewStep(opts: DeepReviewOptions): DeepReviewStep {
         callerFiles: result.context.blastFiles,
         callerSymbols: result.context.callerSymbols,
         truncated: result.context.reachTruncated ?? [],
+        // Measured off the same graph, so a route appears here exactly when the
+        // code is reachable from it.
+        routes: index
+          .routesReaching(result.context.changedSymbols)
+          .map((r) => ({ method: r.method, route: r.route, guarded: r.guarded })),
       },
       ...(trace ? { trace } : {}),
       costUsd: result.totalCostUsd,
