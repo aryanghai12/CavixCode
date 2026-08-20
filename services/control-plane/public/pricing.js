@@ -84,7 +84,7 @@ window.renderMarketingPricing = function (mountId, state) {
     const p = window.cavixPrice(t, state.cycle, state.source);
     const save = t.custom ? "" : (state.cycle === "annual" && t.byok !== 0 ? "billed annually, save 20%" : "billed monthly");
     const href = t.custom ? "/docs#enterprise" : "/signup";
-    return `<div class="plan${t.featured ? " plan-featured" : ""}">
+    return `<div class="plan tilt${t.featured ? " plan-featured" : ""}">
       ${t.featured ? `<span class="plan-flag">Most popular</span>` : ""}
       <h3>${esc(t.name)}</h3>
       <p class="blurb">${esc(t.blurb)}</p>

@@ -125,10 +125,10 @@
    * uses) and the count carry identity, and length carries magnitude.
    */
   const SEV_ROWS = [
-    { key: "critical", mark: "◆", color: "#F0857E" },
-    { key: "high", mark: "◈", color: "#E6B45F" },
-    { key: "medium", mark: "◇", color: "#C98500" },
-    { key: "low", mark: "▪", color: "#8FBCFF" },
+    { key: "critical", mark: "●", color: "#F0857E" },
+    { key: "high", mark: "●", color: "#E6B45F" },
+    { key: "medium", mark: "○", color: "#C98500" },
+    { key: "low", mark: "●", color: "#8FBCFF" },
     { key: "info", mark: "▫", color: "#7C93B5" },
   ];
   const severityMeters = (bySeverity) =>
@@ -200,7 +200,7 @@
    */
   function retentionRow(a) {
     if (!a || typeof a !== "object") return "";
-    const marks = { proven: ["⬢", "var(--green)"], partial: ["▲", "var(--amber, #C99A2E)"], unverified: ["▫", "var(--text-dim)"], violated: ["◆", "var(--red)"] };
+    const marks = { proven: ["●", "var(--green)"], partial: ["●", "var(--amber, #C99A2E)"], unverified: ["▫", "var(--text-dim)"], violated: ["●", "var(--red)"] };
     const [mark, colour] = marks[a.verdict] || marks.unverified;
     const checks = (a.checks || [])
       .map((c) => `<div class="t-faint" style="margin-top:4px">${esc(c.status)} · ${esc(c.backend)} · ${esc(c.check)}</div>`)
@@ -223,7 +223,7 @@
     if (!reviews.length) {
       content.innerHTML = `
         <div class="empty">
-          <div class="big">◈</div>
+          <div class="big">●</div>
           <div><b>No reviews yet.</b></div>
           <div style="margin-top:6px">Connect a repository and open a pull request. Every review Cavix posts shows up here with its findings.</div>
           <div style="margin-top:16px"><button class="btn btn-soft btn-sm" onclick="location.hash='repos'">Connect a repository</button></div>
@@ -330,7 +330,7 @@
     // It lives on the review COMMENT, never in the description.
     const verdict = `<div class="gh-alert warning">
         <div class="ga-title">2 findings across 1 file</div>
-        <div class="ga-body"><span class="badge badge-high">◈ 1 high</span> <span class="badge badge-low">▪ 1 low</span>${s.requestChangesOnFail ? ` · <b>changes requested</b>` : ""}</div>
+        <div class="ga-body"><span class="badge badge-high">● 1 high</span> <span class="badge badge-low">● 1 low</span>${s.requestChangesOnFail ? ` · <b>changes requested</b>` : ""}</div>
       </div>`;
 
     // The description block: what the change does, and nothing about what is
@@ -355,14 +355,14 @@
         <span class="sbadge sb-ok">Confidence · 86%</span>
         <span class="sbadge">Review Effort · 3 of 5</span>
       </div>
-      <h4 style="margin-top:14px">◈ Review Scope &amp; Effort</h4>
+      <h4 style="margin-top:14px">● Review Scope &amp; Effort</h4>
       <table class="changes-table"><thead><tr><th></th><th>Signal</th><th>Reading</th></tr></thead><tbody>
-        <tr><td>◇</td><td style="font-family:var(--font)"><b>Deep Scan</b></td><td>2 subsystems traversed · 9 changed regions · TypeScript</td></tr>
-        <tr><td>◇</td><td style="font-family:var(--font)"><b>Symbol Scope</b></td><td><code>issueRefund</code>, <code>onWebhook</code></td></tr>
-        <tr><td><span class="mark-att">▲</span></td><td style="font-family:var(--font)"><b>Security Gate</b></td><td><span class="mark-high">◈</span> 1 exposure, highest <b>high</b></td></tr>
-        ${s.verifyFindings ? `<tr><td><span class="mark-ok">⬢</span></td><td style="font-family:var(--font)"><b>Execution Proof</b></td><td>1 of 2 findings reproduced in a sealed sandbox, 1 discarded as unreproducible</td></tr>` : ""}
-        <tr><td>◇</td><td style="font-family:var(--font)"><b>Confidence Score</b></td><td>●●●●○ 86% mean across the findings below</td></tr>
-        <tr><td>◇</td><td style="font-family:var(--font)"><b>Review Effort</b></td><td>◆◆◆◇◇ <b>3 of 5</b>, a focused read</td></tr>
+        <tr><td>○</td><td style="font-family:var(--font)"><b>Deep Scan</b></td><td>2 subsystems traversed · 9 changed regions · TypeScript</td></tr>
+        <tr><td>○</td><td style="font-family:var(--font)"><b>Symbol Scope</b></td><td><code>issueRefund</code>, <code>onWebhook</code></td></tr>
+        <tr><td><span class="mark-att">●</span></td><td style="font-family:var(--font)"><b>Security Gate</b></td><td><span class="mark-high">●</span> 1 exposure, highest <b>high</b></td></tr>
+        ${s.verifyFindings ? `<tr><td><span class="mark-ok">●</span></td><td style="font-family:var(--font)"><b>Execution Proof</b></td><td>1 of 2 findings reproduced in a sealed sandbox, 1 discarded as unreproducible</td></tr>` : ""}
+        <tr><td>○</td><td style="font-family:var(--font)"><b>Confidence Score</b></td><td>●●●●○ 86% mean across the findings below</td></tr>
+        <tr><td>○</td><td style="font-family:var(--font)"><b>Review Effort</b></td><td>●●●○○ <b>3 of 5</b>, a focused read</td></tr>
       </tbody></table>
       <div style="height:18px"></div>` : "";
 
@@ -378,7 +378,7 @@
           const c = ruleCompile[r];
           const state = !c ? "pending" : c.ok ? "pass" : "skipped";
           // Same glyphs the poster uses on the pull request: pass, fail, did not run.
-          const ico = { pending: "…", pass: "✓", skipped: "◇" }[state];
+          const ico = { pending: "…", pass: "✓", skipped: "○" }[state];
           const sub = {
             pending: "checking whether this compiles into a check…",
             pass: "3 changed files scanned · pass",
@@ -397,12 +397,12 @@
           <h4>Findings</h4>
           <div class="gh-alert warning">
             <div class="ga-title">Fix these first</div>
-            <div class="ga-body"><span class="mark-high">◈</span> <b>Refund can double-apply on retry</b> · <code>services/payments/refund.ts</code> line 87</div>
+            <div class="ga-body"><span class="mark-high">●</span> <b>Refund can double-apply on retry</b> · <code>services/payments/refund.ts</code> line 87</div>
           </div>
-          <h4><span class="mark-high">◈</span> services/payments/refund.ts · 2 findings</h4>
+          <h4><span class="mark-high">●</span> services/payments/refund.ts · 2 findings</h4>
           <table class="changes-table"><thead><tr><th></th><th>Line</th><th>Finding</th><th>Detail</th></tr></thead><tbody>
-            <tr><td><span class="mark-high">◈</span></td><td>87</td><td style="font-family:var(--font)"><b>Refund can double-apply on retry</b>${rs.proof ? ` <span class="mark-ok">⬢</span>` : ""}<div class="t-faint">high · correctness · confidence 86%</div></td><td>${rs.inlineFindings ? "▸ inline" : "▾ below"}</td></tr>
-            <tr><td>▪</td><td>12</td><td style="font-family:var(--font)"><b>Duplicated retry constant</b><div class="t-faint">low · maintainability · confidence 52%</div></td><td>${rs.inlineFindings ? "▸ inline" : "▾ below"}</td></tr>
+            <tr><td><span class="mark-high">●</span></td><td>87</td><td style="font-family:var(--font)"><b>Refund can double-apply on retry</b>${rs.proof ? ` <span class="mark-ok">●</span>` : ""}<div class="t-faint">high · correctness · confidence 86%</div></td><td>${rs.inlineFindings ? "› inline" : "▾ below"}</td></tr>
+            <tr><td>●</td><td>12</td><td style="font-family:var(--font)"><b>Duplicated retry constant</b><div class="t-faint">low · maintainability · confidence 52%</div></td><td>${rs.inlineFindings ? "› inline" : "▾ below"}</td></tr>
           </tbody></table>
         </div>
       </div>`;
@@ -415,11 +415,11 @@
 <div class="cr-line add"><span class="ln">87</span><span class="k">  if</span> (!refund.<span class="f">isSettled</span>(id)) <span class="k">await</span> charge.<span class="f">refund</span>(amount)</div>
         </div>
         <div class="cr-comment">
-          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span>${rs.proof ? `<span class="badge badge-verified">⬢ verified</span>` : ""}<span class="badge badge-high">high</span></div>
-          <div class="cc-body"><b><span class="mark-high">◈</span> Refund can double-apply on retry</b>
-            <div class="t-faint" style="margin:4px 0 8px">${rs.proof ? "⬢ verified · " : ""}high · correctness · confidence 86%</div>
+          <div class="cc-head"><span class="logo-mark" style="width:22px;height:22px;font-size:12px"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span><span class="cc-bot">cavix</span>${rs.proof ? `<span class="badge badge-verified">● verified</span>` : ""}<span class="badge badge-high">high</span></div>
+          <div class="cc-body"><b><span class="mark-high">●</span> Refund can double-apply on retry</b>
+            <div class="t-faint" style="margin:4px 0 8px">${rs.proof ? "● verified · " : ""}high · correctness · confidence 86%</div>
             On a webhook re-delivery this path issues a second refund.</div>
-          ${rs.proof ? `<div class="cc-proof"><b style="font-family:var(--font)">⬢ Execution proof.</b> Reproduced in a sealed sandbox:
+          ${rs.proof ? `<div class="cc-proof"><b style="font-family:var(--font)">● Execution proof.</b> Reproduced in a sealed sandbox:
 
 <span class="t-purple">[repro]</span>     node --test refund.retry.test.mjs → <span class="t-red">exit 1</span>  bug reproduced
 <span class="t-purple">[after-fix]</span> node --test refund.retry.test.mjs → <span class="t-green">exit 0</span>  fix resolves it
@@ -899,7 +899,7 @@
       ? `<div class="panel" style="border-color:rgba(240,133,126,.35)">
           <div class="panel-head"><div><h2>Cavix was switched off</h2><span class="sub">${mutes.length} time${mutes.length === 1 ? "" : "s"} in the last ${reportDays} days</span></div><span class="badge badge-high">worth a look</span></div>
           <div class="panel-body">
-            ${mutes.slice(0, 8).map((mm) => `<div class="mute-row"><span class="mark-att">▲</span><code>${esc(mm.target)}</code><span class="badge">${esc(mm.scope === "repo" ? "repository" : "pull request")}</span><span class="mr-when">${new Date(mm.at).toLocaleDateString()}</span></div>`).join("")}
+            ${mutes.slice(0, 8).map((mm) => `<div class="mute-row"><span class="mark-att">●</span><code>${esc(mm.target)}</code><span class="badge">${esc(mm.scope === "repo" ? "repository" : "pull request")}</span><span class="mr-when">${new Date(mm.at).toLocaleDateString()}</span></div>`).join("")}
             <div class="ch-note">A team turning Cavix off is the first thing that happens before they stop paying for it. Worth asking why while the reason is still fresh.</div>
           </div>
         </div>`
@@ -1030,7 +1030,7 @@
           <div class="t-faint" style="margin-top:4px;max-width:640px">${esc(c.verifyReason || "")}</div>
         </div>
         <div style="text-align:right;white-space:nowrap">
-          <b style="color:${c.verify === "always" ? "var(--green)" : "var(--text-dim)"}">${c.verify === "always" ? "⬢ proved" : "not proved"}</b>
+          <b style="color:${c.verify === "always" ? "var(--green)" : "var(--text-dim)"}">${c.verify === "always" ? "● proved" : "not proved"}</b>
           <div class="t-faint">${c.samples} decided</div>
         </div>
       </div>`;
@@ -1082,7 +1082,7 @@
             ${mine.map((d) => {
               const sv = sevMark(d.severity);
               return `<tr>
-                <td><b style="color:${sv.color}">${sv.mark}</b> ${esc(d.title)}${d.verified ? ` <span class="mark-ok" title="proven by execution">⬢</span>` : ""}<div class="t-faint">${esc(d.severity)} · ${esc(d.category)}</div></td>
+                <td><b style="color:${sv.color}">${sv.mark}</b> ${esc(d.title)}${d.verified ? ` <span class="mark-ok" title="proven by execution">●</span>` : ""}<div class="t-faint">${esc(d.severity)} · ${esc(d.category)}</div></td>
                 <td class="mono" style="color:var(--text-faint);font-size:12px">${esc(d.repo)}<div>${esc(d.path)}:${d.line}</div></td>
                 <td><span class="badge">${esc(d.source)}</span></td>
                 <td><span class="decided ${esc(d.state)}">${esc(d.state)}</span></td>

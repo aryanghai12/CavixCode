@@ -4,16 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard · Cavix</title>
+<meta name="theme-color" content="#090D1A">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=13">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=13">
-<link rel="apple-touch-icon" href="/cavix-mark.svg?v=13">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css?v=40">
+<link rel="stylesheet" href="/app.css?v=40">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=40">
+<link rel="apple-touch-icon" href="/cavix-mark.svg?v=40">
 </head>
 <body>
+
+<!-- The same background planes the public site uses, so signing in does not
+     drop you onto a different looking product. No particle field here: this is
+     a work surface, and a drifting starfield behind a data table is noise. -->
+<div class="aurora" id="aurora" aria-hidden="true">
+  <span class="a1"></span><span class="a2"></span><span class="a3"></span><span class="a4"></span>
+</div>
+<div class="grid-plane" aria-hidden="true"></div>
+
+<div class="cursor" aria-hidden="true"></div>
+<div class="cursor-ring" aria-hidden="true"></div>
+
 <div class="app">
   <aside class="sidebar" id="sidebar">
-    <a href="/" class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span> Cavix</a>
+    <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=40" alt="" aria-hidden="true"></span> Cavix</a>
     <nav id="nav">
       <div class="nav-group">Workspace</div>
       <div class="nav-item" data-view="overview"><span class="ni-ico"></span> Overview</div>
@@ -37,27 +52,29 @@
         <div class="avatar" id="avatar">?</div>
         <div><div class="u-name" id="userName">…</div><div class="u-org" id="userOrg">…</div></div>
       </div>
-      <button class="btn btn-ghost btn-sm btn-block" id="logout" style="margin-top:10px">Log out</button>
+      <button class="btn btn-glass btn-sm btn-block" id="logout" style="margin-top:10px">Log out</button>
     </div>
   </aside>
 
   <main class="main">
     <div class="topbar">
       <div>
-        <button class="btn btn-soft btn-sm mobile-menu" id="menuBtn">☰</button>
+        <button class="btn btn-glass btn-sm mobile-menu" id="menuBtn" aria-label="Open navigation">Menu</button>
         <h1 id="viewTitle">Overview</h1>
         <div class="crumb" id="viewCrumb">Your review activity at a glance</div>
       </div>
-      <a href="#" class="btn btn-primary btn-sm" id="topAction">+ Connect repository</a>
+      <a href="#" class="btn btn-primary btn-sm" id="topAction">Connect repository</a>
     </div>
     <div class="content" id="content"><div class="empty">Loading your workspace…</div></div>
   </main>
 </div>
+
 <div class="toast" id="toast"></div>
-<script src="/icons.js?v=13"></script>
-<script src="/pricing.js?v=13"></script>
-<script src="/charts.js?v=14"></script>
-<script src="/app.js?v=15"></script>
-<script src="/fx.js?v=13"></script>
+
+<script src="/icons.js?v=40"></script>
+<script src="/pricing.js?v=40"></script>
+<script src="/charts.js?v=40"></script>
+<script src="/app.js?v=40"></script>
+<script src="/motion.js?v=40"></script>
 </body>
 </html>

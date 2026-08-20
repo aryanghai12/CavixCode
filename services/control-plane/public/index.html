@@ -9,9 +9,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/site.css?v=30">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=30">
-<link rel="apple-touch-icon" href="/cavix-mark.svg?v=30">
+<link rel="stylesheet" href="/theme.css?v=40">
+<link rel="stylesheet" href="/site.css?v=40">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=40">
+<link rel="apple-touch-icon" href="/cavix-mark.svg?v=40">
 </head>
 <body>
 
@@ -28,7 +29,7 @@
 
 <nav class="nav" id="nav">
   <div class="nav-shell">
-    <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=30" alt="" aria-hidden="true"></span> Cavix</a>
+    <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=40" alt="" aria-hidden="true"></span> Cavix</a>
 
     <div class="nav-links">
       <a href="#capabilities">Capabilities</a>
@@ -85,7 +86,7 @@
         </div>
       </div>
 
-      <div class="hero-panel glass rise in">
+      <div class="hero-panel glass rise in" data-parallax="0.04">
         <div class="terminal">
           <div class="terminal-bar">
             <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
@@ -156,17 +157,17 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
     </div>
 
     <div class="cards" style="margin-bottom:28px">
-      <div class="card rise">
+      <div class="card tilt rise">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20.5 20.5l-3.2-3.2"/></svg></div>
         <h3>1. Reproduce it</h3>
         <p>Cavix writes a test that makes the bug happen on purpose, then runs it in a sealed sandbox. A failing exit code is the only acceptable answer here.</p>
       </div>
-      <div class="card rise d1">
+      <div class="card tilt rise d1">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 7a4 4 0 0 1-5.2 5.2L5 17.6 6.4 19l5.4-5.3A4 4 0 0 0 17 8.5z"/></svg></div>
         <h3>2. Fix it</h3>
         <p>It applies the fix it is about to suggest and runs that same test again. If the test does not turn green, the suggestion was wrong and gets thrown away.</p>
       </div>
-      <div class="card rise d2">
+      <div class="card tilt rise d2">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg></div>
         <h3>3. Check nothing broke</h3>
         <p>Your full suite runs one more time. A fix that solves one bug and starts another is not a fix, and Cavix would rather stay quiet than hand you that trade.</p>
@@ -215,10 +216,10 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
          change does stays true until merge. What is wrong with it stops being
          true the moment someone pushes a fix, and nobody can edit Cavix's block
          to correct it, so that lives on the comment instead. -->
-    <div class="panel on" data-panel="summary">
+    <div class="panel-tab on" data-panel="summary">
       <div class="mock">
         <div class="mock-head">
-          <span class="logo-mark"><img src="/cavix-mark.svg?v=30" alt="" aria-hidden="true"></span>
+          <span class="logo-mark"><img src="/cavix-mark.svg?v=40" alt="" aria-hidden="true"></span>
           <span class="who">cavix</span><span class="pill pill-sm">pull request description</span>
           <span class="ago">just now</span>
         </div>
@@ -238,10 +239,10 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
 
     <!-- Panel: the review comment. Opens with scope and effort, then the
          verdict, then the findings. -->
-    <div class="panel" data-panel="review">
+    <div class="panel-tab" data-panel="review">
       <div class="mock">
         <div class="mock-head">
-          <span class="logo-mark"><img src="/cavix-mark.svg?v=30" alt="" aria-hidden="true"></span>
+          <span class="logo-mark"><img src="/cavix-mark.svg?v=40" alt="" aria-hidden="true"></span>
           <span class="who">cavix</span><span class="pill pill-sm">review comment</span>
           <span class="ago">just now</span>
         </div>
@@ -292,7 +293,7 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
     </div>
 
     <!-- Panel: inline finding with proof -->
-    <div class="panel" data-panel="inline">
+    <div class="panel-tab" data-panel="inline">
       <div class="cr">
         <div class="cr-head">
           <span class="fname">services/payments/refund.ts</span>
@@ -306,7 +307,7 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
         </div>
         <div class="cr-comment">
           <div class="cc-head">
-            <span class="logo-mark"><img src="/cavix-mark.svg?v=30" alt="" aria-hidden="true"></span>
+            <span class="logo-mark"><img src="/cavix-mark.svg?v=40" alt="" aria-hidden="true"></span>
             <span class="bot">cavix</span>
             <span class="pill pill-sm pill-ok">verified</span>
             <span class="pill pill-sm pill-warn">high</span>
@@ -324,7 +325,7 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
     </div>
 
     <!-- Panel: pre merge checks -->
-    <div class="panel" data-panel="premerge">
+    <div class="panel-tab" data-panel="premerge">
       <div class="checks">
         <div class="checks-head">
           <div><b>Pre merge checks</b> <span class="pill pill-sm pill-iris">optional, your org rules</span></div>
@@ -354,55 +355,55 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
     </div>
 
     <div class="cards">
-      <article class="card card-lead rise">
+      <article class="card card-lead tilt rise">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.6-3.3 7.9-8 9-4.7-1.1-8-4.4-8-9V6z"/><path d="M8.8 12l2.2 2.2L15.4 10"/></svg></div>
         <h3>Execution grounded verification</h3>
         <p>Reproduces the bug, or runs a proof of concept exploit, inside a sealed sandbox. Applies the fix, runs your tests. Only proven findings get posted, which is why teams do not mute it.</p>
       </article>
 
-      <article class="card rise d1">
+      <article class="card tilt rise d1">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15l6-6"/><path d="M11 6l1-1a4 4 0 0 1 6 6l-1 1"/><path d="M13 18l-1 1a4 4 0 0 1-6-6l1-1"/></svg></div>
         <h3>Cross repo impact graph</h3>
         <p>Models your services, API contracts and shared libraries. Change an interface in one pull request and it names the exact call sites that break in <em>other</em> repos. On every paid tier.</p>
       </article>
 
-      <article class="card rise d2">
+      <article class="card tilt rise d2">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="15" width="6" height="5" rx="1"/><path d="M6 9v5a3 3 0 0 0 3 3h6"/></svg></div>
         <h3>Whole repo semantic graph</h3>
         <p>Symbols, call graph, data flow and history give it the cross file context to catch architectural problems that a diff only tool has no way of seeing.</p>
       </article>
 
-      <article class="card rise">
+      <article class="card tilt rise">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6"/><path d="M17.5 14.4A5.5 5.5 0 0 1 20.5 19"/></svg></div>
         <h3>An ensemble, not one model</h3>
         <p>Seven specialists cover correctness, security, concurrency, performance, breaking API changes, standards and tests. They vote, then calibrate against what your team actually accepts.</p>
       </article>
 
-      <article class="card rise d1">
+      <article class="card tilt rise d1">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/></svg></div>
         <h3>CI and CD regression prediction</h3>
         <p>Reads your build, test and performance history to warn about slow builds and p95 regressions <em>before</em> the merge button. Nobody else covers this ground.</p>
       </article>
 
-      <article class="card rise d2">
+      <article class="card tilt rise d2">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="3.5"/><path d="M10 13l8.5-8.5"/><path d="M16 7l2 2"/><path d="M19 4l2 2"/></svg></div>
         <h3>Your key, your model, your network</h3>
         <p>Run Claude, GPT, Gemini or your own open model. Self host it with zero outbound calls and zero data retention. This is the part regulated teams care about most.</p>
       </article>
 
-      <article class="card rise">
+      <article class="card tilt rise">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.6"/></svg></div>
         <h3>Learns your standards</h3>
         <p>An accept and reject loop tunes it to how your team reviews. It also reaches into legacy code, COBOL, PL/SQL and .NET included, with migrations it has verified rather than guessed.</p>
       </article>
 
-      <article class="card rise d1">
+      <article class="card tilt rise d1">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 13l2 2 4-4"/></svg></div>
         <h3>Fix pull requests it can prove</h3>
         <p>Cavix opens its own pull requests, but only for fixes it already watched turn green. Always as a draft, always for a human to approve. It never merges anything itself.</p>
       </article>
 
-      <article class="card rise d2">
+      <article class="card tilt rise d2">
         <div class="card-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H9l-5 4z"/></svg></div>
         <h3>Talk to it in the PR</h3>
         <p>Say <code>@cavixcode review</code> for a fresh pass that clears stale comments and cache. Ask it questions, pause it, resume it, or set the whole thing in a <code>.cavix.yaml</code>.</p>
@@ -581,7 +582,7 @@ $ cavix review ./pr
   <div class="container">
     <div class="footer-grid">
       <div class="footer-col footer-brand">
-        <div class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=30" alt="" aria-hidden="true"></span> Cavix</div>
+        <div class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=40" alt="" aria-hidden="true"></span> Cavix</div>
         <p class="fine" style="max-width:38ch">The AI code reviewer that reproduces the bug before it says a word about it. Bring your own key, self host it, keep every byte.</p>
       </div>
       <div class="footer-col">
@@ -616,8 +617,9 @@ $ cavix review ./pr
   </div>
 </footer>
 
-<script src="/icons.js?v=30"></script>
-<script src="/pricing.js?v=30"></script>
-<script src="/site.js?v=30"></script>
+<script src="/icons.js?v=40"></script>
+<script src="/pricing.js?v=40"></script>
+<script src="/motion.js?v=40"></script>
+<script src="/site.js?v=40"></script>
 </body>
 </html>

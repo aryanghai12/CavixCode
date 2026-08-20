@@ -6,7 +6,7 @@
 //
 // ── the palette, and why it is this small ────────────────────────────────────
 //
-// Series colours were validated against the dark card surface (#101A2E) rather
+// Series colours were validated against the dark card surface (rgba(255,255,255,.08)) rather
 // than chosen by eye. Blue and green clear every gate: CVD separation ΔE 19.6,
 // normal-vision ΔE 20.9, both inside the dark lightness band, both over 3:1 on
 // the surface.
@@ -19,10 +19,10 @@
 // meter list: name, geometric mark and count carry the identity, and length
 // carries the magnitude. That is the honest form for an ordered scale anyway.
 window.CavixCharts = (() => {
-  const SERIES_1 = "#3987e5"; // reviews, and the sequential ramp's full step
-  const SERIES_2 = "#199e70"; // verified findings
-  const INK_FAINT = "#94A7C6";
-  const GRID = "#182642";
+  const SERIES_1 = "#4C9BFF"; // reviews, and the sequential ramp's full step
+  const SERIES_2 = "#3DDC97"; // verified findings
+  const INK_FAINT = "#7E8CB0";
+  const GRID = "rgba(255,255,255,.12)";
 
   const esc = (s) =>
     String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -89,7 +89,7 @@ window.CavixCharts = (() => {
           `<g class="ch-hit"><rect x="${(x(i) - band / 2).toFixed(1)}" y="${padT}" width="${band.toFixed(1)}" height="${h - padT - padB}" fill="transparent"/>` +
           `<line x1="${x(i).toFixed(1)}" y1="${padT}" x2="${x(i).toFixed(1)}" y2="${h - padB}" stroke="${INK_FAINT}" stroke-width="1" opacity="0" class="ch-cross"/>` +
           series
-            .map((s) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p[s.key] ?? 0).toFixed(1)}" r="4" fill="${s.color}" stroke="#101A2E" stroke-width="2" opacity="0" class="ch-dot"/>`)
+            .map((s) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p[s.key] ?? 0).toFixed(1)}" r="4" fill="${s.color}" stroke="rgba(255,255,255,.08)" stroke-width="2" opacity="0" class="ch-dot"/>`)
             .join("") +
           `<title>${esc(dayLabel(p.date))}\n${esc(title)}</title></g>`
         );
@@ -165,8 +165,8 @@ window.CavixCharts = (() => {
     const d = opts.delta;
     const has = typeof d === "number" && d !== 0;
     const better = has && (opts.goodDown ? d < 0 : d > 0);
-    const arrow = has ? (d > 0 ? "▲" : "▼") : "";
-    const colour = has ? (better ? SERIES_2 : "#F0857E") : INK_FAINT;
+    const arrow = has ? (d > 0 ? "●" : "▼") : "";
+    const colour = has ? (better ? SERIES_2 : "#FF7A8A") : INK_FAINT;
     return `<div class="stat">
       <div class="label">${esc(label)}</div>
       <div class="value">${esc(value)}</div>
