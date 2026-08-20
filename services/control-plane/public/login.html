@@ -4,37 +4,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Log in · Cavix</title>
-<meta name="theme-color" content="#000208">
+<meta name="theme-color" content="#0C1020">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/site.css?v=20">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20">
-<link rel="apple-touch-icon" href="/cavix-mark.svg?v=20">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css?v=30">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=30">
+<link rel="apple-touch-icon" href="/cavix-mark.svg?v=30">
 </head>
 <body>
-<!-- The glow only. No particle field on a form page: nothing should be moving
-     while someone is typing a password. -->
-<div class="atmos" aria-hidden="true"></div>
+<!-- Aurora and grid only. No particle field on a form page, because nothing
+     should be moving while somebody is typing a password. -->
+<div class="aurora" id="aurora" aria-hidden="true">
+  <span class="a1"></span><span class="a2"></span><span class="a3"></span><span class="a4"></span>
+</div>
+<div class="grid-plane" aria-hidden="true"></div>
 <div class="cursor" aria-hidden="true"></div>
 <div class="cursor-ring" aria-hidden="true"></div>
-<div class="cursor-label" aria-hidden="true"></div>
 
 <div class="auth-wrap">
   <!-- Left rail: what you're signing in to. Keeps the page from being a lone
        card floating in an empty viewport. -->
   <aside class="auth-aside">
-    <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=20" alt="" aria-hidden="true"></span> Cavix</a>
+    <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=30" alt="" aria-hidden="true"></span> Cavix</a>
     <p class="auth-pitch">Every finding arrives with a receipt.</p>
     <div class="terminal auth-term">
-      <div class="terminal-bar"><span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span><span>verification engine</span></div>
+      <div class="terminal-bar"><span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span><span class="ttl">verification engine</span></div>
 <pre><span class="t-dim"># proven before it's posted</span>
-status: <span class="t-green">VERIFIED</span>
-  <span class="t-purple">[repro]</span>     → <span class="t-red">exit 1</span>  <span class="t-dim">bug reproduces</span>
-  <span class="t-purple">[after-fix]</span> → <span class="t-green">exit 0</span>  <span class="t-dim">fix works</span>
-  <span class="t-purple">[suite]</span>     → <span class="t-green">exit 0</span>  <span class="t-dim">nothing else broke</span></pre>
+status: <span class="t-ok">VERIFIED</span>
+  <span class="t-key">[repro]</span>     → <span class="t-bad">exit 1</span>  <span class="t-dim">bug reproduces</span>
+  <span class="t-key">[after-fix]</span> → <span class="t-ok">exit 0</span>  <span class="t-dim">fix works</span>
+  <span class="t-key">[suite]</span>     → <span class="t-ok">exit 0</span>  <span class="t-dim">nothing else broke</span></pre>
     </div>
-    <div class="auth-foot">Bring your own key · Self-hostable · Zero retention</div>
+    <div class="auth-foot"><span class="pill pill-dot">Bring your own key</span><span class="pill pill-dot">Self hostable</span><span class="pill pill-dot">Zero retention</span></div>
   </aside>
 
   <div class="auth-card">
@@ -43,7 +45,7 @@ status: <span class="t-green">VERIFIED</span>
 
     <div class="alert alert-error" id="alert"></div>
 
-    <a class="btn btn-ghost btn-github btn-block hidden" id="githubBtn" data-cursor="Continue" href="/api/auth/github/start">
+    <a class="btn btn-glass btn-github btn-block hidden" id="githubBtn" href="/api/auth/github/start">
       <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       Continue with GitHub
     </a>
@@ -78,13 +80,13 @@ status: <span class="t-green">VERIFIED</span>
         <input id="password" type="password" autocomplete="current-password" required placeholder="••••••••">
         <div class="hint" id="pwHint" style="display:none">At least 8 characters.</div>
       </div>
-      <button class="btn btn-primary btn-block" type="submit" id="submit" data-cursor="Log in">Log in</button>
+      <button class="btn btn-primary btn-block" type="submit" id="submit">Log in</button>
     </form>
 
     <p class="auth-alt" id="switch">New to Cavix? <a href="/signup" id="switchLink">Create an account</a></p>
   </div>
 </div>
-<script src="/auth.js?v=20"></script>
-<script src="/site.js?v=20"></script>
+<script src="/auth.js?v=30"></script>
+<script src="/site.js?v=30"></script>
 </body>
 </html>

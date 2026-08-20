@@ -1,50 +1,54 @@
 /* ============================================================================
-   CAVIX — marketing site behaviour.
+   CAVIX, marketing site behaviour.
 
-   Replaces landing.js and fx.js. Classic script, no modules, no dependencies.
+   Classic script, no modules, no dependencies.
 
    THE CONTRACT EVERY EFFECT IN HERE HONOURS
-   -----------------------------------------
    The page must be complete and fully legible with this file deleted. Nothing
    below creates content, and nothing below is allowed to leave text dimmer
-   than its static state. Every reveal works by ADDING a dimming class first
-   and then removing it — so if the script dies halfway, or never runs at all,
-   the words are simply bright. The particle field draws to a canvas that sits
-   at z-index -2 behind an opaque content layer, and it switches itself off on
-   reduced-motion, on a hidden tab, and the moment the hero scrolls away.
+   than its static state. Reveals work by ADDING a class that plays an
+   animation on an already visible element, never by hiding something and
+   hoping an observer switches it back on. The particle field draws to a canvas
+   pinned behind the content layer, and it switches itself off on reduced
+   motion, on a hidden tab, and the moment the hero scrolls away.
    ========================================================================== */
 (function () {
   "use strict";
 
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var finePointer = window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  var finePointer  = window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
   var raf = window.requestAnimationFrame || function (f) { return setTimeout(f, 16); };
+
+  /* A single scroll listener feeds everything that cares about scroll position.
+     Handlers are cheap and run on a rAF tick rather than on every event. */
+  var scrollJobs = [];
+  function onScroll(fn) { scrollJobs.push(fn); }
+  function runScrollJobs() { for (var i = 0; i < scrollJobs.length; i++) scrollJobs[i](); }
+  (function scrollPump() {
+    var queued = false;
+    function run() { queued = false; runScrollJobs(); }
+    function queue() { if (queued) return; queued = true; raf(run); }
+    window.addEventListener("scroll", queue, { passive: true });
+    window.addEventListener("resize", queue, { passive: true });
+  })();
 
   /* ==========================================================================
      1. PARTICLE FIELD
-     A dome: an annulus of fine particles with a dark elliptical void at its
-     centre, dense at the rim and thinning outward, cut off toward the bottom
-     so it reads as an arch rather than a ring. The void is the important part
-     — it is what keeps the headline sitting on empty black.
+     A dome: an annulus of fine particles with a soft void at its centre. The
+     void is the important part, because the aurora glows through it and the
+     headline sits on that glow rather than on a texture.
 
-     HOW IT IS DRAWN, AND WHY IT IS DONE THIS WAY
-     The look needs on the order of twenty thousand points. Moving and filling
-     that many per frame is not affordable, and a count low enough to animate
-     per-point (~1500) does not read as a dome at all — it reads as dust.
-
-     So the field is baked ONCE into an offscreen bitmap and the bitmap is what
-     moves: one drawImage per frame, rotated a fraction of a degree and scaled
-     into the ellipse. A few hundred live particles are drawn on top for the
-     twinkle the bitmap cannot have. Two draw calls plus a small loop, at any
-     density.
+     HOW IT IS DRAWN
+     The look needs on the order of twenty thousand points, which is far too
+     many to move and fill individually every frame. So the field is baked ONCE
+     into an offscreen bitmap and the bitmap is what moves: a single drawImage
+     per frame, rotated a fraction of a degree and squashed into the ellipse. A
+     few hundred live particles are drawn on top for the twinkle a bitmap
+     cannot have. Two draw calls and a small loop, at any density.
 
      Because the bitmap rotates, the arch cannot be baked into it (the dark
-     half would rotate up into view), so the bottom is erased per frame with a
+     half would swing up into view), so the bottom is erased each frame with a
      destination-out gradient in screen space, which stays put.
-
-     Everything else is a cost gate: the loop stops when the hero is off screen
-     or the tab is hidden, DPR is capped at 1.75, and reduced-motion skips the
-     whole thing.
      ====================================================================== */
   function startField() {
     var canvas = document.getElementById("field");
@@ -54,92 +58,83 @@
     if (!ctx) return;
 
     var W = 0, H = 0, dpr = 1;
-    var off = null, R = 0;            /* the baked field and its radius       */
-    var live = [];                    /* the handful that twinkle on top      */
-    var theta = 0;                    /* the field's slow rotation            */
-    var pointerX = 0, pointerY = 0;   /* -1..1, drives the parallax           */
+    var off = null, R = 0;
+    var live = [];
+    var theta = 0;
+    var pointerX = 0, pointerY = 0;
     var driftX = 0, driftY = 0;
 
-    /* Geometry of the dome, in viewport terms. The centre sits low and the
-       ellipse is wide, which puts the crown of the band near the top of the
-       screen and leaves the void behind the headline. */
-    function rxOf() { return W * 0.52; }
+    function rxOf() { return W * 0.54; }
     function ryOf() { return H * 0.58; }
-    function cyOf() { return H * 0.60; }
-    var INNER = 0.44;                 /* where the void ends, 0..1 of the ring */
+    function cyOf() { return H * 0.58; }
+    var INNER = 0.46;
 
     function build() {
       dpr = Math.min(window.devicePixelRatio || 1, 1.75);
       W = window.innerWidth;
       H = window.innerHeight;
-      canvas.width = Math.round(W * dpr);
+      canvas.width  = Math.round(W * dpr);
       canvas.height = Math.round(H * dpr);
-      canvas.style.width = W + "px";
+      canvas.style.width  = W + "px";
       canvas.style.height = H + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       bake();
 
-      /* The live layer is small by design: enough to catch the eye, few
-         enough that the per-frame loop stays trivial. */
-      var liveCount = Math.max(90, Math.min(Math.round((W * H) / 7000), 260));
+      var liveCount = Math.max(70, Math.min(Math.round((W * H) / 9000), 200));
       live = new Array(liveCount);
       for (var i = 0; i < liveCount; i++) live[i] = seedLive();
     }
 
-    /* ---- the bake --------------------------------------------------------
-       A circular annulus drawn once at 1x into an offscreen canvas. It is
-       circular, not elliptical, because it gets rotated: the ellipse is
-       applied as a scale at draw time, so the rotation stays true. */
+    /* A circular annulus, baked once at 1x. Circular rather than elliptical
+       because it gets rotated; the ellipse is applied as a scale at draw time
+       so the rotation stays true. */
     function bake() {
       R = Math.round(Math.max(rxOf(), ryOf()) * 1.06) || 600;
       var D = R * 2;
 
       off = document.createElement("canvas");
-      off.width = D;
-      off.height = D;
+      off.width = D; off.height = D;
       var o = off.getContext("2d");
       if (!o) { off = null; return; }
 
-      /* Density is per unit area of the ring, so a big screen gets a bigger
-         ring at the same visual grain rather than a sparser one. */
       var area = Math.PI * R * R * (1 - INNER * INNER);
-      var count = Math.max(6000, Math.min(Math.round(area / 26), 26000));
+      var count = Math.max(5000, Math.min(Math.round(area / 34), 20000));
 
       for (var i = 0; i < count; i++) {
         var a = Math.random() * Math.PI * 2;
-        /* pow > 1 crowds t near 0, which is what gives the void a defined rim
-           rather than a soft smudge. The jitter afterwards takes the hard
-           cut-out edge off it again — without it the void reads as a circle
-           punched out of a texture. */
-        var t = Math.pow(Math.random(), 1.65);
+        /* pow > 1 crowds t near zero, which gives the void a defined rim. The
+           jitter afterwards takes the hard cut out edge back off it. */
+        var t = Math.pow(Math.random(), 1.7);
         var r = (INNER + t * (1 - INNER)) * R + (Math.random() - 0.5) * R * 0.05;
 
         var x = R + Math.cos(a) * r;
         var y = R + Math.sin(a) * r;
 
-        /* Thin toward the outer edge so the field dissolves into black
-           rather than stopping at a visible circle. */
-        var alpha = (0.16 + Math.random() * 0.84) * (1 - Math.pow(t, 2.3));
+        var alpha = (0.14 + Math.random() * 0.72) * (1 - Math.pow(t, 2.2));
         if (alpha < 0.02) continue;
 
-        var s = t < 0.25 ? (0.6 + Math.random() * 1.5) : (0.5 + Math.random() * 1.0);
-        o.fillStyle = (Math.random() < 0.26 ? "rgba(150,190,255," : "rgba(255,255,255,")
-                    + alpha.toFixed(3) + ")";
+        var s = t < 0.25 ? (0.6 + Math.random() * 1.4) : (0.5 + Math.random() * 0.9);
+
+        /* Tinted to the palette rather than plain white, so the field belongs
+           to the same colour system as the aurora behind it. */
+        var roll = Math.random();
+        var rgb = roll < 0.22 ? "124,108,255" : roll < 0.42 ? "56,224,208" : roll < 0.62 ? "140,180,255" : "255,255,255";
+
+        o.fillStyle = "rgba(" + rgb + "," + alpha.toFixed(3) + ")";
         o.fillRect(x, y, s, s);
       }
     }
 
     function seedLive() {
-      var t = Math.pow(Math.random(), 1.9);
       return {
         a: Math.random() * Math.PI * 2,
-        t: t,
-        s: 0.9 + Math.random() * 1.6,
+        t: Math.pow(Math.random(), 1.7),
+        s: 1 + Math.random() * 1.6,
         b: 0.5 + Math.random() * 0.5,
         p: Math.random() * Math.PI * 2,
-        w: 0.0007 + Math.random() * 0.0018,
-        c: Math.random() < 0.3
+        w: 0.0008 + Math.random() * 0.0018,
+        c: Math.random() < 0.45
       };
     }
 
@@ -150,7 +145,6 @@
       var cy = cyOf() + driftY;
       var rx = rxOf(), ry = ryOf();
 
-      /* --- the baked field, rotated and squashed into the ellipse --------- */
       if (off) {
         ctx.save();
         ctx.translate(cx, cy);
@@ -160,7 +154,6 @@
         ctx.restore();
       }
 
-      /* --- the live twinkle on top --------------------------------------- */
       for (var i = 0; i < live.length; i++) {
         var p = live[i];
         var r = INNER + p.t * (1 - INNER);
@@ -169,16 +162,15 @@
         var y = cy + Math.sin(ang) * ry * r;
         if (x < -8 || x > W + 8 || y < -8 || y > H + 8) continue;
 
-        var alpha = p.b * (1 - Math.pow(p.t, 2.3)) * (0.55 + 0.45 * Math.sin(now * p.w + p.p));
+        var alpha = p.b * (1 - Math.pow(p.t, 2.2)) * (0.5 + 0.5 * Math.sin(now * p.w + p.p));
         if (alpha < 0.03) continue;
-        ctx.fillStyle = (p.c ? "rgba(170,205,255," : "rgba(255,255,255,") + alpha.toFixed(3) + ")";
+        ctx.fillStyle = (p.c ? "rgba(150,235,255," : "rgba(255,255,255,") + alpha.toFixed(3) + ")";
         ctx.fillRect(x, y, p.s, p.s);
       }
 
-      /* --- carve the ring back into an arch ------------------------------
-         Done in screen space, after the rotation, so the dark half stays at
-         the bottom of the viewport instead of turning with the field. */
-      var g = ctx.createLinearGradient(0, H * 0.30, 0, H * 0.86);
+      /* Carve the ring back into an arch, in screen space so the dark half
+         stays at the bottom of the viewport instead of turning with the field. */
+      var g = ctx.createLinearGradient(0, H * 0.26, 0, H * 0.84);
       g.addColorStop(0, "rgba(0,0,0,0)");
       g.addColorStop(0.55, "rgba(0,0,0,.55)");
       g.addColorStop(1, "rgba(0,0,0,1)");
@@ -187,27 +179,22 @@
       ctx.fillRect(0, 0, W, H);
       ctx.globalCompositeOperation = "source-over";
 
-      theta += 0.000045;
+      theta += 0.00005;
     }
 
-    /* ---- the run gate ----------------------------------------------------
-       Three independent reasons to stop, all of which must be clear before a
-       frame is scheduled: the tab is visible, the hero is on screen, and the
-       user has not asked for reduced motion (checked at startup). */
     var visible = !document.hidden;
-    var onScreen = true;
+    var active = true;
     var running = false;
 
     function tick(now) {
-      if (!visible || !onScreen) { running = false; return; }
-      /* ease the parallax toward the pointer rather than snapping to it */
-      driftX += (pointerX * 26 - driftX) * 0.045;
-      driftY += (pointerY * 18 - driftY) * 0.045;
+      if (!visible || !active) { running = false; return; }
+      driftX += (pointerX * 30 - driftX) * 0.045;
+      driftY += (pointerY * 20 - driftY) * 0.045;
       draw(now || performance.now());
       raf(tick);
     }
     function kick() {
-      if (running || !visible || !onScreen) return;
+      if (running || !visible || !active) return;
       running = true;
       raf(tick);
     }
@@ -233,108 +220,108 @@
       }, { passive: true });
     }
 
-    /* The hero owns the field. Once the hero is gone the loop stops (painting
-       it would be waste) AND the canvas fades out — without the fade its last
-       painted frame would hang behind every section below, which is the exact
-       opposite of keeping the content on clean ground.
+    /* The field belongs to the hero. Once the viewport has moved past it the
+       loop stops and the canvas fades, so the sections below get clean ground
+       instead of a stale frame hanging behind them. Driven by scroll position
+       rather than by observing an element, because the canvas is fixed and
+       what matters is where the viewport is.
 
-       Driven by scroll position rather than by observing the hero, because the
-       canvas is position:fixed and what actually matters is where the VIEWPORT
-       is, not whether some element is technically on screen. One number, no
-       observer to mis-fire. */
-    function gate() {
-      /* On a phone the hero is one tall stacked column, so copy scrolls up
-         through the band almost immediately. There the field is treated as a
-         first-impression only: the page moves, the field goes. On desktop the
-         text sits beside the void and the field can stay for the full hero. */
+       On a phone the hero stacks into one column and copy passes through the
+       band almost at once, so there the field is a first impression only. */
+    onScroll(function () {
       var narrow = window.innerWidth <= 860;
-      var limit = narrow ? 40 : window.innerHeight * 0.85;
+      var limit = narrow ? 40 : window.innerHeight * 0.8;
       var past = window.scrollY > limit;
       canvas.classList.toggle("field-off", past);
-      onScreen = !past;
-      if (onScreen) kick();
-    }
-    window.addEventListener("scroll", gate, { passive: true });
-    gate();
+      active = !past;
+      if (active) kick();
+    });
   }
 
   /* ==========================================================================
-     2. CUSTOM POINTER
-     A dot, a ring that trails it, and a label plate over anything carrying
-     data-cursor. Only ever built on a fine pointer, and it never intercepts
-     input: all three nodes are pointer-events:none in CSS.
+     2. AURORA
+     Full strength behind the hero, dialled back below it so no section of body
+     copy is ever read over a bright colour mass. Pure class toggle; the CSS
+     owns the animation.
      ====================================================================== */
-  function startCursor() {
-    var dot = document.querySelector(".cursor");
-    var ring = document.querySelector(".cursor-ring");
-    var label = document.querySelector(".cursor-label");
-    if (!dot || !ring || !label || !finePointer || reduceMotion) return;
-
-    var mx = window.innerWidth / 2, my = window.innerHeight / 2;
-    var rx = mx, ry = my;
-    var live = false;
-
-    window.addEventListener("mousemove", function (e) {
-      mx = e.clientX; my = e.clientY;
-      if (!live) {
-        live = true;
-        rx = mx; ry = my;
-        document.body.classList.add("cursor-on");
-      }
-    }, { passive: true });
-
-    /* Leaving the window hides the whole rig, so it never sits frozen in a
-       corner of a screenshot. */
-    document.addEventListener("mouseleave", function () { document.body.classList.remove("cursor-on"); });
-    document.addEventListener("mouseenter", function () { if (live) document.body.classList.add("cursor-on"); });
-
-    function follow() {
-      /* The dot is exact; the ring lags, which is the whole effect. */
-      dot.style.transform = "translate3d(" + mx + "px," + my + "px,0)";
-      rx += (mx - rx) * 0.16;
-      ry += (my - ry) * 0.16;
-      ring.style.transform = "translate3d(" + rx + "px," + ry + "px,0)";
-      label.style.transform = "translate3d(" + (mx + 22) + "px," + (my - 10) + "px,0)" +
-                              (label.classList.contains("on") ? " scale(1)" : " scale(.7)");
-      raf(follow);
-    }
-    raf(follow);
-
-    /* Delegated, so cards rendered later (the pricing plans) are covered too. */
-    document.addEventListener("mouseover", function (e) {
-      var host = e.target.closest ? e.target.closest("[data-cursor]") : null;
-      if (host) {
-        label.textContent = host.getAttribute("data-cursor");
-        label.classList.add("on");
-        ring.classList.add("grow");
-        return;
-      }
-      var hit = e.target.closest ? e.target.closest("a, button, .card, .plan, .stage, .wall span") : null;
-      if (hit) ring.classList.add("grow");
-    });
-
-    document.addEventListener("mouseout", function (e) {
-      var to = e.relatedTarget;
-      var stillOn = to && to.closest && to.closest("[data-cursor]");
-      if (!stillOn) label.classList.remove("on");
-      var stillHit = to && to.closest && to.closest("a, button, .card, .plan, .stage, .wall span, [data-cursor]");
-      if (!stillHit) ring.classList.remove("grow");
+  function startAurora() {
+    var aurora = document.getElementById("aurora");
+    if (!aurora) return;
+    onScroll(function () {
+      aurora.classList.toggle("calm", window.scrollY > window.innerHeight * 0.62);
     });
   }
 
   /* ==========================================================================
-     3. HEADLINE REVEAL
-     Words land one after another. The dimming class goes on FIRST and comes
-     off word by word, so the failure mode is a fully bright headline, and a
-     hard failsafe lights everything after 2.6s no matter what.
+     3. NAV
+     Capsule state, read progress, active section, and the mobile sheet.
+     ====================================================================== */
+  function startNav() {
+    var nav = document.getElementById("nav");
+    if (!nav) return;
+
+    var progress = document.getElementById("navProgress");
+    var burger = document.getElementById("burger");
+    var sheet = document.getElementById("navSheet");
+    var links = [].slice.call(nav.querySelectorAll(".nav-links a[href^='#']"));
+
+    onScroll(function () {
+      var y = window.scrollY;
+      nav.classList.toggle("stuck", y > 20);
+
+      if (progress) {
+        var max = document.documentElement.scrollHeight - window.innerHeight;
+        progress.style.width = (max > 0 ? Math.min(100, (y / max) * 100) : 0) + "%";
+      }
+    });
+
+    if (burger && sheet) {
+      burger.addEventListener("click", function () {
+        var open = sheet.classList.toggle("open");
+        burger.classList.toggle("open", open);
+        burger.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+      /* Any navigation closes it, otherwise the sheet stays over the section
+         the reader just asked to see. */
+      sheet.addEventListener("click", function (e) {
+        if (e.target.tagName !== "A") return;
+        sheet.classList.remove("open");
+        burger.classList.remove("open");
+        burger.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    /* Highlight whichever section is currently under the masthead. */
+    if (links.length && "IntersectionObserver" in window) {
+      var byId = {};
+      links.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
+
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) { a.classList.remove("on"); });
+          var a = byId[entry.target.id];
+          if (a) a.classList.add("on");
+        });
+      }, { rootMargin: "-45% 0px -50% 0px", threshold: 0 });
+
+      Object.keys(byId).forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) io.observe(el);
+      });
+    }
+  }
+
+  /* ==========================================================================
+     4. HEADLINE REVEAL
+     Words settle in one after another. The soft state stays white, never grey,
+     and a short failsafe lights everything regardless of what else happens.
      ====================================================================== */
   function startReveal() {
     var host = document.querySelector("[data-reveal]");
-    if (!host) return;
+    if (!host || reduceMotion) return;
     var words = host.querySelectorAll(".w");
     if (!words.length) return;
-
-    if (reduceMotion) return;          /* CSS already keeps them bright */
 
     host.classList.add("reveal-on");
 
@@ -343,32 +330,24 @@
       if (i >= words.length) return;
       words[i].classList.add("lit");
       i++;
-      setTimeout(light, 55);
+      setTimeout(light, 62);
     }
-    /* One frame of the soft state before lighting, or the transition has
-       nothing to animate from. */
     raf(function () { raf(function () { setTimeout(light, 90); }); });
 
-    /* Failsafe. Short on purpose: whatever happens — a stalled timer, a
-       backgrounded tab, a slow first paint — the headline is fully bright
-       about a second in, and stays that way. */
     setTimeout(function () {
       for (var k = 0; k < words.length; k++) words[k].classList.add("lit");
     }, 1100);
   }
 
   /* ==========================================================================
-     4. SECTION RISE
-     Purely additive: `.in` starts a short entrance animation on an element
-     that was already visible. Nothing here can hide anything, so a browser
-     without IntersectionObserver, a script error, or an observer that simply
-     never fires all degrade to "the section is just there" rather than to a
-     blank page.
+     5. SECTION RISE
+     Purely additive: `.in` starts an entrance animation on an element that was
+     already visible. A browser without IntersectionObserver, a script error, or
+     an observer that never fires all degrade to "the section is simply there".
 
-     The bottom rootMargin is POSITIVE, so the observer fires ~90px before the
-     element actually reaches the viewport. That way the animation starts from
-     opacity 0 while the element is still off screen, and no one ever catches
-     the frame where it was visible at full opacity first.
+     The bottom rootMargin is positive so the observer fires about 90px before
+     the element reaches the viewport, which means the animation starts from
+     zero opacity while it is still off screen.
      ====================================================================== */
   function startRise() {
     var items = document.querySelectorAll(".rise");
@@ -382,22 +361,102 @@
       });
     }, { rootMargin: "0px 0px 90px 0px", threshold: 0 });
 
-    items.forEach(function (el) { io.observe(el); });
+    items.forEach(function (el) { if (!el.classList.contains("in")) io.observe(el); });
   }
 
   /* ==========================================================================
-     5. NAV
+     6. STAT COUNT UP
+     The final value is already in the markup, so this only ever replaces a
+     correct number with the same correct number at the end of a short ramp.
      ====================================================================== */
-  function startNav() {
-    var nav = document.getElementById("nav");
-    if (!nav) return;
-    function onScroll() { nav.classList.toggle("stuck", window.scrollY > 24); }
-    window.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
+  function startCounters() {
+    var nodes = document.querySelectorAll("[data-count]");
+    if (!nodes.length || reduceMotion || !("IntersectionObserver" in window)) return;
+
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        io.unobserve(entry.target);
+        ramp(entry.target);
+      });
+    }, { threshold: 0.4 });
+
+    nodes.forEach(function (el) { io.observe(el); });
+
+    function ramp(el) {
+      var target = parseInt(el.getAttribute("data-count"), 10);
+      if (!isFinite(target)) return;
+      var start = performance.now();
+      var dur = 900;
+      (function step(now) {
+        var t = Math.min(1, (now - start) / dur);
+        var eased = 1 - Math.pow(1 - t, 3);
+        el.textContent = String(Math.round(target * eased));
+        if (t < 1) raf(step);
+        else el.textContent = String(target);
+      })(start);
+    }
   }
 
   /* ==========================================================================
-     6. SAMPLE-REVIEW TABS
+     7. CARD SPOTLIGHT
+     Feeds pointer coordinates to the card so its highlight can follow. Only on
+     a fine pointer; with no script the CSS variables stay unset and the
+     highlight sits at zero opacity, which is exactly the resting state.
+     ====================================================================== */
+  function startSpotlight() {
+    if (!finePointer || reduceMotion) return;
+    var cards = document.querySelectorAll(".card");
+    if (!cards.length) return;
+
+    cards.forEach(function (card) {
+      card.addEventListener("mousemove", function (e) {
+        var r = card.getBoundingClientRect();
+        card.style.setProperty("--mx", (e.clientX - r.left) + "px");
+        card.style.setProperty("--my", (e.clientY - r.top) + "px");
+      }, { passive: true });
+    });
+  }
+
+  /* ==========================================================================
+     8. CUSTOM POINTER
+     ====================================================================== */
+  function startCursor() {
+    var dot = document.querySelector(".cursor");
+    var ring = document.querySelector(".cursor-ring");
+    if (!dot || !ring || !finePointer || reduceMotion) return;
+
+    var mx = window.innerWidth / 2, my = window.innerHeight / 2;
+    var rx = mx, ry = my;
+    var live = false;
+
+    window.addEventListener("mousemove", function (e) {
+      mx = e.clientX; my = e.clientY;
+      if (!live) { live = true; rx = mx; ry = my; document.body.classList.add("cursor-on"); }
+    }, { passive: true });
+
+    document.addEventListener("mouseleave", function () { document.body.classList.remove("cursor-on"); });
+    document.addEventListener("mouseenter", function () { if (live) document.body.classList.add("cursor-on"); });
+
+    (function follow() {
+      dot.style.transform = "translate3d(" + mx + "px," + my + "px,0)";
+      rx += (mx - rx) * 0.17;
+      ry += (my - ry) * 0.17;
+      ring.style.transform = "translate3d(" + rx + "px," + ry + "px,0)";
+      raf(follow);
+    })();
+
+    document.addEventListener("mouseover", function (e) {
+      if (e.target.closest && e.target.closest("a, button, .card, .plan, .stage, .chip")) ring.classList.add("grow");
+    });
+    document.addEventListener("mouseout", function (e) {
+      var to = e.relatedTarget;
+      if (!(to && to.closest && to.closest("a, button, .card, .plan, .stage, .chip"))) ring.classList.remove("grow");
+    });
+  }
+
+  /* ==========================================================================
+     9. SAMPLE REVIEW TABS
      ====================================================================== */
   function startTabs() {
     var tabs = document.getElementById("showcaseTabs");
@@ -419,14 +478,18 @@
   }
 
   /* ==========================================================================
-     7. PRICING
-     The numbers live in pricing.js, which is the single source shared with the
+     10. PRICING
+     The numbers live in pricing.js, the single source shared with the
      dashboard's billing page. This only drives the toggles.
      ====================================================================== */
   function startPricing() {
     if (!window.renderMarketingPricing) return;
     var state = { cycle: "monthly", source: "byok" };
 
+    /* No spotlight re-bind here. The plans are re-rendered on every toggle but
+       they are .plan, not .card, and only .card carries the pointer highlight.
+       Calling startSpotlight() again would just attach a second, third, fourth
+       mousemove listener to every capability card on the page. */
     function render() { window.renderMarketingPricing("pricingCards", state); }
     render();
 
@@ -461,8 +524,17 @@
     startPricing();
     startReveal();
     startRise();
+    startCounters();
+    startSpotlight();
     startCursor();
+    startAurora();
     startField();
+
+    /* Run every scroll handler once now. Without this, a page opened at a deep
+       link (or restored by the browser at an old scroll position) keeps its
+       hero state until the reader happens to scroll: the field would sit lit
+       behind a section of body copy, and the nav would show no progress. */
+    runScrollJobs();
   }
 
   if (document.readyState === "loading") {

@@ -1,38 +1,65 @@
 // Cavix pricing, ONE source of truth for the whole site (landing + dashboard billing).
-// Prices from PRODUCT_AND_BUSINESS_ROADMAP §9. Edit here; both pages update together.
+// Prices from PRODUCT_AND_BUSINESS_ROADMAP section 9. Edit here; both pages update
+// together. The dashboard's billing page reads name, source, features, featured,
+// custom, byok, managed, tierMatch and id off these objects, so none of those keys
+// can be renamed without changing app.js too.
 window.CAVIX_PRICING = {
   annualDiscount: 0.2,
-  overage: "$0.40 / agent-minute",
-  seatNote: "Only active PR-authors count as seats · 20% off annual",
-  smbNote: "India / SMB: flat small-team plan from ₹ / $15 / mo (~100 reviews).",
+  overage: "$0.40 per agent-minute",
+  seatNote: "Only people who actually open pull requests count as seats, and annual saves 20%",
+  smbNote: "Smaller teams in India and similar markets can start on a flat plan from about $15 a month, which covers roughly 100 reviews.",
   tiers: [
     {
-      id: "free", name: "Free / OSS", tierMatch: "free",
-      byok: 0, managed: 0, source: "BYOK only",
+      id: "free", name: "Free and open source", tierMatch: "free",
+      byok: 0, managed: 0, source: "Your own key",
       blurb: "For public repositories.",
-      features: ["Unlimited public repos", "~50 private reviews / mo", "Full 13-stage verification", "@cavixcode commands & chat", "Community support"],
+      features: [
+        "Unlimited public repos",
+        "Around 50 private reviews a month",
+        "The full 13 stage verification pass",
+        "Commands and chat in the PR",
+        "Community support",
+      ],
       cta: "Start free",
     },
     {
       id: "team", name: "Team", tierMatch: "paid", featured: true,
-      byok: 12, managed: 24, source: "BYOK or managed",
-      blurb: "For growing engineering teams.",
-      features: ["Unlimited private repos", "Cross-repo impact graph", "Ensemble + standards learning", "Committable one-click fixes", "Email support"],
-      cta: "Start 14-day trial",
+      byok: 12, managed: 24, source: "Your key, or we buy the tokens",
+      blurb: "For engineering teams finding their feet.",
+      features: [
+        "Unlimited private repos",
+        "Cross repo impact graph",
+        "Ensemble review and standards learning",
+        "One click fixes you can commit",
+        "Email support",
+      ],
+      cta: "Start 14 day trial",
     },
     {
       id: "pro", name: "Pro",
-      byok: 39, managed: 39, source: "BYOK or managed",
-      blurb: "Verification on every PR.",
-      features: ["Verification (gated) every PR", "CI/CD regression prediction", "Pre-merge checks & test-gen", "Verified fix PRs", "Priority support & higher caps"],
-      cta: "Start 14-day trial",
+      byok: 39, managed: 39, source: "Your key, or we buy the tokens",
+      blurb: "Verification on every single pull request.",
+      features: [
+        "Verification on every PR, not just the risky ones",
+        "CI and CD regression prediction",
+        "Pre merge checks and test generation",
+        "Fix PRs it has already proven",
+        "Priority support and higher caps",
+      ],
+      cta: "Start 14 day trial",
     },
     {
       id: "enterprise", name: "Enterprise", custom: true, priceLabel: "Custom",
-      source: "$30-60/seat or site license",
-      blurb: "For regulated & air-gapped orgs.",
-      features: ["Self-host / VPC / air-gapped", "SSO / SAML + SCIM + RBAC", "Audit log & zero-retention", "Legacy languages + modernization", "Dedicated support & SLA"],
-      cta: "Contact sales",
+      source: "$30 to $60 a seat, or a site licence",
+      blurb: "For regulated and air gapped organisations.",
+      features: [
+        "Self host, your VPC, or fully air gapped",
+        "SSO and SAML, plus SCIM and RBAC",
+        "Audit log and zero retention",
+        "Legacy languages and modernisation",
+        "Dedicated support with an SLA",
+      ],
+      cta: "Talk to us",
     },
   ],
 };
@@ -41,9 +68,9 @@ window.CAVIX_PRICING = {
 window.cavixPrice = function (tier, cycle, source) {
   if (tier.custom) return { amount: tier.priceLabel || "Custom", per: "" };
   const base = source === "managed" ? tier.managed : tier.byok;
-  if (base === 0) return { amount: "$0", per: "/forever" };
+  if (base === 0) return { amount: "$0", per: "forever" };
   const monthly = cycle === "annual" ? Math.round(base * (1 - window.CAVIX_PRICING.annualDiscount)) : base;
-  return { amount: `$${monthly}`, per: "/seat / mo" };
+  return { amount: `$${monthly}`, per: "per seat / month" };
 };
 
 // Render the marketing pricing cards into a mount element.
@@ -51,23 +78,20 @@ window.renderMarketingPricing = function (mountId, state) {
   const mount = document.getElementById(mountId);
   if (!mount) return;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  // The tier index is rendered as a [01] mark to match the figure-numbering the
-  // rest of the site uses (capability cards, pipeline stages). Enterprise sends
-  // people to sales rather than signup, because a custom price has no checkout.
-  mount.innerHTML = window.CAVIX_PRICING.tiers.map((t, i) => {
+  // Enterprise sends people to sales rather than signup, because a custom price
+  // has no checkout to send them to.
+  mount.innerHTML = window.CAVIX_PRICING.tiers.map((t) => {
     const p = window.cavixPrice(t, state.cycle, state.source);
-    const save = t.custom ? "" : (state.cycle === "annual" && !(t.byok === 0) ? "billed annually · save 20%" : "billed monthly");
-    const n = String(i + 1).padStart(2, "0");
+    const save = t.custom ? "" : (state.cycle === "annual" && t.byok !== 0 ? "billed annually, save 20%" : "billed monthly");
     const href = t.custom ? "/docs#enterprise" : "/signup";
-    return `<div class="plan${t.featured ? " plan-featured" : ""}" data-cursor="${esc(t.cta)}">
+    return `<div class="plan${t.featured ? " plan-featured" : ""}">
       ${t.featured ? `<span class="plan-flag">Most popular</span>` : ""}
-      <div class="plan-n">[${n}]</div>
       <h3>${esc(t.name)}</h3>
-      <div class="price">${esc(p.amount)}<span>${esc(p.per)}</span>${save ? `<span class="save">${esc(save)}</span>` : ""}</div>
-      <div class="srcnote">${esc(t.source)}</div>
       <p class="blurb">${esc(t.blurb)}</p>
+      <div class="price">${esc(p.amount)}${p.per ? `<span>${esc(p.per)}</span>` : ""}${save ? `<span class="save">${esc(save)}</span>` : ""}</div>
+      <div class="srcnote">${esc(t.source)}</div>
       <ul>${t.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
-      <a href="${href}" class="btn ${t.featured ? "btn-primary" : "btn-soft"} btn-block">${esc(t.cta)}</a>
+      <a href="${href}" class="btn ${t.featured ? "btn-primary" : "btn-glass"} btn-block">${esc(t.cta)}</a>
     </div>`;
   }).join("");
 };

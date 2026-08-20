@@ -6,34 +6,48 @@
 <title>Docs · Cavix</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<meta name="theme-color" content="#000208">
-<link rel="stylesheet" href="/site.css?v=20">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20">
-<link rel="apple-touch-icon" href="/cavix-mark.svg?v=20">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#0C1020">
+<link rel="stylesheet" href="/site.css?v=30">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=30">
+<link rel="apple-touch-icon" href="/cavix-mark.svg?v=30">
 </head>
 <body>
-<div class="atmos" aria-hidden="true"></div>
+<div class="aurora" id="aurora" aria-hidden="true">
+  <span class="a1"></span><span class="a2"></span><span class="a3"></span><span class="a4"></span>
+</div>
+<div class="grid-plane" aria-hidden="true"></div>
 <div class="cursor" aria-hidden="true"></div>
 <div class="cursor-ring" aria-hidden="true"></div>
-<div class="cursor-label" aria-hidden="true"></div>
 
 <nav class="nav" id="nav">
-  <div class="container nav-inner">
-    <div>
-      <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=20" alt="" aria-hidden="true"></span> Cavix</a>
-      <div class="nav-stamp">documentation</div>
-    </div>
-    <div class="nav-rail">
+  <div class="nav-shell">
+    <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=30" alt="" aria-hidden="true"></span> Cavix</a>
+
+    <div class="nav-links">
       <a href="/#capabilities">Capabilities</a>
       <a href="/#review">Sample review</a>
       <a href="/#pricing">Pricing</a>
       <a href="/#enterprise">Enterprise</a>
+      <a href="/docs" class="on">Docs</a>
     </div>
+
     <div class="nav-cta">
-      <a href="/login" class="btn btn-ghost btn-sm">Log in</a>
-      <a href="/signup" class="btn btn-primary btn-sm" data-cursor="Deploy">Start free</a>
+      <a href="/login" class="btn btn-glass btn-sm btn-hide-sm">Log in</a>
+      <a href="/signup" class="btn btn-primary btn-sm">Start free</a>
+      <button class="nav-burger" id="burger" aria-label="Open menu" aria-expanded="false"><span></span></button>
     </div>
+
+    <div class="nav-progress" aria-hidden="true"><i id="navProgress"></i></div>
+  </div>
+
+  <div class="nav-sheet" id="navSheet">
+    <a href="/#capabilities">Capabilities</a>
+    <a href="/#review">Sample review</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/#enterprise">Enterprise</a>
+    <a href="/docs">Docs</a>
+    <a href="/login">Log in</a>
   </div>
 </nav>
 
@@ -184,11 +198,11 @@ failOn: [critical]</code></pre>
       <li><b>Sandbox isolation</b>, untrusted code runs network-less with strict caps; assume-breach, defense-in-depth.</li>
     </ul>
 
-    <p style="margin-top:40px"><a href="/signup" class="btn btn-primary">Start free →</a> &nbsp; <a href="/" class="btn btn-soft">Back to home</a></p>
+    <p style="margin-top:40px"><a href="/signup" class="btn btn-primary">Start free →</a> &nbsp; <a href="/" class="btn btn-glass">Back to home</a></p>
   </main>
 </div>
-<script src="/icons.js?v=20"></script>
-<script src="/docs.js?v=20"></script>
-<script src="/site.js?v=20"></script>
+<script src="/icons.js?v=30"></script>
+<script src="/docs.js?v=30"></script>
+<script src="/site.js?v=30"></script>
 </body>
 </html>
