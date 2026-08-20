@@ -51,15 +51,23 @@ window.renderMarketingPricing = function (mountId, state) {
   const mount = document.getElementById(mountId);
   if (!mount) return;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  mount.innerHTML = window.CAVIX_PRICING.tiers.map((t) => {
+  // The tier index is rendered as a [01] mark to match the figure-numbering the
+  // rest of the site uses (capability cards, pipeline stages). Enterprise sends
+  // people to sales rather than signup, because a custom price has no checkout.
+  mount.innerHTML = window.CAVIX_PRICING.tiers.map((t, i) => {
     const p = window.cavixPrice(t, state.cycle, state.source);
     const save = t.custom ? "" : (state.cycle === "annual" && !(t.byok === 0) ? "billed annually · save 20%" : "billed monthly");
-    return `<div class="plan${t.featured ? " featured" : ""} spot">
+    const n = String(i + 1).padStart(2, "0");
+    const href = t.custom ? "/docs#enterprise" : "/signup";
+    return `<div class="plan${t.featured ? " plan-featured" : ""}" data-cursor="${esc(t.cta)}">
+      ${t.featured ? `<span class="plan-flag">Most popular</span>` : ""}
+      <div class="plan-n">[${n}]</div>
       <h3>${esc(t.name)}</h3>
       <div class="price">${esc(p.amount)}<span>${esc(p.per)}</span>${save ? `<span class="save">${esc(save)}</span>` : ""}</div>
       <div class="srcnote">${esc(t.source)}</div>
+      <p class="blurb">${esc(t.blurb)}</p>
       <ul>${t.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
-      <a href="/signup" class="btn ${t.featured ? "btn-primary" : "btn-soft"} btn-block">${esc(t.cta)}</a>
+      <a href="${href}" class="btn ${t.featured ? "btn-primary" : "btn-soft"} btn-block">${esc(t.cta)}</a>
     </div>`;
   }).join("");
 };
