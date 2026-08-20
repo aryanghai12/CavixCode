@@ -128,16 +128,43 @@ status: <span class="t-cyan">UNVERIFIED</span>   suppressed, you never see it</p
 </section>
 
 <!-- ==========================================================================
-     COVERAGE MARQUEE
+     COVERAGE
+     Languages and platforms are two different claims and they get two
+     different rows. Running them together in one strip implied Bitbucket was
+     a language Cavix reads, which is nonsense, and it buried the fact that
+     Cavix covers all four Git hosts rather than only GitHub.
      ====================================================================== -->
 <section class="section-tight" id="coverage">
-  <div class="marquee" aria-label="Supported languages and platforms">
-    <div class="marquee-row">
-      <div>
-        <span class="chip">TypeScript</span><span class="chip">Python</span><span class="chip">Go</span><span class="chip">Rust</span><span class="chip">Java</span><span class="chip">Kotlin</span><span class="chip">C and C++</span><span class="chip">Ruby</span><span class="chip">PHP</span><span class="chip">C# and .NET</span><span class="chip">COBOL</span><span class="chip">PL/SQL</span><span class="chip">GitHub</span><span class="chip">GitLab</span><span class="chip">Bitbucket</span><span class="chip">Azure DevOps</span>
+  <div class="container">
+    <div class="coverage">
+      <div class="coverage-row">
+        <div class="coverage-label">
+          <span class="label">Languages it reviews</span>
+          <p class="fine">Twelve, including the two that most reviewers will not touch.</p>
+        </div>
+        <div class="marquee" aria-label="Supported languages">
+          <div class="marquee-row">
+            <div>
+              <span class="chip">TypeScript</span><span class="chip">Python</span><span class="chip">Go</span><span class="chip">Rust</span><span class="chip">Java</span><span class="chip">Kotlin</span><span class="chip">C and C++</span><span class="chip">Ruby</span><span class="chip">PHP</span><span class="chip">C# and .NET</span><span class="chip">COBOL</span><span class="chip">PL/SQL</span>
+            </div>
+            <div aria-hidden="true">
+              <span class="chip">TypeScript</span><span class="chip">Python</span><span class="chip">Go</span><span class="chip">Rust</span><span class="chip">Java</span><span class="chip">Kotlin</span><span class="chip">C and C++</span><span class="chip">Ruby</span><span class="chip">PHP</span><span class="chip">C# and .NET</span><span class="chip">COBOL</span><span class="chip">PL/SQL</span>
+            </div>
+          </div>
+        </div>
       </div>
-      <div aria-hidden="true">
-        <span class="chip">TypeScript</span><span class="chip">Python</span><span class="chip">Go</span><span class="chip">Rust</span><span class="chip">Java</span><span class="chip">Kotlin</span><span class="chip">C and C++</span><span class="chip">Ruby</span><span class="chip">PHP</span><span class="chip">C# and .NET</span><span class="chip">COBOL</span><span class="chip">PL/SQL</span><span class="chip">GitHub</span><span class="chip">GitLab</span><span class="chip">Bitbucket</span><span class="chip">Azure DevOps</span>
+
+      <div class="coverage-row">
+        <div class="coverage-label">
+          <span class="label">Where it runs</span>
+          <p class="fine">All four Git platforms, not just the obvious one.</p>
+        </div>
+        <div class="platforms">
+          <span class="chip chip-lg">GitHub</span>
+          <span class="chip chip-lg">GitLab</span>
+          <span class="chip chip-lg">Bitbucket</span>
+          <span class="chip chip-lg">Azure DevOps</span>
+        </div>
       </div>
     </div>
   </div>

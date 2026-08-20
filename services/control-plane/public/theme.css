@@ -15,9 +15,10 @@
 
    THE RULES
 
-   1. Dark, but lit. The ground is a deep indigo, never black, and slow aurora
-      glows sit behind everything. That colour is what the glass refracts; on a
-      black page a frosted panel has nothing to catch and reads flat and dead.
+   1. Dark first. The ground is graphite and the palette is white, steel and
+      black. There is no colour accent: a soft steel light sits behind the
+      glass so panels have something to catch, and the only saturated values
+      on the site are the three semantic ones that have to mean something.
 
    2. Glass is a surface, not a filter over text. Every panel that carries
       words has a real fill under its blur, so copy always sits on something
@@ -30,33 +31,45 @@
 
 :root {
   /* ---- ground -----------------------------------------------------------
-     Deep indigo. Dark enough to feel like a night interface, far enough off
-     black that the aurora and the glass have something to sit against. */
-  --bg:       #090D1A;   /* the page */
-  --bg-deep:  #05080F;   /* recessed: terminals, code, inputs */
-  --bg-soft:  #10162C;   /* opaque fallback where blur is unavailable */
-  --bg-lift:  #182043;   /* hover and active */
+     Graphite, essentially black with a trace of blue so it never looks like a
+     dead grey. This is a genuinely dark interface: the panels sit within a few
+     percent of the page, and separation comes from a lit top edge rather than
+     from raising the fill. */
+  --bg:       #08090C;   /* the page */
+  --bg-deep:  #040507;   /* recessed: terminals, code, inputs */
+  --bg-soft:  #101216;   /* opaque fallback where blur is unavailable */
+  --bg-lift:  #171A1F;   /* hover and active */
 
   /* ---- ink --------------------------------------------------------------
-     Bright and near neutral. Body copy lands about 14:1 on glass and headings
-     about 18:1, which is what keeps this readable at this saturation. */
+     Neutral. Body copy lands about 13:1 on glass and headings about 19:1. */
   --head:  #FFFFFF;
-  --text:  #DFE6F7;
-  --dim:   #AAB6D4;
-  --faint: #7E8CB0;
+  --text:  #D9DDE4;
+  --dim:   #9AA1AC;
+  --faint: #6A707B;
 
   /* ---- accent -----------------------------------------------------------
-     Three stops, always in this order, so every gradient on the site runs the
-     same direction and the whole thing feels like one system. */
-  --iris:  #7C6CFF;
-  --azure: #4C9BFF;
-  --aqua:  #38E0D0;
-  --grad:  linear-gradient(115deg, #7C6CFF 0%, #4C9BFF 48%, #38E0D0 100%);
-  --grad-soft: linear-gradient(115deg, rgba(124,108,255,.22), rgba(76,155,255,.16) 50%, rgba(56,224,208,.14));
+     There is no colour accent. The site is white, steel and graphite, and the
+     only gradient is brushed metal: white falling to steel. A three stop
+     violet to cyan ramp reads as a template; polished monochrome reads as an
+     instrument, and it lets the semantic colours below (and only those) carry
+     actual meaning.
 
-  --ok:   #3DDC97;
-  --warn: #FFC46B;
-  --bad:  #FF7A8A;
+     The names iris, azure and aqua are kept because roughly forty call sites
+     across the two layout sheets and the dashboard's inline styles reference
+     them. They now point at three steps of steel, so every one of those call
+     sites became monochrome without being touched. */
+  --iris:  #9AA1AC;      /* mid steel   */
+  --azure: #B9C0CB;      /* light steel */
+  --aqua:  #E9ECF1;      /* bright steel, used where a link needs to lift */
+  --grad:  linear-gradient(160deg, #FFFFFF 0%, #C6CCD6 44%, #7E858F 100%);
+  --grad-soft: linear-gradient(160deg, rgba(255,255,255,.13), rgba(190,197,208,.055) 50%, rgba(255,255,255,.02));
+
+  /* Semantic colour is the exception, because a code reviewer cannot say
+     "passed" and "failed" in steel. Muted well below full saturation so they
+     read as considered rather than as a traffic light. */
+  --ok:   #6FBF97;
+  --warn: #D6B87C;
+  --bad:  #D98A8A;
 
   /* Aliases for the names the dashboard's generated markup still writes into
      inline styles. app.js is ~2500 lines of view code that emits var(--green)
@@ -128,7 +141,7 @@ body {
 img, svg, canvas { display: block; max-width: 100%; }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; background: none; border: 0; }
-::selection { background: rgba(124,108,255,.42); color: #fff; }
+::selection { background: rgba(168,176,188,.42); color: #fff; }
 :focus-visible { outline: 2px solid var(--aqua); outline-offset: 3px; border-radius: 6px; }
 
 .sr-only {
@@ -138,16 +151,16 @@ button { font: inherit; color: inherit; background: none; border: 0; }
 
 /* Scrollbars are part of the theme too. A default light grey bar down the edge
    of a dark interface is the fastest way to make it look unfinished. */
-* { scrollbar-width: thin; scrollbar-color: rgba(124,108,255,.42) transparent; }
+* { scrollbar-width: thin; scrollbar-color: rgba(168,176,188,.42) transparent; }
 ::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(124,108,255,.34);
+  background: rgba(168,176,188,.34);
   border: 3px solid transparent;
   background-clip: content-box;
   border-radius: var(--pill);
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(124,108,255,.6); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(168,176,188,.6); background-clip: content-box; }
 
 .container { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gutter); }
 
@@ -159,36 +172,45 @@ button { font: inherit; color: inherit; background: none; border: 0; }
      -1  a fine grid that gives the depth a sense of scale
    ========================================================================== */
 .aurora { position: fixed; inset: -20%; z-index: -3; pointer-events: none; overflow: hidden; }
+/* These are a LIGHT SOURCE, not a colour wash. Steel at very low opacity, so
+   the glass has something to catch and the ground still reads as black. The
+   previous version ran these at .5 in violet and cyan, which is what made the
+   page look bright and, frankly, cheap: the blobs stopped being lighting and
+   started being the design. */
 .aurora span {
   position: absolute; display: block;
   border-radius: 50%;
-  filter: blur(90px);
-  /* Enough colour to light the glass, not so much that the page stops reading
-     as a dark interface. Raising this above about .55 starts to wash the
-     ground out toward navy. */
-  opacity: .5;
+  filter: blur(110px);
+  opacity: .17;
   will-change: transform;
   transition: opacity .8s var(--ease);
 }
 .aurora .a1 {
-  width: 46vw; height: 46vw; left: 2%; top: 0%;
-  background: radial-gradient(circle, rgba(124,108,255,.9), transparent 66%);
-  animation: drift1 34s var(--ease) infinite alternate;
+  width: 48vw; height: 48vw; left: 0%; top: -4%;
+  background: radial-gradient(circle, rgba(214,220,228,.85), transparent 66%);
+  animation: drift1 40s var(--ease) infinite alternate;
 }
 .aurora .a2 {
-  width: 42vw; height: 42vw; right: 0%; top: -6%;
-  background: radial-gradient(circle, rgba(76,155,255,.8), transparent 66%);
-  animation: drift2 42s var(--ease) infinite alternate;
+  width: 42vw; height: 42vw; right: -2%; top: -8%;
+  background: radial-gradient(circle, rgba(168,176,188,.7), transparent 66%);
+  animation: drift2 48s var(--ease) infinite alternate;
 }
 .aurora .a3 {
-  width: 36vw; height: 36vw; left: 32%; top: 26%;
-  background: radial-gradient(circle, rgba(56,224,208,.46), transparent 66%);
-  animation: drift3 38s var(--ease) infinite alternate;
+  width: 38vw; height: 38vw; left: 30%; top: 30%;
+  background: radial-gradient(circle, rgba(190,197,208,.5), transparent 66%);
+  animation: drift3 44s var(--ease) infinite alternate;
 }
 .aurora .a4 {
-  width: 32vw; height: 32vw; right: 16%; top: 46%;
-  background: radial-gradient(circle, rgba(160,110,255,.44), transparent 66%);
-  animation: drift1 46s var(--ease) infinite alternate-reverse;
+  width: 34vw; height: 34vw; right: 14%; top: 52%;
+  background: radial-gradient(circle, rgba(150,158,170,.42), transparent 66%);
+  animation: drift1 52s var(--ease) infinite alternate-reverse;
+}
+/* A vignette holds the light in the middle and keeps the edges genuinely
+   black, which is most of what separates a premium dark interface from a
+   grey one. */
+.aurora::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 70% 55% at 50% 34%, transparent, rgba(0,0,0,.55) 78%, rgba(0,0,0,.8));
 }
 @keyframes drift1 { from { transform: translate3d(0,0,0) scale(1); }   to { transform: translate3d(12vw,10vh,0) scale(1.22); } }
 @keyframes drift2 { from { transform: translate3d(0,0,0) scale(1.1); } to { transform: translate3d(-14vw,14vh,0) scale(.88); } }
@@ -264,8 +286,8 @@ em { color: var(--text); font-style: italic; }
 code, .mono { font-family: var(--mono); font-size: .87em; }
 p code, li code, td code, dd code, .mono-badge {
   color: var(--aqua);
-  background: rgba(56,224,208,.10);
-  border: 1px solid rgba(56,224,208,.20);
+  background: rgba(214,220,228,.10);
+  border: 1px solid rgba(214,220,228,.20);
   border-radius: 7px;
   padding: .14em .45em;
   font-family: var(--mono);
@@ -278,9 +300,9 @@ p code, li code, td code, dd code, .mono-badge {
   color: var(--dim);
 }
 .label::before {
-  content: ""; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--grad);
-  box-shadow: 0 0 12px rgba(124,108,255,.9);
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--steel-lit, #E9ECF1);
+  box-shadow: 0 0 8px rgba(233,236,241,.45);
 }
 
 /* ============================================================================
@@ -350,7 +372,7 @@ p code, li code, td code, dd code, .mono-badge {
 .terminal.print::after {
   content: ""; position: absolute; left: 0; right: 0; top: 0; height: 42%;
   pointer-events: none; z-index: 2;
-  background: linear-gradient(180deg, transparent, rgba(56,224,208,.09) 55%, rgba(124,108,255,.16) 78%, transparent);
+  background: linear-gradient(180deg, transparent, rgba(214,220,228,.09) 55%, rgba(168,176,188,.16) 78%, transparent);
   animation: sweep 1.15s var(--ease-out) 1;
 }
 
@@ -405,14 +427,19 @@ p code, li code, td code, dd code, .mono-badge {
 .btn-block { display: flex; width: 100%; }
 .btn:disabled, .btn[disabled] { opacity: .5; cursor: not-allowed; transform: none !important; }
 
+/* White plate, graphite text. On a black page this is the loudest thing the
+   palette can do without introducing a colour, which is exactly why it is
+   reserved for the one action that matters on each screen. The shadow is a
+   real drop shadow rather than a coloured bloom; a grey glow around a white
+   button just looks like a smudge. */
 .btn-primary {
-  color: #080B16;
+  color: #08090C;
   background: var(--grad);
   border: 0;
   font-weight: 700;
-  box-shadow: 0 10px 30px -10px rgba(76,155,255,.7), inset 0 1px 0 rgba(255,255,255,.4);
+  box-shadow: 0 8px 22px -10px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.55);
 }
-.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 18px 44px -12px rgba(76,155,255,.85), inset 0 1px 0 rgba(255,255,255,.5); }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 34px -12px rgba(0,0,0,1), inset 0 1px 0 rgba(255,255,255,.7); }
 .btn-primary:active { transform: translateY(0); }
 
 /* Glass is the default secondary. btn-soft and btn-ghost are the names the
@@ -429,10 +456,10 @@ p code, li code, td code, dd code, .mono-badge {
 }
 .btn-danger {
   color: var(--bad);
-  background: rgba(255,122,138,.10);
-  border: 1px solid rgba(255,122,138,.3);
+  background: rgba(217,138,138,.10);
+  border: 1px solid rgba(217,138,138,.3);
 }
-.btn-danger:hover { background: rgba(255,122,138,.18); border-color: rgba(255,122,138,.5); color: #FFA7B1; transform: translateY(-2px); }
+.btn-danger:hover { background: rgba(217,138,138,.18); border-color: rgba(217,138,138,.5); color: #FFA7B1; transform: translateY(-2px); }
 
 .btn-text {
   display: inline-flex; align-items: center; gap: .5em;
@@ -463,10 +490,10 @@ p code, li code, td code, dd code, .mono-badge {
   content: ""; width: 6px; height: 6px; border-radius: 50%;
   background: var(--aqua); box-shadow: 0 0 10px var(--aqua);
 }
-.pill-ok,   .badge-verified { color: var(--ok);   border-color: rgba(61,220,151,.32); background: rgba(61,220,151,.11); }
-.pill-warn, .badge-high     { color: var(--warn); border-color: rgba(255,196,107,.32); background: rgba(255,196,107,.11); }
-.pill-bad,  .badge-critical { color: var(--bad);  border-color: rgba(255,122,138,.32); background: rgba(255,122,138,.11); }
-.pill-iris, .badge-policy   { color: #C0B6FF;     border-color: rgba(124,108,255,.35); background: rgba(124,108,255,.15); }
+.pill-ok,   .badge-verified { color: var(--ok);   border-color: rgba(111,191,151,.32); background: rgba(111,191,151,.11); }
+.pill-warn, .badge-high     { color: var(--warn); border-color: rgba(214,184,124,.32); background: rgba(214,184,124,.11); }
+.pill-bad,  .badge-critical { color: var(--bad);  border-color: rgba(217,138,138,.32); background: rgba(217,138,138,.11); }
+.pill-iris, .badge-policy   { color: #D2D8E0;     border-color: rgba(168,176,188,.35); background: rgba(168,176,188,.15); }
 .badge-low { color: var(--faint); }
 
 .t-ok, .t-green, .mark-ok   { color: var(--ok); }
@@ -474,7 +501,7 @@ p code, li code, td code, dd code, .mono-badge {
 .t-bad, .t-red, .mark-att   { color: var(--bad); }
 .t-faint, .t-fade           { color: var(--faint); font-size: 13px; }
 .t-dim                      { color: var(--faint); }
-.t-key, .t-purple           { color: #9D8CFF; }
+.t-key, .t-purple           { color: #B9C0CB; }
 .t-cyan                     { color: var(--aqua); }
 
 /* ============================================================================
@@ -484,7 +511,7 @@ p code, li code, td code, dd code, .mono-badge {
    ========================================================================== */
 .terminal {
   position: relative;
-  background: rgba(5,8,15,.9);
+  background: rgba(4,5,7,.9);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--line);
@@ -500,7 +527,7 @@ p code, li code, td code, dd code, .mono-badge {
   font-family: var(--mono); font-size: 12px; color: var(--faint);
 }
 .terminal-bar .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.dot-r { background: #FF6B6B; } .dot-y { background: #FFC46B; } .dot-g { background: #3DDC97; }
+.dot-r { background: #C97C7C; } .dot-y { background: #D6B87C; } .dot-g { background: #6FBF97; }
 .terminal-bar .ttl { margin-left: 8px; }
 .terminal pre {
   margin: 0; padding: clamp(18px, 1.6vw, 26px);
@@ -554,7 +581,7 @@ table.table tbody tr:hover td, .compare tbody tr:hover td { background: rgba(255
 .field .hint, .hint { margin-top: 8px; font-size: 13px; color: var(--faint); font-weight: 400; }
 input, select, textarea {
   width: 100%; padding: 13px 16px;
-  background: rgba(5,8,15,.6);
+  background: rgba(4,5,7,.6);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   color: var(--text); font-family: var(--font); font-size: 15px;
@@ -562,9 +589,9 @@ input, select, textarea {
 }
 input::placeholder, textarea::placeholder { color: var(--faint); }
 input:focus, select:focus, textarea:focus {
-  outline: none; border-color: rgba(124,108,255,.7);
-  background: rgba(5,8,15,.8);
-  box-shadow: 0 0 0 4px rgba(124,108,255,.16);
+  outline: none; border-color: rgba(168,176,188,.7);
+  background: rgba(4,5,7,.8);
+  box-shadow: 0 0 0 4px rgba(168,176,188,.16);
 }
 select {
   appearance: none; -webkit-appearance: none;
@@ -578,8 +605,8 @@ select option { background: var(--bg-soft); color: var(--text); }
 
 .alert-error {
   display: none; margin-bottom: 20px; padding: 14px 16px;
-  border: 1px solid rgba(255,122,138,.32); border-radius: var(--r-sm);
-  background: rgba(255,122,138,.09); color: var(--bad); font-size: 14.5px;
+  border: 1px solid rgba(217,138,138,.32); border-radius: var(--r-sm);
+  background: rgba(217,138,138,.09); color: var(--bad); font-size: 14.5px;
 }
 .alert-error.show { display: block; }
 .hidden { display: none !important; }
@@ -616,11 +643,11 @@ select option { background: var(--bg-soft); color: var(--text); }
 .cursor { width: 7px; height: 7px; background: var(--aqua); margin: -3.5px 0 0 -3.5px; box-shadow: 0 0 14px var(--aqua); }
 .cursor-ring {
   width: 34px; height: 34px; margin: -17px 0 0 -17px;
-  border: 1.5px solid rgba(124,108,255,.55);
+  border: 1.5px solid rgba(168,176,188,.55);
   transition: opacity .3s var(--ease), width .3s var(--ease), height .3s var(--ease), margin .3s var(--ease), border-color .3s var(--ease);
 }
 .cursor-on .cursor, .cursor-on .cursor-ring { opacity: 1; }
-.cursor-ring.grow { width: 56px; height: 56px; margin: -28px 0 0 -28px; border-color: rgba(56,224,208,.75); }
+.cursor-ring.grow { width: 56px; height: 56px; margin: -28px 0 0 -28px; border-color: rgba(214,220,228,.75); }
 @media (hover: hover) and (pointer: fine) {
   body.cursor-on, body.cursor-on a, body.cursor-on button { cursor: none; }
 }

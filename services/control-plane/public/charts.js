@@ -19,8 +19,8 @@
 // meter list: name, geometric mark and count carry the identity, and length
 // carries the magnitude. That is the honest form for an ordered scale anyway.
 window.CavixCharts = (() => {
-  const SERIES_1 = "#4C9BFF"; // reviews, and the sequential ramp's full step
-  const SERIES_2 = "#3DDC97"; // verified findings
+  const SERIES_1 = "#B9C0CB"; // reviews, and the sequential ramp's full step
+  const SERIES_2 = "#6FBF97"; // verified findings
   const INK_FAINT = "#7E8CB0";
   const GRID = "rgba(255,255,255,.12)";
 
@@ -166,7 +166,7 @@ window.CavixCharts = (() => {
     const has = typeof d === "number" && d !== 0;
     const better = has && (opts.goodDown ? d < 0 : d > 0);
     const arrow = has ? (d > 0 ? "●" : "▼") : "";
-    const colour = has ? (better ? SERIES_2 : "#FF7A8A") : INK_FAINT;
+    const colour = has ? (better ? SERIES_2 : "#D98A8A") : INK_FAINT;
     return `<div class="stat">
       <div class="label">${esc(label)}</div>
       <div class="value">${esc(value)}</div>

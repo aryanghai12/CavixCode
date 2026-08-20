@@ -391,7 +391,7 @@
         if (alpha < 0.02) continue;
         var s = t < 0.25 ? (0.6 + Math.random() * 1.4) : (0.5 + Math.random() * 0.9);
         var roll = Math.random();
-        var rgb = roll < 0.24 ? "124,108,255" : roll < 0.46 ? "56,224,208" : roll < 0.66 ? "140,180,255" : "255,255,255";
+        var rgb = roll < 0.24 ? "168,176,188" : roll < 0.46 ? "214,220,228" : roll < 0.66 ? "176,183,194" : "255,255,255";
         o.fillStyle = "rgba(" + rgb + "," + alpha.toFixed(3) + ")";
         o.fillRect(R + Math.cos(a) * r, R + Math.sin(a) * r, s, s);
       }
