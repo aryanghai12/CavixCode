@@ -188,6 +188,37 @@ export function isEmptySnapshot(snap: StoreSnapshot): boolean {
   return (snap.orgs?.length ?? 0) === 0 && (snap.users?.length ?? 0) === 0;
 }
 
+/**
+ * What to do when the database comes back and this process already holds state.
+ *
+ * Written as its own function because it is a POLICY, not a detail, and getting
+ * it wrong destroys workspaces. The rule is that the durable copy wins.
+ *
+ * The sequence it guards against: the database is asleep or misconfigured at
+ * boot, so the site comes up looking like a fresh install. Somebody signs in,
+ * finds an empty dashboard, and sets things up again. The store is now non-empty,
+ * so the emptiness guard in `save` does not fire, and the next autosave tick
+ * replaces a workspace holding months of history with one holding a single
+ * repository.
+ *
+ * Preferring the stored copy costs whatever was done during the outage, on a
+ * site that was visibly broken while it happened. Preferring memory risks
+ * everything anyone has ever stored. Those are not comparable, so the stored
+ * copy wins and the discard is reported loudly.
+ */
+export type RecoveryChoice =
+  /** The database holds a workspace and this process holds nothing. Load it. */
+  | "load"
+  /** Both hold something. Load the stored one and drop what is in memory. */
+  | "load-discarding-memory"
+  /** The database is genuinely empty. Keep serving, and start saving. */
+  | "nothing-stored";
+
+export function recoveryChoice(hasStoredSnapshot: boolean, memoryIsEmpty: boolean): RecoveryChoice {
+  if (!hasStoredSnapshot) return "nothing-stored";
+  return memoryIsEmpty ? "load" : "load-discarding-memory";
+}
+
 export interface Autosave {
   stop(): Promise<void>;
 }

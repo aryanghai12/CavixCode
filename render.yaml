@@ -5,13 +5,22 @@
 #   • cavix-edge         GitHub webhook receiver (Go)                     [web, free]
 #   • cavix-orchestrator the review engine (Node)                        [web, free]
 #   • cavix-redis        the job queue (Key Value / Redis)               [free]
-#   • cavix-db           Postgres, so accounts/reviews persist           [free]
+#
+# Postgres is NOT provisioned here. Bring your own (Neon's free tier does not
+# expire, Render's does) and paste its URL into DATABASE_URL. See the note above
+# the services block for why it is not wired automatically.
 #
 # How to use:
 #   1. Push this repo to GitHub.
 #   2. Render → New + → Blueprint → pick this repo → Apply.
 #   3. Fill in the few `sync: false` values (they can't be auto-generated):
-#        - cavix:              CAVIX_ADMIN_EMAILS   = your email, or @your-github-login
+#        - cavix:              DATABASE_URL         = your Neon pooled URL
+#                              CAVIX_SESSION_SECRET = openssl rand -hex 32
+#                              CAVIX_SECRET_KEY     = openssl rand -hex 32
+#                              CAVIX_ADMIN_EMAILS   = your email, or @your-github-login
+#          Set the two secrets ONCE and never change them: CAVIX_SECRET_KEY is
+#          the key to every stored API key and OAuth token, and rotating it makes
+#          all of them undecryptable, which looks exactly like the data vanishing.
 #        - cavix-orchestrator: CAVIX_CONTROL_PLANE_URL = the cavix web service URL
 #                              CAVIX_APP_ID, CAVIX_APP_PRIVATE_KEY  (GitHub App, §8B)
 #   4. In your GitHub App (GUIDE §8B): set the Webhook URL to the cavix-edge URL
@@ -37,12 +46,23 @@
 # next request. Render's free Postgres/Redis are time-limited; swap in Neon/Supabase
 # (Postgres) or Upstash (Redis) free for unlimited — just set DATABASE_URL / CAVIX_REDIS_URL.
 
-databases:
-  - name: cavix-db
-    plan: free
-    databaseName: cavix
-    user: cavix
-
+# NO `databases:` BLOCK, AND THAT IS DELIBERATE.
+#
+# There used to be a free Render Postgres declared here, with DATABASE_URL wired
+# to it through `fromDatabase`. Two things went wrong with that, and both of them
+# look identical from the outside: you log in and the workspace is empty.
+#
+#   1. Render's free Postgres expires. Once it does, DATABASE_URL still resolves,
+#      to a database that no longer answers. The site boots, cannot reach it, and
+#      serves an empty workspace from memory that is never saved anywhere.
+#
+#   2. `fromDatabase` OVERWRITES the variable every time the blueprint syncs. So
+#      pointing the service at Neon in the dashboard worked right up until the
+#      next deploy put the old Render URL back.
+#
+# DATABASE_URL is now set by hand (`sync: false` below) and nothing in this file
+# competes with it. Paste Neon's pooled connection string, the one containing
+# `-pooler`, with `?sslmode=require` on the end.
 services:
   # ---------- job queue (Redis / Key Value) ----------
   - type: redis
@@ -61,14 +81,34 @@ services:
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
-      - key: DATABASE_URL              # persistent storage (auto-wired)
-        fromDatabase:
-          name: cavix-db
-          property: connectionString
-      - key: CAVIX_SESSION_SECRET      # signs login cookies (auto-generated)
-        generateValue: true
-      - key: CAVIX_SECRET_KEY          # encrypts stored BYOK keys (auto-generated)
-        generateValue: true
+      # Neon (or any Postgres). Set this in the dashboard; see the note above the
+      # services block for why it is not wired automatically.
+      - key: DATABASE_URL
+        sync: false
+
+      # THESE TWO MUST NEVER CHANGE ONCE THE SITE HAS USERS.
+      #
+      # They were `generateValue: true`, which mints a fresh random value. That is
+      # fine on the very first deploy and destructive afterwards, because both are
+      # keys to data that is already stored:
+      #
+      #   CAVIX_SECRET_KEY encrypts every BYOK API key and every OAuth token in
+      #   the database. Change it and none of those blobs decrypt any more. The
+      #   store treats a blob that will not decrypt as "no credential" rather
+      #   than as an error (see getOAuthToken and getPlatformToken), so nothing
+      #   fails loudly: the owner simply finds their key gone and their
+      #   repositories disconnected, and is asked to set them up again.
+      #
+      #   CAVIX_SESSION_SECRET signs login cookies. Change it and every session
+      #   is invalidated at once.
+      #
+      # Generate each once with `openssl rand -hex 32`, set them here, and keep a
+      # copy somewhere safe. Rotating CAVIX_SECRET_KEY without re-encrypting is a
+      # data migration, not a config change.
+      - key: CAVIX_SESSION_SECRET      # signs login cookies
+        sync: false
+      - key: CAVIX_SECRET_KEY          # encrypts stored BYOK keys and OAuth tokens
+        sync: false
       - key: CAVIX_INTERNAL_TOKEN      # lets the orchestrator read org keys (auto-generated)
         generateValue: true
       # YOUR email, or your GitHub login written @login, → founder Admin console.

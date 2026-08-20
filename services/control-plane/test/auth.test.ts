@@ -245,7 +245,17 @@ test("static site: marketing, login, and dashboard shell are served", async () =
     const app = await fetch(base + "/app");
     assert.match(await app.text(), /app\.js/);
 
-    const css = await fetch(base + "/styles.css");
-    assert.equal(css.headers.get("content-type"), "text/css; charset=utf-8");
+    // The stylesheet split: theme.css carries the tokens and is loaded by every
+    // page, and each half of the site adds its own layout sheet on top. Asserted
+    // by name because loading them in the wrong order, or dropping theme.css
+    // from one page, is exactly how the two halves drift apart again.
+    for (const sheet of ["/theme.css", "/site.css", "/app.css"]) {
+      const css = await fetch(base + sheet);
+      assert.equal(css.status, 200, `${sheet} should be served`);
+      assert.equal(css.headers.get("content-type"), "text/css; charset=utf-8", `${sheet} content type`);
+    }
+
+    const motion = await fetch(base + "/motion.js");
+    assert.equal(motion.headers.get("content-type"), "text/javascript; charset=utf-8");
   });
 });
