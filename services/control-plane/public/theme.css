@@ -125,7 +125,14 @@
 html {
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
-  scroll-padding-top: 116px;
+  /* Where an anchor target's scroll box comes to rest, measured from the top
+     of the viewport. The floating nav's bottom edge sits at about 79px, so
+     this leaves roughly 20px of air under it.
+
+     On its own this is not enough, because it positions a section's BORDER
+     box while the heading sits below ~120px of the section's own top padding.
+     See the scroll-margin rules in site.css, which cancel that padding out. */
+  scroll-padding-top: 100px;
 }
 body {
   margin: 0;
