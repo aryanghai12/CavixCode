@@ -1,0 +1,219 @@
+# Cavix, whole product, one box.
+#
+# This is the Render blueprint's four services plus the two Render was renting
+# you: Postgres and Redis now run here, on a machine that does not expire and
+# does not sleep. Caddy is the fifth addition and the reason there is no port to
+# remember — it holds the certificate and routes /webhook to the edge and
+# everything else to the site.
+#
+#   docker compose up -d --build      start, or apply a change
+#   docker compose logs -f cavix      watch the site
+#   docker compose ps                 what is running, and whether it is healthy
+#
+# Values come from .env beside this file. bootstrap.sh writes one.
+
+name: cavix
+
+services:
+  # ---------- Postgres: the thing Render's free tier kept expiring ----------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cavix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: cavix
+      # Checksums cost a percent or two of write throughput and turn silent disk
+      # corruption into a loud error. On a single box with no replica to fail
+      # over to, finding out is worth more than the percent.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Not published. Nothing outside this compose network can reach 5432, which
+    # is why the password below never travels over the internet.
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cavix -d cavix"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------- Redis: the job queue between edge and orchestrator ----------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly: a job the edge accepted has to survive a restart of this
+    # container, because GitHub has already been told the webhook landed and
+    # will not send it a second time.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------- the site + dashboard (Render's `cavix` service) ----------
+  cavix:
+    build:
+      context: ../..
+      dockerfile: deploy/oracle/Dockerfile.node
+    image: cavix/node:local
+    restart: unless-stopped
+    command: ["node", "services/control-plane/src/main.ts"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CAVIX_CONTROL_PLANE_PORT: "8088"
+      CAVIX_CONTROL_PLANE_HOST: "0.0.0.0"
+      DATABASE_URL: postgres://cavix:${POSTGRES_PASSWORD}@postgres:5432/cavix
+      # REQUIRED, and the single easiest thing to get wrong in this file.
+      #
+      # Postgres is a container on a private network, so its hostname is
+      # "postgres" — not localhost. wantSsl() in persistence.ts reads any
+      # hostname that is not localhost/127.0.0.1 as a managed database and turns
+      # TLS on; this Postgres does not speak TLS; the connection fails. The site
+      # then comes up read-only and looks, from a browser, exactly like the
+      # empty-workspace bug. "off" is correct here because that traffic never
+      # leaves the box.
+      CAVIX_DATABASE_SSL: "off"
+      CAVIX_SESSION_SECRET: ${CAVIX_SESSION_SECRET:?set CAVIX_SESSION_SECRET in .env}
+      CAVIX_SECRET_KEY: ${CAVIX_SECRET_KEY:?set CAVIX_SECRET_KEY in .env}
+      CAVIX_INTERNAL_TOKEN: ${CAVIX_INTERNAL_TOKEN:?set CAVIX_INTERNAL_TOKEN in .env}
+      CAVIX_ADMIN_EMAILS: ${CAVIX_ADMIN_EMAILS}
+      # Replaces RENDER_EXTERNAL_URL, which is what the code read to infer "this
+      # site is on HTTPS" — the flag deciding whether session cookies carry
+      # Secure, and where OAuth redirects point.
+      CAVIX_PUBLIC_URL: https://${CAVIX_DOMAIN}
+      CAVIX_SECURE_COOKIES: "true"
+      CAVIX_GITHUB_CLIENT_ID: ${CAVIX_GITHUB_CLIENT_ID}
+      CAVIX_GITHUB_CLIENT_SECRET: ${CAVIX_GITHUB_CLIENT_SECRET}
+      CAVIX_GITHUB_APP_SLUG: ${CAVIX_GITHUB_APP_SLUG}
+      CAVIX_LLM_PROVIDER: ${CAVIX_LLM_PROVIDER:-anthropic}
+      CAVIX_LLM_MODEL: ${CAVIX_LLM_MODEL:-claude-opus-5}
+      CAVIX_DEMO: "false"
+    expose:
+      - "8088"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8088/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ---------- edge: receives webhooks, queues jobs (Render's `cavix-edge`) ----------
+  edge:
+    build:
+      context: ../..
+      dockerfile: deploy/oracle/Dockerfile.edge
+    image: cavix/edge:local
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      CAVIX_EDGE_ADDR: ":8080"
+      CAVIX_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      CAVIX_WEBHOOK_SECRET: ${CAVIX_WEBHOOK_SECRET:?set CAVIX_WEBHOOK_SECRET in .env}
+      CAVIX_BOT_HANDLE: ${CAVIX_BOT_HANDLE:-cavixcode,cavix}
+      # The internal name, not the public URL: this call never needs to leave the
+      # box, and routing it through Caddy would make the edge depend on DNS and a
+      # certificate to talk to a container two inches away.
+      CAVIX_CONTROL_PLANE_URL: http://cavix:8088
+      CAVIX_INTERNAL_TOKEN: ${CAVIX_INTERNAL_TOKEN}
+      CAVIX_GITLAB_WEBHOOK_SECRET: ${CAVIX_GITLAB_WEBHOOK_SECRET}
+      CAVIX_BITBUCKET_WEBHOOK_SECRET: ${CAVIX_BITBUCKET_WEBHOOK_SECRET}
+      CAVIX_AZURE_WEBHOOK_SECRET: ${CAVIX_AZURE_WEBHOOK_SECRET}
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ---------- orchestrator: runs the review (Render's `cavix-orchestrator`) ----------
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: deploy/oracle/Dockerfile.node
+    image: cavix/node:local
+    restart: unless-stopped
+    command: ["node", "services/orchestrator/src/main.ts"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      cavix:
+        condition: service_started
+    environment:
+      CAVIX_HEALTH_PORT: "8080"
+      CAVIX_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      CAVIX_CONTROL_PLANE_URL: http://cavix:8088
+      CAVIX_INTERNAL_TOKEN: ${CAVIX_INTERNAL_TOKEN}
+      CAVIX_APP_ID: ${CAVIX_APP_ID}
+      # A .pem is multi-line, and a multi-line value in a shell-parsed .env is
+      # the most common way this breaks. Mount the file and name the path.
+      CAVIX_APP_PRIVATE_KEY_FILE: /etc/cavix/github-app.pem
+      CAVIX_BOT_HANDLE: ${CAVIX_BOT_HANDLE:-cavixcode,cavix}
+      # "local" runs candidate tests as child processes of this container. Read
+      # the note in .env.example before switching this to docker.
+      CAVIX_SANDBOX_BACKEND: ${CAVIX_SANDBOX_BACKEND:-local}
+      CAVIX_NARROW_REREVIEWS: ${CAVIX_NARROW_REREVIEWS:-false}
+      CAVIX_LLM_PROVIDER: ${CAVIX_LLM_PROVIDER:-anthropic}
+      CAVIX_LLM_MODEL: ${CAVIX_LLM_MODEL:-claude-opus-5}
+      CAVIX_GITLAB_URL: ${CAVIX_GITLAB_URL}
+      CAVIX_BITBUCKET_SERVER_URL: ${CAVIX_BITBUCKET_SERVER_URL}
+      CAVIX_AZURE_URL: ${CAVIX_AZURE_URL}
+    volumes:
+      # Read-only: the orchestrator signs a JWT with this key and has no reason
+      # to write it. bootstrap.sh creates ./secrets and puts the .pem there.
+      - ./secrets:/etc/cavix:ro
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ---------- Caddy: TLS and the front door ----------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    # The only two ports on this machine that face the internet. 80 is not
+    # optional even though the site is HTTPS: Let's Encrypt validates over it,
+    # so closing it means the certificate quietly stops renewing in 60 days.
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CAVIX_DOMAIN: ${CAVIX_DOMAIN:?set CAVIX_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here. Losing this volume is not fatal, but it does mean
+      # re-issuing, and Let's Encrypt counts re-issues against a weekly limit.
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - cavix
+      - edge
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:

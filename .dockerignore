@@ -1,0 +1,17 @@
+# Build context exclusions. Kept at the repo root because that is the only
+# location every Docker builder honours (BuildKit also reads a per-Dockerfile
+# copy, the classic builder does not).
+node_modules
+**/node_modules
+.git
+.github
+.data
+coverage
+services/edge/bin
+deploy/oracle/.env
+deploy/oracle/secrets
+deploy/oracle/backups
+*.pem
+*.key
+*.log
+*.tsbuildinfo

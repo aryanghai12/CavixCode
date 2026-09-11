@@ -1,0 +1,41 @@
+# The front door. Caddy terminates TLS, gets and renews the certificate on its
+# own, and splits traffic two ways: /webhook belongs to the edge, the rest is the
+# site. On Render those were two hostnames; here they are one, which is simpler
+# to configure in GitHub and means one certificate instead of two.
+
+# There is deliberately no `email` directive here. Caddy accepts one for the ACME
+# account, but the value would come from an env var that is allowed to be blank,
+# and a blank one expands to `email` with no argument — a parse error that stops
+# Caddy from starting at all. Trading a working front door for a notification is
+# a bad deal, particularly since Caddy renews on its own at a third of the
+# certificate's remaining life and does not need to be reminded.
+
+{$CAVIX_DOMAIN} {
+	encode zstd gzip
+
+	# Webhooks. Kept first because order decides, and a webhook routed to the
+	# site returns 404 to GitHub, which retries a few times and then marks the
+	# delivery failed — with no sign anywhere that the request reached the box.
+	handle /webhook* {
+		reverse_proxy edge:8080
+	}
+
+	# Everything else: marketing site, docs, login, dashboard, JSON API.
+	handle {
+		reverse_proxy cavix:8088 {
+			# The control plane decides "am I on HTTPS" from CAVIX_PUBLIC_URL, so
+			# these headers are not what make cookies Secure. They are what make
+			# request logs and any future rate limiting see the real client
+			# rather than Caddy's address on the docker network.
+			header_up X-Forwarded-Proto https
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

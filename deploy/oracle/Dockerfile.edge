@@ -1,0 +1,16 @@
+# The webhook receiver. Go, zero third-party dependencies (see services/edge/go.mod),
+# so there is no go.sum to verify and nothing to fetch at build time — which is
+# also what lets this build on an air-gapped box.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY services/edge/ ./
+# CGO off → a static binary that runs on scratch-adjacent images and does not
+# care which libc the final stage ships.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /edge ./cmd/edge
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tini && adduser -D -u 10001 edge
+COPY --from=build /edge /usr/local/bin/edge
+USER edge
+EXPOSE 8080
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/edge"]

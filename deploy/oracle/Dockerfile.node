@@ -1,0 +1,30 @@
+# Control-plane and orchestrator. One image, two start commands — they share the
+# whole workspace, so building twice would only duplicate 200MB of node_modules.
+#
+# Node 24 runs the .ts sources directly (type stripping, on by default since
+# 22.18), which is why there is no build step and no dist/. That is deliberate:
+# the thing that runs in production is the thing you read in the repo.
+FROM node:24-alpine
+
+# git: the orchestrator shells out to it to fetch the diff of a pull request.
+# The sandbox "local" backend runs candidate tests with the tools present here,
+# so this is also the floor of what a reviewed repo can be tested against.
+RUN apk add --no-cache git ca-certificates tini
+
+WORKDIR /app
+
+# Manifests first so a code-only change reuses the install layer.
+COPY package.json package-lock.json tsconfig.json ./
+COPY packages ./packages
+COPY services ./services
+COPY eval ./eval
+
+# `npm ci` is exact and fails loudly when the lockfile has drifted; the fallback
+# exists because a lockfile that drifted is not a reason to have no deployment.
+RUN npm ci --omit=dev || npm install --omit=dev
+
+ENV NODE_ENV=production
+
+# tini reaps the sandbox's child processes. Without it PID 1 is node, node does
+# not reap, and a few hundred reviews later the container is out of process slots.
+ENTRYPOINT ["/sbin/tini", "--"]
