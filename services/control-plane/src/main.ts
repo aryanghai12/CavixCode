@@ -7,7 +7,7 @@
 // Without it, the store is in-memory (great for demos; cleared on restart).
 import { createControlPlane } from "./server.ts";
 import { InMemoryStore } from "./store.ts";
-import { PostgresPersistence, startAutosave, type Autosave } from "./persistence.ts";
+import { PostgresPersistence, startAutosave, recoveryChoice, type Autosave } from "./persistence.ts";
 import { demoEnabled } from "./github.ts";
 
 function log(level: string, msg: string, meta?: Record<string, unknown>): void {
@@ -47,12 +47,12 @@ function seedDemo(store: InMemoryStore): void {
 /**
  * Keep trying to reach Postgres, and adopt it the moment it answers.
  *
- * The store is already serving requests in memory by the time this runs, so the
- * ordering matters: LOAD first and only merge in what the database holds if this
- * process has not yet been given anything of its own. A process that has taken
- * real work since booting must not have it replaced by an older snapshot, and a
- * process that has taken none must not overwrite the database with its emptiness.
- * `save` refuses the second case outright; this handles the first.
+ * The store is already serving requests in memory by the time this runs, and the
+ * rule when the two disagree is that THE DATABASE WINS. Whatever is stored is
+ * the durable record of every workspace; whatever is in memory accumulated while
+ * the site was visibly broken, showing an empty dashboard to people who then set
+ * things up again. Letting that overwrite the stored copy is how a workspace
+ * disappears for good.
  */
 async function retryPersistence(
   dbUrl: string,
@@ -66,19 +66,38 @@ async function retryPersistence(
         onError: (e) => log("warn", "Postgres dropped a connection; the pool will reopen", { err: e.message }),
       });
       const snap = await p.load();
-      if (snap && store.isEmpty()) {
+      const choice = recoveryChoice(snap !== null, store.isEmpty());
+      if (snap && choice === "load") {
         store.restore(snap);
         log("info", "persistence: recovered, and loaded the stored workspace", {
           attempt,
           orgs: store.listOrgs().length,
         });
       } else if (snap) {
-        // Somebody signed up or connected a repository while the database was
-        // unreachable. Their work is in memory and the snapshot is older, so
-        // restoring would throw away the newer of the two.
-        log("warn", "persistence: recovered, but this process already holds newer state; keeping it", {
+        // THE DURABLE COPY WINS. This branch used to keep what was in memory and
+        // let the next autosave tick write it over the stored snapshot, and that
+        // is a data-loss bug rather than a conflict-resolution policy.
+        //
+        // The sequence that hurts: the database is asleep or misconfigured at
+        // boot, so the site comes up looking like a brand new install. Somebody
+        // signs in, finds an empty workspace, and sets it up again: connects a
+        // repository, pastes an API key. Now the store is no longer empty, so
+        // the emptiness guard in save() does not fire, and three seconds later a
+        // workspace with one repository replaces one with months of history.
+        //
+        // Weighed honestly, the two outcomes are not comparable: keeping memory
+        // risks destroying everything anyone has ever stored, while preferring
+        // the database costs whatever was done during the outage, on a site that
+        // was visibly broken at the time. So the stored snapshot is loaded and
+        // what accumulated in memory is dropped, loudly.
+        const before = { orgs: store.listOrgs().length };
+        store.restore(snap);
+        log("error", "persistence: recovered, and DISCARDED work done while the database was unreachable", {
           attempt,
-          note: "the stored snapshot was NOT loaded, and will be replaced by what is in memory",
+          discardedOrgs: before.orgs,
+          loadedOrgs: store.listOrgs().length,
+          why: "anything created during the outage would otherwise have overwritten the stored workspace on the next save",
+          note: "the stored workspace is intact; redo whatever was set up during the outage",
         });
       } else {
         log("info", "persistence: recovered (the database holds nothing yet)", { attempt });
@@ -90,8 +109,22 @@ async function retryPersistence(
       log("warn", "Postgres still unreachable", { attempt, err: (e as Error).message });
     }
   }
-  log("error", "gave up reaching Postgres; this process is not saving anything", {
+  // The write gate stays SHUT, and that is the point.
+  //
+  // Opening it here was tempting on the grounds that `store.restore` can no
+  // longer run, so nothing is left to overwrite. But nothing is left to SAVE
+  // either: with no autosave, every signup and every connected repository lives
+  // only in this process's memory, and the next restart, which will very likely
+  // reach the database that was merely asleep, loads the stored snapshot over
+  // the top of all of it. That is the same silent loss by a slower route, and
+  // the person it happens to is once again told nothing.
+  //
+  // So the deployment is left plainly broken instead of convincingly working.
+  // DATABASE_URL was set, which means persistence was asked for; refusing writes
+  // until it exists is the honest reading of that request.
+  log("error", "gave up reaching Postgres; the site stays READ-ONLY (writes refused with 503)", {
     attempts: PERSISTENCE_ATTEMPTS,
+    why: "with no autosave, anything written now is lost at the next restart when the stored snapshot loads over it",
     fix: "check DATABASE_URL and that the database is awake, then redeploy",
   });
 }
@@ -99,11 +132,57 @@ async function retryPersistence(
 /** Roughly ten minutes of trying, which outlasts any cold start worth waiting for. */
 const PERSISTENCE_ATTEMPTS = 30;
 
+/**
+ * Say out loud which database this process is about to talk to, and complain if
+ * the secrets are the development fallbacks.
+ *
+ * Both of these were silent, and both produce the same bewildering symptom: you
+ * sign in and your workspace is empty. Naming the host is the fastest way to
+ * catch a deployment still pointed at an old database after a move, and the
+ * secret check catches the other half, because CAVIX_SECRET_KEY is the key to
+ * every stored BYOK key and OAuth token. Running on the built-in fallback means
+ * anything saved now stops decrypting the moment a real key is set, and the
+ * store reports an undecryptable blob as "no credential", so the only thing the
+ * owner sees is their key and repositories quietly gone.
+ *
+ * The password is stripped before logging. Connection strings end up in log
+ * aggregators, screenshots and support threads.
+ */
+function reportConfig(dbUrl: string | undefined): void {
+  if (dbUrl) {
+    let where = "unparseable DATABASE_URL";
+    try {
+      const u = new URL(dbUrl);
+      where = `${u.hostname}${u.port ? ":" + u.port : ""}${u.pathname}`;
+    } catch {
+      /* keep the placeholder; never log the raw string */
+    }
+    log("info", "persistence: target database", { host: where });
+  }
+
+  const usingDefaultKey = !process.env.CAVIX_SECRET_KEY;
+  const usingDefaultSession = !process.env.CAVIX_SESSION_SECRET;
+  if ((usingDefaultKey || usingDefaultSession) && dbUrl) {
+    log("error", "running against a real database with development secrets", {
+      CAVIX_SECRET_KEY: usingDefaultKey ? "MISSING (using the public dev fallback)" : "set",
+      CAVIX_SESSION_SECRET: usingDefaultSession ? "MISSING (using the public dev fallback)" : "set",
+      effect:
+        "stored API keys and OAuth tokens are encrypted with a key that is published in this repository, " +
+        "and they will silently stop decrypting the moment a real CAVIX_SECRET_KEY is set",
+      fix: "generate each once with `openssl rand -hex 32`, set them, and never change them again",
+    });
+  }
+}
+
 async function main(): Promise<void> {
   const store = new InMemoryStore();
   let autosave: Autosave | null = null;
+  // True only while background recovery is still in flight; see the block that
+  // sets it, and ControlPlaneOptions.readOnly in server.ts.
+  let recovering = false;
 
   const dbUrl = process.env.DATABASE_URL ?? process.env.CAVIX_DATABASE_URL;
+  reportConfig(dbUrl);
   if (dbUrl) {
     try {
       const p = await PostgresPersistence.create(dbUrl, {
@@ -141,8 +220,28 @@ async function main(): Promise<void> {
         effect: "the site is running WITHOUT persistence and may look empty; nothing is being saved yet",
         note: "existing data is still in the database, not lost",
       });
+      // Writes are refused until persistence is actually RUNNING. The site is UP
+      // either way: the
+      // marketing pages, the docs and the dashboard all read fine, so a deploy
+      // that lands while Neon is asleep still passes its health check and still
+      // serves the site, and the health check is why waiting here instead is not
+      // an option (ten minutes of a failing /healthz is a failed deploy).
+      //
+      // What is not fine is accepting a signup during those minutes. Recovery
+      // ends in `store.restore(snap)`, which by design DISCARDS whatever
+      // accumulated in memory, so an account created at minute two is gone at
+      // minute three. The person who created it is not told, and the sequence
+      // reads to them exactly like the workspace-vanishing bug this whole file
+      // is written against. Refusing the write with a 503 they can retry is the
+      // honest version of the same few minutes.
+      //
+      // The gate lifts on the callback below and nowhere else, because that
+      // callback fires exactly when autosave starts. Giving up after ten minutes
+      // is not a reason to open it; see the log at the end of retryPersistence.
+      recovering = true;
       void retryPersistence(dbUrl, store, (a) => {
         autosave = a;
+        recovering = false;
       });
     }
   } else {
@@ -158,8 +257,13 @@ async function main(): Promise<void> {
     log("info", "production mode: empty store, real auth (set CAVIX_DEMO=true for sample data)");
   }
 
-  const server = createControlPlane(store).listen(port, host, () => {
-    log("info", "listening", { host, port, url: `http://127.0.0.1:${port}` });
+  const server = createControlPlane(store, { readOnly: () => recovering }).listen(port, host, () => {
+    log("info", "listening", {
+      host,
+      port,
+      url: `http://127.0.0.1:${port}`,
+      ...(recovering ? { note: "read-only until the database is recovered; reads are served, writes are refused with 503" } : {}),
+    });
   });
 
   const shutdown = async () => {

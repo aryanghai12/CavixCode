@@ -139,23 +139,108 @@ function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "control-plane", msg, ...meta }));
 }
 
-export function createControlPlane(store: Store): http.Server {
+export interface ControlPlaneOptions {
+  /**
+   * Answer "is this process allowed to accept writes yet", asked per request.
+   *
+   * It is a function rather than a flag because the answer CHANGES while the
+   * server is already listening: `main.ts` starts the site immediately when
+   * Postgres is asleep, so the marketing pages and the docs are served rather
+   * than the deploy failing its health check, and recovery runs behind it. Until
+   * that recovery finishes, the store in memory is not the durable record and is
+   * about to be replaced by whatever the database holds, so anything written now
+   * is discarded a few seconds later. Returning true here is what stops a
+   * sign-up, a connected repository or a pasted API key from being accepted into
+   * a store that is on its way to being overwritten.
+   */
+  readOnly?: () => boolean;
+}
+
+export function createControlPlane(store: Store, options: ControlPlaneOptions = {}): http.Server {
   return http.createServer(async (req, res) => {
     try {
-      await route(store, req, res);
+      await route(store, req, res, options);
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
   });
 }
 
-async function route(store: Store, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+/** Reads pass through; anything that could change the store does not. */
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * The GETs that write.
+ *
+ * Method is nearly enough to tell a read from a write here, but not quite, and
+ * the exceptions split into two kinds that need different answers.
+ *
+ * NAVIGATIONS are the OAuth flow: four steps a BROWSER walks through, each of
+ * which touches the store (the state records that make the handshake
+ * replay-proof, then the token itself). A browser at the end of a redirect chain
+ * cannot do anything with a page of JSON, so these redirect to a page that can
+ * explain itself.
+ *
+ * READS THAT REFRESH are the dashboard's GitHub panels. They look like pure
+ * reads and are fetched as JSON, but every one of them goes through
+ * `liveGitHubToken`, which renews an expired token and writes the new one back.
+ * That is the most expensive write on this list to lose: GitHub ROTATES the
+ * refresh token when it is used, so a refresh completed during recovery leaves
+ * the snapshot's copy already spent. Restoring that snapshot hands the user a
+ * refresh token GitHub will never honour again, and their only way out is to
+ * reconnect from scratch — a permanent break caused by loading a page.
+ */
+const MUTATING_GET_NAVIGATIONS: Record<string, string> = {
+  "/api/auth/github/start": "/login?error=recovering",
+  "/api/auth/github/callback": "/login?error=recovering",
+  "/api/github/connect": "/app/repositories?error=recovering",
+  "/api/github/setup": "/app/repositories?error=recovering",
+};
+
+const MUTATING_GET_APIS = new Set([
+  "/api/github/status",
+  "/api/github/installations",
+  "/api/github/orgs",
+  "/api/github/repos",
+]);
+
+async function route(
+  store: Store,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  options: ControlPlaneOptions = {},
+): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const p = url.pathname;
   const m = req.method ?? "GET";
 
 
   if (m === "GET" && p === "/healthz") return void sendJson(res, 200, { status: "ok" });
+
+  // Mutations are refused while the durable store is still being recovered.
+  //
+  // 503 and Retry-After, not 500: this is a temporary, self-clearing condition,
+  // and the orchestrator posting a finished review is the caller that most needs
+  // to know the difference. A 503 is retried and the review survives; a silent
+  // 200 into a store that is seconds away from being replaced loses it.
+  //
+  // /healthz is answered above so the host does not kill a service that is
+  // recovering exactly as designed, and reads are served so the site stays up
+  // and legible rather than going dark.
+  if (options.readOnly?.()) {
+    const redirect = m === "GET" ? MUTATING_GET_NAVIGATIONS[p] : undefined;
+    if (redirect) {
+      res.writeHead(302, { location: redirect, "retry-after": "15" });
+      return void res.end();
+    }
+    if (!READ_METHODS.has(m) || (m === "GET" && MUTATING_GET_APIS.has(p))) {
+      res.setHeader("retry-after", "15");
+      return void sendJson(res, 503, {
+        error: "the workspace is still being recovered from the database; changes are not being accepted yet",
+        retryAfterSeconds: 15,
+      });
+    }
+  }
 
   // Stage 13's observability half, for the other service.
   //

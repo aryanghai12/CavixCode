@@ -5,23 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Docs · Cavix</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=13">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=13">
-<link rel="apple-touch-icon" href="/cavix-mark.svg?v=13">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#0C1020">
+<link rel="stylesheet" href="/theme.css?v=51">
+<link rel="stylesheet" href="/site.css?v=51">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=51">
+<link rel="apple-touch-icon" href="/cavix-mark.svg?v=51">
 </head>
 <body>
+<div class="aurora" id="aurora" aria-hidden="true">
+  <span class="a1"></span><span class="a2"></span><span class="a3"></span><span class="a4"></span>
+</div>
+<div class="grid-plane" aria-hidden="true"></div>
+<div class="cursor" aria-hidden="true"></div>
+<div class="cursor-ring" aria-hidden="true"></div>
 
-<nav class="nav">
-  <div class="container nav-inner">
-    <a href="/" class="logo"><span class="logo-mark"><img class="lm-svg" src="/cavix-mark.svg?v=13" alt="" aria-hidden="true"></span> Cavix</a>
+<nav class="nav" id="nav">
+  <div class="nav-shell">
+    <a href="/" class="logo"><span class="logo-mark"><img src="/cavix-mark.svg?v=51" alt="" aria-hidden="true"></span> Cavix</a>
+
     <div class="nav-links">
-      <a href="/#pillars">Product</a><a href="/#pricing">Pricing</a><a href="/docs">Docs</a><a href="/#enterprise">Enterprise</a>
+      <a href="/#proof">How it works</a>
+      <a href="/#review">Sample review</a>
+      <a href="/#capabilities">Capabilities</a>
+      <a href="/#pipeline">Pipeline</a>
+      <a href="/#compare">Compare</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/#enterprise">Enterprise</a>
+      <a href="/docs" class="on">Docs</a>
     </div>
+
     <div class="nav-cta">
-      <a href="/login" class="btn btn-ghost btn-sm">Log in</a>
+      <a href="/login" class="btn btn-glass btn-sm btn-hide-sm">Log in</a>
       <a href="/signup" class="btn btn-primary btn-sm">Start free</a>
+      <button class="nav-burger" id="burger" aria-label="Open menu" aria-expanded="false"><span></span></button>
     </div>
+
+    <div class="nav-progress" aria-hidden="true"><i id="navProgress"></i></div>
+  </div>
+
+  <div class="nav-sheet" id="navSheet">
+    <a href="/#proof">How it works</a>
+    <a href="/#coverage">Coverage</a>
+    <a href="/#review">Sample review</a>
+    <a href="/#capabilities">Capabilities</a>
+    <a href="/#pipeline">Pipeline</a>
+    <a href="/#compare">Compare</a>
+    <a href="/#pricing">Pricing</a>
+    <a href="/#enterprise">Enterprise</a>
+    <a href="/docs">Docs</a>
+    <a href="/login">Log in</a>
   </div>
 </nav>
 
@@ -172,11 +206,12 @@ failOn: [critical]</code></pre>
       <li><b>Sandbox isolation</b>, untrusted code runs network-less with strict caps; assume-breach, defense-in-depth.</li>
     </ul>
 
-    <p style="margin-top:40px"><a href="/signup" class="btn btn-primary">Start free →</a> &nbsp; <a href="/" class="btn btn-soft">Back to home</a></p>
+    <p style="margin-top:40px"><a href="/signup" class="btn btn-primary">Start free →</a> &nbsp; <a href="/" class="btn btn-glass">Back to home</a></p>
   </main>
 </div>
-<script src="/icons.js?v=13"></script>
-<script src="/docs.js?v=13"></script>
-<script src="/fx.js?v=13"></script>
+<script src="/icons.js?v=51"></script>
+<script src="/docs.js?v=51"></script>
+<script src="/motion.js?v=51"></script>
+<script src="/site.js?v=51"></script>
 </body>
 </html>

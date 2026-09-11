@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { connectionUrl, wantSsl, startAutosave, isEmptySnapshot, type Persistence } from "@cavix/control-plane";
+import { connectionUrl, wantSsl, startAutosave, isEmptySnapshot, recoveryChoice, type Persistence } from "@cavix/control-plane";
 import type { StoreSnapshot } from "@cavix/control-plane";
 
 // Managed Postgres closes connections routinely: maintenance, failover, an idle
@@ -142,4 +142,32 @@ test("the deliberate wipe has an escape hatch", () => {
     if (previous === undefined) delete process.env.CAVIX_ALLOW_EMPTY_OVERWRITE;
     else process.env.CAVIX_ALLOW_EMPTY_OVERWRITE = previous;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Recovery policy: which copy wins when the database comes back and this
+// process already holds state.
+//
+// This is the rule that decides whether a workspace survives a database outage,
+// so it is pinned here rather than left implicit in main.ts. The bug it exists
+// to prevent: the database is unreachable at boot, the site serves an empty
+// dashboard, somebody signs in and sets everything up again, and the next
+// autosave writes that near-empty workspace over the real one. The emptiness
+// guard in `save` does not catch it, because by then the store is not empty.
+// ---------------------------------------------------------------------------
+
+test("a recovered database with nothing in it just starts saving", () => {
+  assert.equal(recoveryChoice(false, true), "nothing-stored");
+  assert.equal(recoveryChoice(false, false), "nothing-stored");
+});
+
+test("a stored workspace is loaded when this process holds nothing", () => {
+  assert.equal(recoveryChoice(true, true), "load");
+});
+
+test("the stored workspace wins over anything created during the outage", () => {
+  // The important one. Memory must never be preferred here: whatever is in it
+  // accumulated while the site was showing an empty dashboard, and letting it
+  // through means the next save destroys the real workspace.
+  assert.equal(recoveryChoice(true, false), "load-discarding-memory");
 });
