@@ -170,24 +170,39 @@ export function createControlPlane(store: Store, options: ControlPlaneOptions = 
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
- * The GETs that write, and where to send a browser that hits one too early.
+ * The GETs that write.
  *
- * Method is nearly enough to tell a read from a write here, but not quite: the
- * OAuth flow is four browser redirects, and every one of them touches the store
- * (the state records that make the handshake replay-proof, and then the token
- * itself). Leaving them out of the gate would leave the single most damaging
- * write still open, because a token stored during recovery is dropped with
- * everything else and the owner is left looking at a disconnected GitHub.
+ * Method is nearly enough to tell a read from a write here, but not quite, and
+ * the exceptions split into two kinds that need different answers.
  *
- * They redirect rather than answering 503, because a browser is at the other end
- * of a redirect chain and a page of JSON is a dead end for the person reading it.
+ * NAVIGATIONS are the OAuth flow: four steps a BROWSER walks through, each of
+ * which touches the store (the state records that make the handshake
+ * replay-proof, then the token itself). A browser at the end of a redirect chain
+ * cannot do anything with a page of JSON, so these redirect to a page that can
+ * explain itself.
+ *
+ * READS THAT REFRESH are the dashboard's GitHub panels. They look like pure
+ * reads and are fetched as JSON, but every one of them goes through
+ * `liveGitHubToken`, which renews an expired token and writes the new one back.
+ * That is the most expensive write on this list to lose: GitHub ROTATES the
+ * refresh token when it is used, so a refresh completed during recovery leaves
+ * the snapshot's copy already spent. Restoring that snapshot hands the user a
+ * refresh token GitHub will never honour again, and their only way out is to
+ * reconnect from scratch — a permanent break caused by loading a page.
  */
-const MUTATING_GETS: Record<string, string> = {
+const MUTATING_GET_NAVIGATIONS: Record<string, string> = {
   "/api/auth/github/start": "/login?error=recovering",
   "/api/auth/github/callback": "/login?error=recovering",
   "/api/github/connect": "/app/repositories?error=recovering",
   "/api/github/setup": "/app/repositories?error=recovering",
 };
+
+const MUTATING_GET_APIS = new Set([
+  "/api/github/status",
+  "/api/github/installations",
+  "/api/github/orgs",
+  "/api/github/repos",
+]);
 
 async function route(
   store: Store,
@@ -213,12 +228,12 @@ async function route(
   // recovering exactly as designed, and reads are served so the site stays up
   // and legible rather than going dark.
   if (options.readOnly?.()) {
-    const redirect = m === "GET" ? MUTATING_GETS[p] : undefined;
+    const redirect = m === "GET" ? MUTATING_GET_NAVIGATIONS[p] : undefined;
     if (redirect) {
       res.writeHead(302, { location: redirect, "retry-after": "15" });
       return void res.end();
     }
-    if (!READ_METHODS.has(m)) {
+    if (!READ_METHODS.has(m) || (m === "GET" && MUTATING_GET_APIS.has(p))) {
       res.setHeader("retry-after", "15");
       return void sendJson(res, 503, {
         error: "the workspace is still being recovered from the database; changes are not being accepted yet",

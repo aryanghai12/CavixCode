@@ -6,7 +6,7 @@
 window.CAVIX_PRICING = {
   annualDiscount: 0.2,
   overage: "$0.40 per agent-minute",
-  seatNote: "Only people who actually open pull requests count as seats, and annual saves 20%",
+  seatNote: "Only people who actually open pull requests count as seats, and annual saves about 20%",
   smbNote: "Smaller teams in India and similar markets can start on a flat plan from about $15 a month, which covers roughly 100 reviews.",
   tiers: [
     {
@@ -69,8 +69,16 @@ window.cavixPrice = function (tier, cycle, source) {
   if (tier.custom) return { amount: tier.priceLabel || "Custom", per: "" };
   const base = source === "managed" ? tier.managed : tier.byok;
   if (base === 0) return { amount: "$0", per: "forever" };
-  const monthly = cycle === "annual" ? Math.round(base * (1 - window.CAVIX_PRICING.annualDiscount)) : base;
-  return { amount: `$${monthly}`, per: "per seat / month" };
+  if (cycle !== "annual") return { amount: `$${base}`, per: "per seat / month", saved: 0 };
+  // Prices are shown as whole dollars, so the annual figure is rounded and the
+  // saving it actually delivers is NOT the headline 20%. Team on your own key is
+  // the case that bites: $12 × 0.8 is $9.60, shown as $10, which is 17% off, and
+  // a card reading "$10 / billed annually, save 20%" is a price claim that does
+  // not survive its own arithmetic. Rounding can also land the other way ($24 →
+  // $19 is 21%), so the saving is derived from the number on the card rather
+  // than asserted alongside it.
+  const monthly = Math.round(base * (1 - window.CAVIX_PRICING.annualDiscount));
+  return { amount: `$${monthly}`, per: "per seat / month", saved: Math.round((1 - monthly / base) * 100) };
 };
 
 // Render the marketing pricing cards into a mount element.
@@ -85,7 +93,7 @@ window.renderMarketingPricing = function (mountId, state) {
   // the docs and left the reader to hunt for it.
   mount.innerHTML = window.CAVIX_PRICING.tiers.map((t) => {
     const p = window.cavixPrice(t, state.cycle, state.source);
-    const save = t.custom ? "" : (state.cycle === "annual" && t.byok !== 0 ? "billed annually, save 20%" : "billed monthly");
+    const save = t.custom ? "" : (state.cycle === "annual" && t.byok !== 0 ? `billed annually, save ${p.saved}%` : "billed monthly");
     const href = t.custom ? "/#enterprise" : "/signup";
     return `<div class="plan tilt${t.featured ? " plan-featured" : ""}">
       ${t.featured ? `<span class="plan-flag">Most popular</span>` : ""}

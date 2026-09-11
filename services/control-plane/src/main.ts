@@ -58,26 +58,6 @@ async function retryPersistence(
   dbUrl: string,
   store: InMemoryStore,
   onReady: (autosave: Autosave) => void,
-  onSettled: () => void,
-): Promise<void> {
-  try {
-    await attemptRecovery(dbUrl, store, onReady);
-  } finally {
-    // Whichever way this ended, the gate lifts.
-    //
-    // Including "gave up": after ten minutes of trying, `store.restore` is never
-    // going to run, so nothing further is at risk of being overwritten and there
-    // is no longer a reason to refuse writes. The site is then what it says in
-    // the log, an in-memory instance saving nothing, which is bad but is not
-    // improved by also being unusable.
-    onSettled();
-  }
-}
-
-async function attemptRecovery(
-  dbUrl: string,
-  store: InMemoryStore,
-  onReady: (autosave: Autosave) => void,
 ): Promise<void> {
   for (let attempt = 1; attempt <= PERSISTENCE_ATTEMPTS; attempt++) {
     await new Promise((r) => setTimeout(r, Math.min(30_000, 2_000 * attempt)));
@@ -129,8 +109,22 @@ async function attemptRecovery(
       log("warn", "Postgres still unreachable", { attempt, err: (e as Error).message });
     }
   }
-  log("error", "gave up reaching Postgres; this process is not saving anything", {
+  // The write gate stays SHUT, and that is the point.
+  //
+  // Opening it here was tempting on the grounds that `store.restore` can no
+  // longer run, so nothing is left to overwrite. But nothing is left to SAVE
+  // either: with no autosave, every signup and every connected repository lives
+  // only in this process's memory, and the next restart, which will very likely
+  // reach the database that was merely asleep, loads the stored snapshot over
+  // the top of all of it. That is the same silent loss by a slower route, and
+  // the person it happens to is once again told nothing.
+  //
+  // So the deployment is left plainly broken instead of convincingly working.
+  // DATABASE_URL was set, which means persistence was asked for; refusing writes
+  // until it exists is the honest reading of that request.
+  log("error", "gave up reaching Postgres; the site stays READ-ONLY (writes refused with 503)", {
     attempts: PERSISTENCE_ATTEMPTS,
+    why: "with no autosave, anything written now is lost at the next restart when the stored snapshot loads over it",
     fix: "check DATABASE_URL and that the database is awake, then redeploy",
   });
 }
@@ -226,7 +220,8 @@ async function main(): Promise<void> {
         effect: "the site is running WITHOUT persistence and may look empty; nothing is being saved yet",
         note: "existing data is still in the database, not lost",
       });
-      // Writes are refused until this settles. The site is UP either way: the
+      // Writes are refused until persistence is actually RUNNING. The site is UP
+      // either way: the
       // marketing pages, the docs and the dashboard all read fine, so a deploy
       // that lands while Neon is asleep still passes its health check and still
       // serves the site, and the health check is why waiting here instead is not
@@ -239,13 +234,15 @@ async function main(): Promise<void> {
       // reads to them exactly like the workspace-vanishing bug this whole file
       // is written against. Refusing the write with a 503 they can retry is the
       // honest version of the same few minutes.
+      //
+      // The gate lifts on the callback below and nowhere else, because that
+      // callback fires exactly when autosave starts. Giving up after ten minutes
+      // is not a reason to open it; see the log at the end of retryPersistence.
       recovering = true;
-      void retryPersistence(
-        dbUrl,
-        store,
-        (a) => { autosave = a; },
-        () => { recovering = false; },
-      );
+      void retryPersistence(dbUrl, store, (a) => {
+        autosave = a;
+        recovering = false;
+      });
     }
   } else {
     log("info", "persistence: in-memory (set DATABASE_URL for a Postgres that survives restarts)");

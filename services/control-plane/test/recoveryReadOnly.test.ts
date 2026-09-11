@@ -76,3 +76,62 @@ test("once recovery settles the gate lifts and writes are accepted again", async
     assert.equal(store.isEmpty(), false);
   });
 });
+
+// The write hiding inside a read.
+//
+// GET /api/github/status looks like a pure read and is fetched as JSON by the
+// dashboard on every visit to the Repositories page. It is not: it resolves a
+// live token first, and an expired one is renewed and written back. GitHub
+// rotates the refresh token when it is spent, so a refresh that lands during
+// recovery leaves the snapshot's copy dead — restore then hands the user a
+// refresh token GitHub will never honour again, and the only way out is to
+// reconnect from scratch. Refusing the request is what keeps the stored
+// credential the one that still works.
+test("recovering: a GET that would refresh an expired token is refused, and the stored token is untouched", async () => {
+  process.env.CAVIX_GITHUB_CLIENT_ID = "abc";
+  process.env.CAVIX_GITHUB_CLIENT_SECRET = "def";
+  // Signing in is itself a write, so the session is established BEFORE the gate
+  // closes — this test is about the reads that follow, not about login.
+  let recovering = false;
+  try {
+    await withServer(() => recovering, async (base, store) => {
+      store.createOrg("acme", { tier: "paid" });
+      const user = store.createUser({
+        email: "owner@acme.test", name: "Owner", password: "cavixdemo", org: "acme", role: "owner",
+      });
+      const expired = {
+        accessToken: "gho_expired",
+        refreshToken: "ghr_original",
+        expiresAt: Date.now() - 60_000,
+      };
+      store.setOAuthToken(user.id, expired);
+
+      const login = await fetch(base + "/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "owner@acme.test", password: "cavixdemo" }),
+      });
+      assert.equal(login.status, 200);
+      const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+
+      recovering = true;
+      for (const path of ["/api/github/status", "/api/github/installations", "/api/github/orgs", "/api/github/repos"]) {
+        const res = await fetch(base + path, { headers: { cookie } });
+        assert.equal(res.status, 503, path);
+        assert.equal(res.headers.get("retry-after"), "15", path);
+      }
+
+      // The credential GitHub still accepts is exactly the one that was stored.
+      assert.deepEqual(store.getOAuthToken(user.id), expired);
+
+      // And it is a gate, not a permanent 404: the same read works once the
+      // store is the durable record again.
+      recovering = false;
+      const after = await fetch(base + "/api/github/status", { headers: { cookie } });
+      assert.equal(after.status, 200);
+    });
+  } finally {
+    delete process.env.CAVIX_GITHUB_CLIENT_ID;
+    delete process.env.CAVIX_GITHUB_CLIENT_SECRET;
+  }
+});

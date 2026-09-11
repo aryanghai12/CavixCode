@@ -6,6 +6,14 @@
   let org = null;
 
   // ---------- tiny helpers ----------
+  // The sidebar's open state lives in a class, which tells a sighted reader
+  // everything and a screen reader nothing. Two places change it (the button
+  // and every navigation), so both go through here rather than each remembering
+  // to keep the attribute in step with the class.
+  const setNav = (open) => {
+    const btn = $("menuBtn");
+    if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+  };
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const ic = (n, c) => (window.icon ? window.icon(n, c) : "");
   async function api(path, opts) {
@@ -63,7 +71,7 @@
     // Consistent SVG nav icons (view name maps 1:1 to an icon).
     if (window.icon) document.querySelectorAll(".nav-item").forEach((el) => { const s = el.querySelector(".ni-ico"); if (s) s.innerHTML = window.icon(el.dataset.view); });
     $("logout").addEventListener("click", async () => { await api("/api/auth/logout", { method: "POST" }); location.href = "/"; });
-    $("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+    $("menuBtn").addEventListener("click", () => setNav($("sidebar").classList.toggle("open")));
     $("topAction").addEventListener("click", (e) => { e.preventDefault(); go("repos"); });
 
     document.querySelectorAll(".nav-item").forEach((el) => el.addEventListener("click", () => go(el.dataset.view)));
@@ -107,6 +115,7 @@
     $("viewTitle").textContent = VIEWS[view].title;
     $("viewCrumb").textContent = VIEWS[view].crumb;
     $("sidebar").classList.remove("open");
+    setNav(false);
     content.innerHTML = `<div class="empty">Loading…</div>`;
     VIEWS[view].render().catch((err) => {
       // Any page that needed GitHub and found the connection dead offers the way

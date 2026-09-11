@@ -145,18 +145,30 @@
       if (smb) smb.textContent = window.CAVIX_PRICING.smbNote;
     }
 
+    /* .on is the paint; aria-pressed is the same fact for anyone not looking at
+       it. They are set together so the two cannot drift, which is the usual way
+       an accessible name ends up describing last week's state. */
     function wire(segId, attr, key) {
       var seg = document.getElementById(segId);
       if (!seg) return;
       var btns = seg.querySelectorAll("button");
+      function select(btn) {
+        btns.forEach(function (b) {
+          var on = b === btn;
+          b.classList.toggle("on", on);
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+      }
       btns.forEach(function (btn) {
         btn.addEventListener("click", function () {
-          btns.forEach(function (b) { b.classList.remove("on"); });
-          btn.classList.add("on");
+          select(btn);
           state[key] = btn.dataset[attr];
           render();
         });
       });
+      /* Whatever the markup shipped as `on` is the truth at load. */
+      var initial = seg.querySelector("button.on") || btns[0];
+      if (initial) select(initial);
     }
     wire("cycleSeg", "cycle", "cycle");
     wire("sourceSeg", "source", "source");

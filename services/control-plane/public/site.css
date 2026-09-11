@@ -677,3 +677,24 @@
   .auth-wrap { grid-template-columns: 1fr; padding-top: 120px; min-height: auto; }
   .auth-aside { order: 2; }
 }
+
+/* ============================================================================
+   REDUCED MOTION
+
+   theme.css carries the site-wide block, but it can only speak for the rules it
+   owns. These three are declared here, so they ran at full travel for a reader
+   who had asked for none: the mobile nav sheet slid up 24px every time it was
+   opened, the sample-review tabs did the same on every switch, and the scroll
+   cue tapped a dot down the hero forever.
+
+   Same rule as theme.css, not a blanket switch: travel goes, the fade stays,
+   and every one of these is fully legible with no animation at all. The cue is
+   the one that has to be spelled out, because its keyframe starts at opacity 0
+   and removing the animation alone would leave the dot invisible rather than
+   at rest.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .nav-sheet.open { animation: fade-in .3s ease both; }
+  .panel-tab.on   { animation: fade-in .3s ease both; }
+  .scroll-cue i::after { animation: none; opacity: 1; transform: none; }
+}

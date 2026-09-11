@@ -62,7 +62,15 @@
 #
 # DATABASE_URL is now set by hand (`sync: false` below) and nothing in this file
 # competes with it. Paste Neon's pooled connection string, the one containing
-# `-pooler`, with `?sslmode=require` on the end.
+# `-pooler`, and make sure TLS is requested — but CHECK BEFORE ADDING IT. Neon
+# hands you a URL that already ends in `?sslmode=require`, and appending a second
+# copy produces `...?sslmode=require?sslmode=require`, which is not a second
+# parameter but a corrupt value for the first one, and the connection fails with
+# an error that says nothing about what you pasted. So:
+#
+#   - already contains `sslmode=`  → leave it exactly as the provider gave it
+#   - no `?` anywhere in the URL   → append `?sslmode=require`
+#   - has a `?` and other params   → append `&sslmode=require`
 #
 # ALREADY DEPLOYED FROM AN OLDER COPY OF THIS FILE? Applying this blueprint does
 # NOT move your data, and it does not fill DATABASE_URL in for you: `sync: false`
@@ -72,9 +80,10 @@
 # in this order:
 #
 #   1. Get the external connection string from whichever Postgres you are
-#      keeping. From Neon that is the POOLED string (it contains `-pooler`) with
-#      `?sslmode=require` appended. If the data you want still lives in the old
-#      Render database and it has not expired yet, dump and restore it first:
+#      keeping. From Neon that is the POOLED string (it contains `-pooler`), and
+#      it already carries `sslmode=require`; add it only if it is missing, by the
+#      rule above. If the data you want still lives in the old Render database
+#      and it has not expired yet, dump and restore it first:
 #        pg_dump "<old Render external URL>" > cavix.sql
 #        psql "<new Neon URL>" < cavix.sql
 #      An expired free Render database cannot be dumped, and nothing here can
