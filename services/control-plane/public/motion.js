@@ -21,13 +21,44 @@
 (function () {
   "use strict";
 
-  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var reduceMQ = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  var reduce = !!(reduceMQ && reduceMQ.matches);
   var fine   = window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
   var raf = window.requestAnimationFrame || function (f) { return setTimeout(f, 16); };
   var hasIO = "IntersectionObserver" in window;
 
   /* Expose the flags so page scripts can make the same decisions. */
   window.CavixMotion = { reduce: reduce, fine: fine };
+
+  /* ---- the preference is live, not a boot-time snapshot -------------------
+     `reduce` used to be read once and never again, so every travelling effect
+     below was decided at boot and kept whatever it decided. Someone who turns
+     reduced motion ON mid-session (an assistive setting is most often reached
+     BECAUSE something on screen is already a problem) kept the parallax, the
+     cursor ring, the drifting particle field and the 3D tilt until they
+     reloaded the page, which is the one thing a reader in that position is
+     least likely to do.
+
+     So the media query is listened to, and each travelling effect registers
+     what it has to undo. The CSS half already responds on its own, because a
+     media query in a stylesheet re-evaluates itself; only the JS half was
+     frozen. Effects that are opacity-only are untouched: reduced motion means
+     no travel, not no motion, and that rule is unchanged. */
+  var reduceHooks = [];
+  function onReduce(fn) { reduceHooks.push(fn); }
+  if (reduceMQ) {
+    var onReduceChange = function () {
+      var next = !!reduceMQ.matches;
+      if (next === reduce) return;
+      reduce = next;
+      window.CavixMotion.reduce = reduce;
+      for (var i = 0; i < reduceHooks.length; i++) {
+        try { reduceHooks[i](reduce); } catch (e) { /* one effect must not stop the rest */ }
+      }
+    };
+    if (reduceMQ.addEventListener) reduceMQ.addEventListener("change", onReduceChange);
+    else if (reduceMQ.addListener) reduceMQ.addListener(onReduceChange);   /* Safari < 14 */
+  }
 
   /* ---- one scroll pump feeds everything that cares about scroll position -- */
   var jobs = [];
@@ -228,16 +259,32 @@
      surface. Both are written as CSS variables, so with no script they stay at
      their resting values: zero degrees, and a highlight at zero opacity.
      ====================================================================== */
+  var tiltBound = [];
+  function restTilt(el) {
+    el.classList.remove("tracking");
+    el.style.setProperty("--rx", "0deg");
+    el.style.setProperty("--ry", "0deg");
+  }
+  /* Bound whatever the preference is, and gated inside the handler instead.
+     Binding is what cannot be undone later (there is no handle on an anonymous
+     listener to remove), so the listeners go on once and read `reduce` live. */
+  onReduce(function (on) {
+    if (!on) return;
+    for (var i = 0; i < tiltBound.length; i++) restTilt(tiltBound[i]);
+  });
+
   function startTilt(root) {
-    if (!fine || reduce) return;
+    if (!fine) return;
     var scope = root || document;
     var cards = scope.querySelectorAll(".tilt, .card, .plan, .panel");
 
     cards.forEach(function (el) {
       if (el.dataset.tiltBound) return;
       el.dataset.tiltBound = "1";
+      tiltBound.push(el);
 
       el.addEventListener("mousemove", function (e) {
+        if (reduce) return;
         var r = el.getBoundingClientRect();
         var px = (e.clientX - r.left) / r.width;
         var py = (e.clientY - r.top) / r.height;
@@ -250,11 +297,7 @@
         }
       }, { passive: true });
 
-      el.addEventListener("mouseleave", function () {
-        el.classList.remove("tracking");
-        el.style.setProperty("--rx", "0deg");
-        el.style.setProperty("--ry", "0deg");
-      });
+      el.addEventListener("mouseleave", function () { restTilt(el); });
     });
   }
   window.CavixMotion.bindTilt = startTilt;   /* for views rendered later */
@@ -266,11 +309,19 @@
      starts to detach the element from the text it belongs to.
      ====================================================================== */
   function startParallax() {
-    if (reduce) return;
     var nodes = [].slice.call(document.querySelectorAll("[data-parallax]"));
     if (!nodes.length) return;
 
+    function park() {
+      for (var i = 0; i < nodes.length; i++) nodes[i].style.transform = "";
+    }
+    /* Turning the preference on has to put the elements BACK, not just stop
+       moving them: whatever offset the last scroll wrote would otherwise stay
+       on screen as a permanent displacement. */
+    onReduce(function (on) { if (on) park(); });
+
     onScroll(function () {
+      if (reduce) return;
       var y = window.scrollY;
       for (var i = 0; i < nodes.length; i++) {
         var el = nodes[i];
@@ -299,26 +350,45 @@
   function startCursor() {
     var dot = document.querySelector(".cursor");
     var ring = document.querySelector(".cursor-ring");
-    if (!dot || !ring || !fine || reduce) return;
+    if (!dot || !ring || !fine) return;
 
     var mx = window.innerWidth / 2, my = window.innerHeight / 2;
-    var rx = mx, ry = my, awake = false;
+    var rx = mx, ry = my, awake = false, running = false;
 
     window.addEventListener("mousemove", function (e) {
       mx = e.clientX; my = e.clientY;
+      if (reduce) return;
       if (!awake) { awake = true; rx = mx; ry = my; document.body.classList.add("cursor-on"); }
     }, { passive: true });
 
     document.addEventListener("mouseleave", function () { document.body.classList.remove("cursor-on"); });
-    document.addEventListener("mouseenter", function () { if (awake) document.body.classList.add("cursor-on"); });
+    document.addEventListener("mouseenter", function () { if (awake && !reduce) document.body.classList.add("cursor-on"); });
 
-    (function follow() {
+    /* The loop exits rather than idling, because a rAF that runs every frame to
+       decide it has nothing to do is the cost this preference is asking to be
+       spared. Turning the preference off starts a fresh one. */
+    function follow() {
+      if (reduce) { running = false; return; }
       dot.style.transform = "translate3d(" + mx + "px," + my + "px,0)";
       rx += (mx - rx) * 0.17;
       ry += (my - ry) * 0.17;
       ring.style.transform = "translate3d(" + rx + "px," + ry + "px,0)";
       raf(follow);
-    })();
+    }
+    function kickCursor() { if (running || reduce) return; running = true; raf(follow); }
+
+    onReduce(function (on) {
+      if (on) {
+        /* The real pointer comes back the moment the class goes, so the ring is
+           never left as the only cursor on screen. */
+        document.body.classList.remove("cursor-on");
+        ring.classList.remove("grow");
+        awake = false;
+      } else {
+        kickCursor();
+      }
+    });
+    kickCursor();
 
     var HOT = "a, button, .card, .plan, .stage, .chip, .nav-item, .repo-row, input, select, .switch";
     document.addEventListener("mouseover", function (e) {
@@ -347,7 +417,7 @@
      ====================================================================== */
   function startField() {
     var canvas = document.getElementById("field");
-    if (!canvas || reduce) return;
+    if (!canvas) return;
     var ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
@@ -442,26 +512,49 @@
       theta += 0.00005;
     }
 
+    /* The preference joins `visible` and `active` as a third reason to stop:
+       one gate, so a field paused for any of them cannot be restarted by
+       another one clearing. */
     var visible = !document.hidden, active = true, running = false;
     function tick(now) {
-      if (!visible || !active) { running = false; return; }
+      if (!visible || !active || reduce) { running = false; return; }
       dx += (px * 30 - dx) * 0.045;
       dy += (py * 20 - dy) * 0.045;
       draw(now || performance.now());
       raf(tick);
     }
-    function kick() { if (running || !visible || !active) return; running = true; raf(tick); }
+    function kick() { if (running || !visible || !active || reduce) return; running = true; raf(tick); }
 
-    build(); kick();
+    /* build() bakes twenty thousand points into an offscreen bitmap, so it is
+       deferred rather than run and thrown away: under reduced motion the field
+       never draws, and a reader who will never see it should not pay for it.
+       The first time the preference is turned back off, it is built then. */
+    var built = false;
+    function ensureBuilt() { if (!built && !reduce) { build(); built = true; } }
+
+    onReduce(function (on) {
+      if (on) ctx.clearRect(0, 0, W, H);   /* no stale frame left hanging behind the hero */
+      else { ensureBuilt(); kick(); }
+    });
+
+    ensureBuilt();
+    kick();
 
     var t;
     window.addEventListener("resize", function () {
-      clearTimeout(t); t = setTimeout(function () { build(); kick(); }, 180);
+      clearTimeout(t);
+      t = setTimeout(function () {
+        if (reduce) { built = false; return; }   /* rebuilt at the new size if it is ever needed */
+        build();
+        built = true;
+        kick();
+      }, 180);
     }, { passive: true });
     document.addEventListener("visibilitychange", function () { visible = !document.hidden; kick(); });
 
     if (fine) {
       window.addEventListener("mousemove", function (e) {
+        if (reduce) return;
         px = (e.clientX / window.innerWidth) * 2 - 1;
         py = (e.clientY / window.innerHeight) * 2 - 1;
       }, { passive: true });

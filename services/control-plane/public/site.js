@@ -41,6 +41,23 @@
     window.addEventListener("resize", queue, { passive: true });
     update();
 
+    /* The sheet only exists below the breakpoint. Above it the rail is back and
+       .nav-burger is display:none, so an open sheet left over from a narrow
+       viewport hangs over the page with nothing left on screen to close it: the
+       burger that toggles it is gone, and the only way out is to navigate. A
+       resize past the breakpoint therefore closes it. The number matches the
+       max-width in site.css; if that moves, this moves with it. */
+    var DESKTOP = 1260;
+    function closeSheet() {
+      if (!sheet || !burger) return;
+      sheet.classList.remove("open");
+      burger.classList.remove("open");
+      burger.setAttribute("aria-expanded", "false");
+    }
+    window.addEventListener("resize", function () {
+      if (window.innerWidth > DESKTOP) closeSheet();
+    }, { passive: true });
+
     if (burger && sheet) {
       burger.addEventListener("click", function () {
         var open = sheet.classList.toggle("open");
@@ -51,9 +68,7 @@
          section the reader just asked to see. */
       sheet.addEventListener("click", function (e) {
         if (e.target.tagName !== "A") return;
-        sheet.classList.remove("open");
-        burger.classList.remove("open");
-        burger.setAttribute("aria-expanded", "false");
+        closeSheet();
       });
     }
 

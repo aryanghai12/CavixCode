@@ -78,12 +78,15 @@ window.renderMarketingPricing = function (mountId, state) {
   const mount = document.getElementById(mountId);
   if (!mount) return;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  // Enterprise sends people to sales rather than signup, because a custom price
-  // has no checkout to send them to.
+  // Enterprise sends people to the enterprise section rather than signup, because
+  // a custom price has no checkout to send them to. The target is the landing
+  // page's #enterprise section, which is what every other Enterprise link on the
+  // site points at; /docs has no such anchor, so that href landed at the top of
+  // the docs and left the reader to hunt for it.
   mount.innerHTML = window.CAVIX_PRICING.tiers.map((t) => {
     const p = window.cavixPrice(t, state.cycle, state.source);
     const save = t.custom ? "" : (state.cycle === "annual" && t.byok !== 0 ? "billed annually, save 20%" : "billed monthly");
-    const href = t.custom ? "/docs#enterprise" : "/signup";
+    const href = t.custom ? "/#enterprise" : "/signup";
     return `<div class="plan tilt${t.featured ? " plan-featured" : ""}">
       ${t.featured ? `<span class="plan-flag">Most popular</span>` : ""}
       <h3>${esc(t.name)}</h3>

@@ -139,23 +139,93 @@ function log(level: string, msg: string, meta?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, service: "control-plane", msg, ...meta }));
 }
 
-export function createControlPlane(store: Store): http.Server {
+export interface ControlPlaneOptions {
+  /**
+   * Answer "is this process allowed to accept writes yet", asked per request.
+   *
+   * It is a function rather than a flag because the answer CHANGES while the
+   * server is already listening: `main.ts` starts the site immediately when
+   * Postgres is asleep, so the marketing pages and the docs are served rather
+   * than the deploy failing its health check, and recovery runs behind it. Until
+   * that recovery finishes, the store in memory is not the durable record and is
+   * about to be replaced by whatever the database holds, so anything written now
+   * is discarded a few seconds later. Returning true here is what stops a
+   * sign-up, a connected repository or a pasted API key from being accepted into
+   * a store that is on its way to being overwritten.
+   */
+  readOnly?: () => boolean;
+}
+
+export function createControlPlane(store: Store, options: ControlPlaneOptions = {}): http.Server {
   return http.createServer(async (req, res) => {
     try {
-      await route(store, req, res);
+      await route(store, req, res, options);
     } catch (err) {
       sendJson(res, 500, { error: (err as Error).message });
     }
   });
 }
 
-async function route(store: Store, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+/** Reads pass through; anything that could change the store does not. */
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * The GETs that write, and where to send a browser that hits one too early.
+ *
+ * Method is nearly enough to tell a read from a write here, but not quite: the
+ * OAuth flow is four browser redirects, and every one of them touches the store
+ * (the state records that make the handshake replay-proof, and then the token
+ * itself). Leaving them out of the gate would leave the single most damaging
+ * write still open, because a token stored during recovery is dropped with
+ * everything else and the owner is left looking at a disconnected GitHub.
+ *
+ * They redirect rather than answering 503, because a browser is at the other end
+ * of a redirect chain and a page of JSON is a dead end for the person reading it.
+ */
+const MUTATING_GETS: Record<string, string> = {
+  "/api/auth/github/start": "/login?error=recovering",
+  "/api/auth/github/callback": "/login?error=recovering",
+  "/api/github/connect": "/app/repositories?error=recovering",
+  "/api/github/setup": "/app/repositories?error=recovering",
+};
+
+async function route(
+  store: Store,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  options: ControlPlaneOptions = {},
+): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const p = url.pathname;
   const m = req.method ?? "GET";
 
 
   if (m === "GET" && p === "/healthz") return void sendJson(res, 200, { status: "ok" });
+
+  // Mutations are refused while the durable store is still being recovered.
+  //
+  // 503 and Retry-After, not 500: this is a temporary, self-clearing condition,
+  // and the orchestrator posting a finished review is the caller that most needs
+  // to know the difference. A 503 is retried and the review survives; a silent
+  // 200 into a store that is seconds away from being replaced loses it.
+  //
+  // /healthz is answered above so the host does not kill a service that is
+  // recovering exactly as designed, and reads are served so the site stays up
+  // and legible rather than going dark.
+  if (options.readOnly?.()) {
+    const redirect = m === "GET" ? MUTATING_GETS[p] : undefined;
+    if (redirect) {
+      res.writeHead(302, { location: redirect, "retry-after": "15" });
+      return void res.end();
+    }
+    if (!READ_METHODS.has(m)) {
+      res.setHeader("retry-after", "15");
+      return void sendJson(res, 503, {
+        error: "the workspace is still being recovered from the database; changes are not being accepted yet",
+        retryAfterSeconds: 15,
+      });
+    }
+  }
 
   // Stage 13's observability half, for the other service.
   //

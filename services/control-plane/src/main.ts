@@ -58,6 +58,26 @@ async function retryPersistence(
   dbUrl: string,
   store: InMemoryStore,
   onReady: (autosave: Autosave) => void,
+  onSettled: () => void,
+): Promise<void> {
+  try {
+    await attemptRecovery(dbUrl, store, onReady);
+  } finally {
+    // Whichever way this ended, the gate lifts.
+    //
+    // Including "gave up": after ten minutes of trying, `store.restore` is never
+    // going to run, so nothing further is at risk of being overwritten and there
+    // is no longer a reason to refuse writes. The site is then what it says in
+    // the log, an in-memory instance saving nothing, which is bad but is not
+    // improved by also being unusable.
+    onSettled();
+  }
+}
+
+async function attemptRecovery(
+  dbUrl: string,
+  store: InMemoryStore,
+  onReady: (autosave: Autosave) => void,
 ): Promise<void> {
   for (let attempt = 1; attempt <= PERSISTENCE_ATTEMPTS; attempt++) {
     await new Promise((r) => setTimeout(r, Math.min(30_000, 2_000 * attempt)));
@@ -163,6 +183,9 @@ function reportConfig(dbUrl: string | undefined): void {
 async function main(): Promise<void> {
   const store = new InMemoryStore();
   let autosave: Autosave | null = null;
+  // True only while background recovery is still in flight; see the block that
+  // sets it, and ControlPlaneOptions.readOnly in server.ts.
+  let recovering = false;
 
   const dbUrl = process.env.DATABASE_URL ?? process.env.CAVIX_DATABASE_URL;
   reportConfig(dbUrl);
@@ -203,9 +226,26 @@ async function main(): Promise<void> {
         effect: "the site is running WITHOUT persistence and may look empty; nothing is being saved yet",
         note: "existing data is still in the database, not lost",
       });
-      void retryPersistence(dbUrl, store, (a) => {
-        autosave = a;
-      });
+      // Writes are refused until this settles. The site is UP either way: the
+      // marketing pages, the docs and the dashboard all read fine, so a deploy
+      // that lands while Neon is asleep still passes its health check and still
+      // serves the site, and the health check is why waiting here instead is not
+      // an option (ten minutes of a failing /healthz is a failed deploy).
+      //
+      // What is not fine is accepting a signup during those minutes. Recovery
+      // ends in `store.restore(snap)`, which by design DISCARDS whatever
+      // accumulated in memory, so an account created at minute two is gone at
+      // minute three. The person who created it is not told, and the sequence
+      // reads to them exactly like the workspace-vanishing bug this whole file
+      // is written against. Refusing the write with a 503 they can retry is the
+      // honest version of the same few minutes.
+      recovering = true;
+      void retryPersistence(
+        dbUrl,
+        store,
+        (a) => { autosave = a; },
+        () => { recovering = false; },
+      );
     }
   } else {
     log("info", "persistence: in-memory (set DATABASE_URL for a Postgres that survives restarts)");
@@ -220,8 +260,13 @@ async function main(): Promise<void> {
     log("info", "production mode: empty store, real auth (set CAVIX_DEMO=true for sample data)");
   }
 
-  const server = createControlPlane(store).listen(port, host, () => {
-    log("info", "listening", { host, port, url: `http://127.0.0.1:${port}` });
+  const server = createControlPlane(store, { readOnly: () => recovering }).listen(port, host, () => {
+    log("info", "listening", {
+      host,
+      port,
+      url: `http://127.0.0.1:${port}`,
+      ...(recovering ? { note: "read-only until the database is recovered; reads are served, writes are refused with 503" } : {}),
+    });
   });
 
   const shutdown = async () => {

@@ -63,6 +63,42 @@
 # DATABASE_URL is now set by hand (`sync: false` below) and nothing in this file
 # competes with it. Paste Neon's pooled connection string, the one containing
 # `-pooler`, with `?sslmode=require` on the end.
+#
+# ALREADY DEPLOYED FROM AN OLDER COPY OF THIS FILE? Applying this blueprint does
+# NOT move your data, and it does not fill DATABASE_URL in for you: `sync: false`
+# means Render leaves whatever is there alone, which is the whole point (it is
+# also why this is safe to re-apply). If the old `fromDatabase` wiring is still
+# in place, the service is pointed at the Render Postgres, so do this by hand,
+# in this order:
+#
+#   1. Get the external connection string from whichever Postgres you are
+#      keeping. From Neon that is the POOLED string (it contains `-pooler`) with
+#      `?sslmode=require` appended. If the data you want still lives in the old
+#      Render database and it has not expired yet, dump and restore it first:
+#        pg_dump "<old Render external URL>" > cavix.sql
+#        psql "<new Neon URL>" < cavix.sql
+#      An expired free Render database cannot be dumped, and nothing here can
+#      recover it. That is the failure this block exists to stop repeating.
+#   2. Render Dashboard → the `cavix` service → Environment → set DATABASE_URL to
+#      that string. Set it on the SERVICE, not in this file; a value committed
+#      here is a connection string in git.
+#   3. Save, then Manual Deploy → Deploy latest commit. A save alone restarts the
+#      service, but deploy from the dashboard so the run you check is the run you
+#      configured.
+#   4. VERIFY, because every way this goes wrong looks identical from the browser
+#      (you sign in and the workspace is empty):
+#        - Logs: `persistence: target database` names the host you just set, and
+#          `persistence: Postgres enabled` follows it. If instead you see
+#          `Postgres could not be reached at startup`, the URL or the network is
+#          wrong; the service keeps retrying for ~10 minutes and refuses writes
+#          while it does, so nothing is being silently lost in the meantime.
+#        - Open the site, confirm your orgs and repositories are there, then
+#          restart the service once and confirm they are STILL there. A workspace
+#          that survives a restart is the only proof that persistence is on.
+#      Do not change CAVIX_SECRET_KEY or CAVIX_SESSION_SECRET during any of this.
+#      Moving the database keeps the encrypted blobs; changing the key is what
+#      makes them undecryptable, and the store reports an undecryptable blob as
+#      "no credential", so BYOK keys and connected repos just look gone.
 services:
   # ---------- job queue (Redis / Key Value) ----------
   - type: redis
@@ -82,7 +118,12 @@ services:
     autoDeploy: true
     envVars:
       # Neon (or any Postgres). Set this in the dashboard; see the note above the
-      # services block for why it is not wired automatically.
+      # services block for why it is not wired automatically, and for the steps
+      # to move an already-deployed service onto an external database.
+      #
+      # `sync: false` MUST STAY. It is what stops a later blueprint sync from
+      # overwriting the value you set by hand, which is exactly how the previous
+      # `fromDatabase` wiring kept resetting this service to a dead database.
       - key: DATABASE_URL
         sync: false
 
