@@ -139,12 +139,22 @@ async function main() {
     github,
     verifier: new Verifier({
       sandbox: new LocalSandboxBackend(),
-      testGen: new FakeTestGenerator(() => ({
-        testPath: "auth.exploit.test.mjs",
-        testCode: EXPLOIT_TEST,
-        fix: { path: "src/auth.mjs", content: FIXED_SOURCE },
-        semantics: "exploit-passes-on-vuln",
-      })),
+      testGen: new FakeTestGenerator((finding) => {
+        if (
+          finding.path === "src/auth.mjs" &&
+          finding.category === "security" &&
+          finding.title === "SQL injection from concatenated request input"
+        ) {
+          return {
+            testPath: "auth.exploit.test.mjs",
+            testCode: EXPLOIT_TEST,
+            fix: { path: "src/auth.mjs", content: FIXED_SOURCE },
+            semantics: "exploit-passes-on-vuln",
+          };
+        }
+        // No executable repro for the comment nit: leave it unproven.
+        return { testPath: "unsupported.repro.test.mjs", testCode: "", semantics: "test-fails-on-bug" };
+      }),
     }),
     logger: jsonLogger,
   });
